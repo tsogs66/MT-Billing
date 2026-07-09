@@ -12,6 +12,7 @@ import Inventory from './pages/Inventory';
 import Hotspot from './pages/Hotspot';
 import Logs from './pages/Logs';
 import Company from './pages/Company';
+import Uptime from './pages/Uptime';
 import { Loader2 } from 'lucide-react';
 
 function Protected({ children }: { children: React.ReactNode }) {
@@ -51,6 +52,7 @@ export default function App() {
               <Route path="/routers" element={<Routers />} />
               <Route path="/inventory" element={<Inventory />} />
               <Route path="/hotspot" element={<Hotspot />} />
+              <Route path="/uptime" element={<Uptime />} />
               <Route path="/logs" element={<Logs />} />
               <Route path="/company" element={<Company />} />
               <Route path="/ai-scripting" element={stub('AI Scripting', 'Generate and deploy RouterOS scripts with AI assistance.')} />

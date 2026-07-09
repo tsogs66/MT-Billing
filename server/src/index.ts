@@ -6,6 +6,7 @@ import si from 'systeminformation';
 import { db, initSchema, seed, migrate } from './db.js';
 import { signToken, requireAuth, type AuthedRequest } from './auth.js';
 import { tryLiveResource } from './mikrotik.js';
+import { getUptime, getUptimeSummary, runUptimeChecks, startUptime } from './uptime.js';
 
 initSchema();
 migrate();
@@ -375,8 +376,19 @@ app.get('/api/hotspot', (_req, res) => {
   res.json({ plans, active });
 });
 
+// ---- Uptime monitoring (popular services / sites / games) ----
+app.get('/api/uptime', (_req, res) => {
+  res.json({ summary: getUptimeSummary(), monitors: getUptime() });
+});
+
+app.post('/api/uptime/check', async (_req, res) => {
+  await runUptimeChecks();
+  res.json({ summary: getUptimeSummary(), monitors: getUptime() });
+});
+
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
 
 app.listen(PORT, () => {
   console.log(`MT-Billing API listening on http://localhost:${PORT}`);
+  startUptime(60000);
 });

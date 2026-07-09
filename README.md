@@ -15,7 +15,14 @@ topology), sales reporting, hotspot vouchers, inventory and more.
 - **PPPoE & IPoE Management** – users, offline users, active connections,
   profiles, servers and billing plans, with create/edit/delete.
 - **Clients Map** – Leaflet map plotting OLT, NAP boxes and subscribers with
-  server → OLT → NAP → client topology lines.
+  **animated** server → OLT → NAP → ONU topology links and per-ONU online/offline
+  status (pulsing markers, live counts, auto-refresh).
+- **Billing / Payments** – executing a payment extends the subscription by whole
+  month(s) anchored on the **original expiration date** (the billing day-of-month
+  is preserved and never re-anchored to the payment day).
+- **Uptime Monitor** – live reachability + latency monitoring of the most popular
+  services, sites and games (Google, YouTube, Facebook, Steam, Roblox, Riot,
+  Cloudflare/Google DNS, etc.) grouped by category with sparklines and uptime %.
 - **Sales Report** – revenue chart (7d / 30d / 6m / 1y) and recent transactions.
 - **Stock & Inventory**, **Hotspot vouchers**, **Company profile**, **System Logs**,
   plus placeholders for AI Scripting, Terminal, Network, Mikrotik Files, ZeroTier,
