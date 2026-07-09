@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { api } from '../api';
+import { useAuth } from './AuthContext';
 
 export interface RouterDevice {
   id: number;
@@ -20,6 +21,7 @@ interface RouterCtx {
 const Ctx = createContext<RouterCtx>(null as unknown as RouterCtx);
 
 export function RouterProvider({ children }: { children: ReactNode }) {
+  const { user } = useAuth();
   const [routers, setRouters] = useState<RouterDevice[]>([]);
   const [current, setCurrent] = useState<RouterDevice | null>(null);
 
@@ -32,9 +34,16 @@ export function RouterProvider({ children }: { children: ReactNode }) {
     });
   };
 
+  // Reload routers whenever the authenticated user changes (incl. right after
+  // login), and clear them on logout so the selector reflects auth state.
   useEffect(() => {
-    refresh();
-  }, []);
+    if (user) {
+      refresh();
+    } else {
+      setRouters([]);
+      setCurrent(null);
+    }
+  }, [user]);
 
   return (
     <Ctx.Provider value={{ routers, current, setCurrent, refresh }}>{children}</Ctx.Provider>
