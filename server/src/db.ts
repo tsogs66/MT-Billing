@@ -1,0 +1,296 @@
+import Database from 'better-sqlite3';
+import bcrypt from 'bcryptjs';
+import { fileURLToPath } from 'url';
+import path from 'path';
+import fs from 'fs';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const dataDir = path.join(__dirname, '..', 'data');
+if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+
+export const db = new Database(path.join(dataDir, 'mt-billing.db'));
+db.pragma('journal_mode = WAL');
+
+export function initSchema() {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'admin',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS routers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      host TEXT,
+      port INTEGER DEFAULT 8728,
+      api_user TEXT,
+      api_pass TEXT,
+      board TEXT,
+      type TEXT DEFAULT 'pppoe',
+      status TEXT DEFAULT 'online'
+    );
+
+    CREATE TABLE IF NOT EXISTS profiles (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      rate_limit TEXT,
+      price REAL DEFAULT 0,
+      type TEXT DEFAULT 'pppoe'
+    );
+
+    CREATE TABLE IF NOT EXISTS pppoe_users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT NOT NULL,
+      customer_name TEXT,
+      account_number TEXT,
+      profile TEXT,
+      status TEXT DEFAULT 'Active',
+      subscription_due TEXT,
+      price REAL DEFAULT 0,
+      router_id INTEGER,
+      address TEXT,
+      lat REAL,
+      lng REAL,
+      nap_id INTEGER,
+      service TEXT DEFAULT 'pppoe'
+    );
+
+    CREATE TABLE IF NOT EXISTS naps (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      kind TEXT DEFAULT 'nap',
+      lat REAL,
+      lng REAL,
+      ports INTEGER DEFAULT 8,
+      parent_id INTEGER
+    );
+
+    CREATE TABLE IF NOT EXISTS transactions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      pppoe_user_id INTEGER,
+      customer_name TEXT,
+      amount REAL NOT NULL,
+      type TEXT DEFAULT 'payment',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS queues (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      avg_rate REAL DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS inventory (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      category TEXT,
+      sku TEXT,
+      quantity INTEGER DEFAULT 0,
+      unit_price REAL DEFAULT 0,
+      status TEXT DEFAULT 'In Stock'
+    );
+
+    CREATE TABLE IF NOT EXISTS logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      level TEXT DEFAULT 'info',
+      source TEXT,
+      message TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS company (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      name TEXT,
+      address TEXT,
+      phone TEXT,
+      email TEXT,
+      currency TEXT DEFAULT 'PHP'
+    );
+  `);
+}
+
+function count(table: string): number {
+  return (db.prepare(`SELECT COUNT(*) AS c FROM ${table}`).get() as { c: number }).c;
+}
+
+const FIRST = ['Jonathan', 'Licerio', 'Lizel', 'Johnny', 'Magno', 'Gino', 'Leony', 'Lito', 'Denver', 'Eric', 'Lisa', 'Adela', 'Bernardo', 'Vic', 'Lucille', 'Glaiza', 'Marlon', 'Rowena', 'Ferdinand', 'Cristina', 'Ramon', 'Teresita', 'Danilo', 'Marites', 'Rodel', 'Jocelyn', 'Arnel', 'Editha', 'Reynaldo', 'Marilou'];
+const LAST = ['Castillano', 'Anonuevo', 'Cortina', 'Malabanan', 'Tanglang', 'Agapito', 'Badal', 'Aday', 'Reyes', 'Cabrera', 'Nohay', 'Desepeda', 'Grajo', 'Santos', 'Delacruz', 'Ramirez', 'Mercado', 'Villanueva', 'Aquino', 'Bautista', 'Gonzales', 'Torres', 'Flores', 'Rivera', 'Navarro'];
+const PROFILES = [
+  { name: '15mbps', rate: '15M/15M', price: 999 },
+  { name: '25mbps', rate: '25M/25M', price: 1299 },
+  { name: '50mbps', rate: '50M/50M', price: 1699 },
+  { name: 'non-payments', rate: '1M/1M', price: 0 },
+];
+
+function pad(n: number, len: number) {
+  return String(n).padStart(len, '0');
+}
+
+export function seed() {
+  // Admin user
+  if (count('users') === 0) {
+    const user = process.env.ADMIN_USER || 'admin';
+    const pass = process.env.ADMIN_PASS || 'admin123';
+    db.prepare('INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)').run(
+      user,
+      bcrypt.hashSync(pass, 10),
+      'superadmin'
+    );
+  }
+
+  if (count('company') === 0) {
+    db.prepare('INSERT INTO company (id, name, address, phone, email, currency) VALUES (1, ?, ?, ?, ?, ?)').run(
+      'Pa-North Fiber Internet',
+      'Santa Cruz, North District',
+      '+63 900 000 0000',
+      'support@pa-north.net',
+      'PHP'
+    );
+  }
+
+  if (count('routers') === 0) {
+    db.prepare('INSERT INTO routers (name, host, port, board, type, status) VALUES (?, ?, ?, ?, ?, ?)').run(
+      'PPPoE MT Router', '192.168.88.1', 8728, 'x86 YANLING YL-CLU6L-V1', 'pppoe', 'online'
+    );
+    db.prepare('INSERT INTO routers (name, host, port, board, type, status) VALUES (?, ?, ?, ?, ?, ?)').run(
+      'IPoE MT Router', '192.168.89.1', 8728, 'RB5009UG+S+IN', 'ipoe', 'online'
+    );
+  }
+
+  if (count('profiles') === 0) {
+    const ins = db.prepare('INSERT INTO profiles (name, rate_limit, price, type) VALUES (?, ?, ?, ?)');
+    for (const p of PROFILES) ins.run(p.name, p.rate, p.price, 'pppoe');
+  }
+
+  // NAPs and OLT
+  if (count('naps') === 0) {
+    const baseLat = 15.1785;
+    const baseLng = 120.5945;
+    const insNap = db.prepare('INSERT INTO naps (name, kind, lat, lng, ports, parent_id) VALUES (?, ?, ?, ?, ?, ?)');
+    const oltId = insNap.run('OLT-1', 'olt', baseLat, baseLng, 128, null).lastInsertRowid as number;
+    for (let i = 1; i <= 18; i++) {
+      const angle = (i / 18) * Math.PI * 2;
+      const radius = 0.006 + (i % 4) * 0.0018;
+      const lat = baseLat + Math.sin(angle) * radius;
+      const lng = baseLng + Math.cos(angle) * radius * 1.3;
+      insNap.run(`NAP${i}`, 'nap', lat, lng, 8, oltId);
+    }
+  }
+
+  // PPPoE users
+  if (count('pppoe_users') === 0) {
+    const naps = db.prepare("SELECT id, lat, lng FROM naps WHERE kind = 'nap'").all() as { id: number; lat: number; lng: number }[];
+    const ins = db.prepare(`INSERT INTO pppoe_users
+      (username, customer_name, account_number, profile, status, subscription_due, price, router_id, address, lat, lng, nap_id, service)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    let n = 0;
+    const total = 72;
+    for (let i = 0; i < total; i++) {
+      const first = FIRST[i % FIRST.length];
+      const last = LAST[(i * 3) % LAST.length];
+      const customer = `${first} ${last}`;
+      const username = `${first}${last}`;
+      const account = `${pad(Math.floor(Math.random() * 900000) + 100000, 6)}${pad(Math.floor(Math.random() * 900000) + 100000, 6)}`;
+      let profile: string, status: string, price: number;
+      if (i < 6) {
+        profile = 'non-payments'; status = 'inactive'; price = 0;
+      } else {
+        const p = PROFILES[i % 3];
+        profile = p.name; price = p.price;
+        status = i % 11 === 0 ? 'expired' : 'Active';
+      }
+      const due = new Date();
+      due.setDate(due.getDate() + ((i % 30) - 5));
+      const nap = naps[i % naps.length];
+      const jitterLat = (Math.random() - 0.5) * 0.0016;
+      const jitterLng = (Math.random() - 0.5) * 0.0016;
+      const hasLocation = i % 15 !== 0; // ~5 without location, like screenshot
+      ins.run(
+        username, customer, account, profile, status,
+        due.toISOString().slice(0, 10), price, 1,
+        `Purok ${1 + (i % 7)}, North District`,
+        hasLocation ? nap.lat + jitterLat : null,
+        hasLocation ? nap.lng + jitterLng : null,
+        nap.id, 'pppoe'
+      );
+      n++;
+    }
+
+    // A few IPoE users on router 2
+    for (let i = 0; i < 12; i++) {
+      const first = FIRST[(i + 5) % FIRST.length];
+      const last = LAST[(i + 2) % LAST.length];
+      const nap = naps[i % naps.length];
+      ins.run(
+        `${first}${last}IP`, `${first} ${last}`, `${pad(400000 + i, 6)}${pad(100000 + i, 6)}`,
+        '25mbps', 'Active', new Date(Date.now() + 15 * 86400000).toISOString().slice(0, 10),
+        1299, 2, `Purok ${1 + (i % 7)}, North District`,
+        nap.lat + 0.0005, nap.lng + 0.0005, nap.id, 'ipoe'
+      );
+    }
+  }
+
+  // Transactions for the last 7 days (shaped like screenshot peak at day 3)
+  if (count('transactions') === 0) {
+    const shape = [0, 800, 2100, 27100, 0, 0, 0]; // recent 7 days, index 0 = 6 days ago
+    const ins = db.prepare('INSERT INTO transactions (customer_name, amount, type, created_at) VALUES (?, ?, ?, ?)');
+    for (let d = 0; d < 7; d++) {
+      const day = new Date();
+      day.setDate(day.getDate() - (6 - d));
+      let remaining = shape[d];
+      let guard = 0;
+      while (remaining > 0 && guard < 40) {
+        const amt = Math.min(remaining, [999, 1299, 1699][guard % 3]);
+        const cust = `${FIRST[guard % FIRST.length]} ${LAST[guard % LAST.length]}`;
+        ins.run(cust, amt, 'payment', day.toISOString());
+        remaining -= amt;
+        guard++;
+      }
+    }
+    // add older history for month/year views
+    for (let m = 1; m < 60; m++) {
+      const day = new Date();
+      day.setDate(day.getDate() - m * 3);
+      const cust = `${FIRST[m % FIRST.length]} ${LAST[m % LAST.length]}`;
+      ins.run(cust, [999, 1299, 1699][m % 3], 'payment', day.toISOString());
+    }
+  }
+
+  if (count('queues') === 0) {
+    const q = db.prepare('INSERT INTO queues (name, avg_rate) VALUES (?, ?)');
+    const rows: [string, number][] = [
+      ['Downstream 2024', 40.94],
+      ['Roblox PC', 30.08],
+      ['t. Total Download', 8.61],
+      ['Streaming Connections Down', 7.42],
+      ['Point Blank', 2.18],
+      ['Downloading Connections Down', 0.894],
+      ['Browsing Connections Down', 0.158],
+    ];
+    for (const r of rows) q.run(r[0], r[1]);
+  }
+
+  if (count('inventory') === 0) {
+    const ins = db.prepare('INSERT INTO inventory (name, category, sku, quantity, unit_price, status) VALUES (?, ?, ?, ?, ?, ?)');
+    const items: [string, string, string, number, number, string][] = [
+      ['Huawei ONT HG8145V5', 'ONU/ONT', 'ONT-HG8145', 42, 850, 'In Stock'],
+      ['Fiber Drop Cable 1F (300m)', 'Cable', 'FDC-1F-300', 15, 2100, 'In Stock'],
+      ['SC/APC Fast Connector', 'Connector', 'SCAPC-FC', 320, 25, 'In Stock'],
+      ['NAP Box 1x8 PLC Splitter', 'Splitter', 'NAP-8-PLC', 6, 1200, 'Low Stock'],
+      ['MikroTik hAP ax3', 'Router', 'MT-HAPAX3', 3, 4500, 'Low Stock'],
+      ['Pole Bracket Clamp', 'Accessory', 'PBC-01', 0, 45, 'Out of Stock'],
+    ];
+    for (const it of items) ins.run(...it);
+  }
+
+  if (count('logs') === 0) {
+    const ins = db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)');
+    ins.run('info', 'system', 'MT-Billing panel started');
+    ins.run('info', 'pppoe', 'Synced 72 PPPoE secrets from PPPoE MT Router');
+    ins.run('warning', 'router', 'IPoE MT Router API latency high (240ms)');
+    ins.run('info', 'billing', 'Generated 54 invoices for the current cycle');
+  }
+}
