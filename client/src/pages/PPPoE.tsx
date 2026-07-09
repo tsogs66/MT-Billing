@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Users, WifiOff, Activity, Layers, Server, ReceiptText, Plus, Search, Pencil, Trash2, Power, X } from 'lucide-react';
+import { Users, WifiOff, Activity, Layers, Server, ReceiptText, Plus, Search, Pencil, Trash2, Power, X, CalendarClock, CheckCircle2 } from 'lucide-react';
 import Layout from '../components/Layout';
 import { StatusBadge } from '../components/ui';
-import { api, peso } from '../api';
+import { api, peso, addMonthsPreserveDay } from '../api';
 
 interface PUser {
   id: number;
@@ -33,6 +33,8 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
   const [plans, setPlans] = useState<any[]>([]);
   const [search, setSearch] = useState('');
   const [showAdd, setShowAdd] = useState(false);
+  const [payFor, setPayFor] = useState<PUser | null>(null);
+  const [toast, setToast] = useState('');
 
   const loadUsers = () => api.get(`/pppoe/users?service=${service}`).then((r) => setUsers(r.data));
 
@@ -129,7 +131,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                       <td className="px-5 py-2.5 text-slate-500">{u.subscriptionDue}</td>
                       <td className="px-5 py-2.5">
                         <div className="flex items-center justify-end gap-3 text-slate-400">
-                          <button title="Payment" className="hover:text-emerald-600"><ReceiptText size={16} /></button>
+                          <button title="Payment" className="hover:text-emerald-600" onClick={() => setPayFor(u)}><ReceiptText size={16} /></button>
                           <button title="Edit" className="hover:text-sky-600"><Pencil size={16} /></button>
                           <button title="Enable/Disable" className="hover:text-amber-600"><Power size={16} /></button>
                           <button title="Delete" className="hover:text-rose-600" onClick={() => remove(u.id)}><Trash2 size={16} /></button>
@@ -186,7 +188,95 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
           }}
         />
       )}
+
+      {payFor && (
+        <PaymentModal
+          user={payFor}
+          onClose={() => setPayFor(null)}
+          onPaid={(msg) => {
+            setPayFor(null);
+            setToast(msg);
+            loadUsers();
+            setTimeout(() => setToast(''), 4000);
+          }}
+        />
+      )}
+
+      {toast && (
+        <div className="fixed bottom-6 right-6 z-[1100] flex items-center gap-2 bg-emerald-600 text-white text-sm px-4 py-3 rounded-lg shadow-lg">
+          <CheckCircle2 size={18} /> {toast}
+        </div>
+      )}
     </Layout>
+  );
+}
+
+function PaymentModal({ user, onClose, onPaid }: { user: PUser; onClose: () => void; onPaid: (msg: string) => void }) {
+  const [months, setMonths] = useState(1);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const currentDue = (user.subscriptionDue || '').slice(0, 10);
+  const newDue = addMonthsPreserveDay(currentDue, months);
+  const amount = (user.price || 0) * months;
+
+  const pay = async () => {
+    setSaving(true);
+    setError('');
+    try {
+      const r = await api.post(`/pppoe/users/${user.id}/payment`, { months });
+      onPaid(`Payment applied to ${user.username}. Expiration ${r.data.previousDue} \u2192 ${r.data.subscriptionDue}`);
+    } catch (e: any) {
+      setError(e?.response?.data?.error || 'Payment failed');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-[1000] p-4" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100">
+          <h3 className="font-semibold text-slate-700 flex items-center gap-2"><CalendarClock size={18} className="text-emerald-600" /> Execute Payment</h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X size={18} /></button>
+        </div>
+        <div className="p-5 space-y-4">
+          {error && <div className="text-sm text-rose-600 bg-rose-50 rounded-lg px-3 py-2">{error}</div>}
+          <div>
+            <div className="font-medium text-slate-800">{user.customer || user.username}</div>
+            <div className="text-xs text-slate-400">{user.username} · {user.profile}</div>
+          </div>
+
+          <label className="block">
+            <span className="text-sm text-slate-600 mb-1 block">Months to extend</span>
+            <div className="flex items-center gap-2">
+              {[1, 2, 3, 6, 12].map((m) => (
+                <button
+                  key={m}
+                  onClick={() => setMonths(m)}
+                  className={`px-3 py-1.5 rounded-lg text-sm border ${months === m ? 'bg-brand-500 text-white border-brand-500' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}
+                >
+                  {m}
+                </button>
+              ))}
+            </div>
+          </label>
+
+          <div className="rounded-lg bg-slate-50 border border-slate-100 p-3 text-sm space-y-1.5">
+            <div className="flex justify-between"><span className="text-slate-500">Current expiration</span><span className="font-medium text-slate-700">{currentDue || '—'}</span></div>
+            <div className="flex justify-between"><span className="text-slate-500">New expiration</span><span className="font-semibold text-emerald-600">{newDue || '—'}</span></div>
+            <div className="flex justify-between"><span className="text-slate-500">Amount</span><span className="font-medium text-slate-700">{peso(amount)}</span></div>
+            <p className="text-[11px] text-slate-400 pt-1">
+              Extended by whole month(s) from the original expiration date — the billing day ({currentDue.slice(8) || '—'}) is preserved and is not adjusted to today.
+            </p>
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 px-5 py-3 border-t border-slate-100">
+          <button className="px-4 py-2 text-sm rounded-lg text-slate-600 hover:bg-slate-100" onClick={onClose}>Cancel</button>
+          <button className="btn-primary bg-emerald-600 hover:bg-emerald-700" disabled={saving} onClick={pay}>{saving ? 'Processing...' : 'Confirm Payment'}</button>
+        </div>
+      </div>
+    </div>
   );
 }
 

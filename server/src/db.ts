@@ -55,7 +55,8 @@ export function initSchema() {
       lat REAL,
       lng REAL,
       nap_id INTEGER,
-      service TEXT DEFAULT 'pppoe'
+      service TEXT DEFAULT 'pppoe',
+      online INTEGER DEFAULT 1
     );
 
     CREATE TABLE IF NOT EXISTS naps (
@@ -114,6 +115,25 @@ export function initSchema() {
 
 function count(table: string): number {
   return (db.prepare(`SELECT COUNT(*) AS c FROM ${table}`).get() as { c: number }).c;
+}
+
+function columnExists(table: string, col: string): boolean {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  return cols.some((c) => c.name === col);
+}
+
+/** Idempotent migrations for databases created before a column existed. */
+export function migrate() {
+  if (!columnExists('pppoe_users', 'online')) {
+    db.exec('ALTER TABLE pppoe_users ADD COLUMN online INTEGER DEFAULT 1');
+    setOnlineStates();
+  }
+}
+
+/** Derive a realistic ONU online/offline state from subscriber status. */
+function setOnlineStates() {
+  db.exec("UPDATE pppoe_users SET online = 0 WHERE status != 'Active'");
+  db.exec("UPDATE pppoe_users SET online = CASE WHEN (id % 7 = 0) THEN 0 ELSE 1 END WHERE status = 'Active'");
 }
 
 const FIRST = ['Jonathan', 'Licerio', 'Lizel', 'Johnny', 'Magno', 'Gino', 'Leony', 'Lito', 'Denver', 'Eric', 'Lisa', 'Adela', 'Bernardo', 'Vic', 'Lucille', 'Glaiza', 'Marlon', 'Rowena', 'Ferdinand', 'Cristina', 'Ramon', 'Teresita', 'Danilo', 'Marites', 'Rodel', 'Jocelyn', 'Arnel', 'Editha', 'Reynaldo', 'Marilou'];
@@ -231,6 +251,8 @@ export function seed() {
         nap.lat + 0.0005, nap.lng + 0.0005, nap.id, 'ipoe'
       );
     }
+
+    setOnlineStates();
   }
 
   // Transactions for the last 7 days (shaped like screenshot peak at day 3)

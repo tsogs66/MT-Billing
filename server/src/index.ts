@@ -3,12 +3,28 @@ import express from 'express';
 import cors from 'cors';
 import bcrypt from 'bcryptjs';
 import si from 'systeminformation';
-import { db, initSchema, seed } from './db.js';
+import { db, initSchema, seed, migrate } from './db.js';
 import { signToken, requireAuth, type AuthedRequest } from './auth.js';
 import { tryLiveResource } from './mikrotik.js';
 
 initSchema();
+migrate();
 seed();
+
+/**
+ * Extend an ISO date (YYYY-MM-DD) by a whole number of months, anchored on the
+ * ORIGINAL date and preserving its day-of-month. The payment day is never used
+ * as the anchor, so a subscriber's billing day does not drift. If the target
+ * month has fewer days, the day is clamped to that month's last day.
+ */
+function addMonthsPreserveDay(iso: string, months: number): string {
+  const base = new Date(`${iso}T00:00:00Z`);
+  const day = base.getUTCDate();
+  const target = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth() + months, 1));
+  const daysInTarget = new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0)).getUTCDate();
+  target.setUTCDate(Math.min(day, daysInTarget));
+  return target.toISOString().slice(0, 10);
+}
 
 const app = express();
 app.use(cors());
@@ -213,6 +229,45 @@ app.delete('/api/pppoe/users/:id', (req, res) => {
   res.json({ ok: true });
 });
 
+// Execute a payment: extends the subscription by whole month(s) from the
+// existing expiration date (preserving day-of-month, never re-anchored to the
+// payment day) and records the transaction.
+app.post('/api/pppoe/users/:id/payment', (req, res) => {
+  const id = Number(req.params.id);
+  const user = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(id) as any;
+  if (!user) return res.status(404).json({ error: 'not found' });
+
+  const months = Math.max(1, Math.floor(Number(req.body?.months) || 1));
+  const previousDue: string = (user.subscription_due || new Date().toISOString().slice(0, 10)).slice(0, 10);
+  const newDue = addMonthsPreserveDay(previousDue, months);
+
+  const prof = db.prepare('SELECT price FROM profiles WHERE name = ?').get(user.profile) as { price: number } | undefined;
+  const unit = Number(user.price) || prof?.price || 0;
+  const amount = req.body?.amount != null ? Number(req.body.amount) : unit * months;
+
+  db.prepare("UPDATE pppoe_users SET subscription_due = ?, status = 'Active', online = 1 WHERE id = ?").run(newDue, id);
+  db.prepare('INSERT INTO transactions (pppoe_user_id, customer_name, amount, type) VALUES (?, ?, ?, ?)').run(
+    id,
+    user.customer_name || user.username,
+    amount,
+    'payment'
+  );
+  db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+    'info',
+    'billing',
+    `Payment received for ${user.username}: +${months} month(s), due ${previousDue} \u2192 ${newDue}`
+  );
+
+  res.json({
+    ok: true,
+    months,
+    amount,
+    previousDue,
+    subscriptionDue: newDue,
+    user: db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(id),
+  });
+});
+
 app.get('/api/pppoe/profiles', (_req, res) => {
   res.json(db.prepare('SELECT id, name, rate_limit AS rateLimit, price, type FROM profiles').all());
 });
@@ -261,16 +316,23 @@ app.get('/api/map', (_req, res) => {
   const naps = db.prepare('SELECT id, name, kind, lat, lng, ports, parent_id AS parentId FROM naps').all();
   const clients = db
     .prepare(
-      `SELECT id, username, customer_name AS customer, status, lat, lng, nap_id AS napId, service
+      `SELECT id, username, customer_name AS customer, status, online, lat, lng, nap_id AS napId, service
        FROM pppoe_users WHERE lat IS NOT NULL AND lng IS NOT NULL`
     )
-    .all();
+    .all() as any[];
+  clients.forEach((c) => (c.online = !!c.online));
   const totalClients = (db.prepare('SELECT COUNT(*) AS c FROM pppoe_users').get() as any).c;
   const withoutLocation = (db.prepare('SELECT COUNT(*) AS c FROM pppoe_users WHERE lat IS NULL').get() as any).c;
-  const servers = (db.prepare("SELECT COUNT(*) AS c FROM routers").get() as any).c;
+  const servers = (db.prepare('SELECT COUNT(*) AS c FROM routers').get() as any).c;
   const olts = (db.prepare("SELECT COUNT(*) AS c FROM naps WHERE kind = 'olt'").get() as any).c;
   const napCount = (db.prepare("SELECT COUNT(*) AS c FROM naps WHERE kind = 'nap'").get() as any).c;
-  res.json({ naps, clients, stats: { servers, olts, naps: napCount, totalClients, withoutLocation } });
+  const onlineOnu = clients.filter((c) => c.online).length;
+  const offlineOnu = clients.length - onlineOnu;
+  res.json({
+    naps,
+    clients,
+    stats: { servers, olts, naps: napCount, totalClients, withoutLocation, onlineOnu, offlineOnu },
+  });
 });
 
 // ---- Inventory ----

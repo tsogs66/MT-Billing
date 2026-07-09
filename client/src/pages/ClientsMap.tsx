@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
-import { MapContainer, TileLayer, CircleMarker, Marker, Polyline, Popup, Tooltip as LTooltip } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Polyline, Popup, Tooltip as LTooltip, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import { Search, SlidersHorizontal, Maximize2 } from 'lucide-react';
 import Layout from '../components/Layout';
 import { api } from '../api';
 
 interface Nap { id: number; name: string; kind: string; lat: number; lng: number; ports: number; parentId: number | null }
-interface Client { id: number; username: string; customer: string; status: string; lat: number; lng: number; napId: number; service: string }
+interface Client { id: number; username: string; customer: string; status: string; online: boolean; lat: number; lng: number; napId: number; service: string }
 
 function napIcon(name: string, kind: string) {
   const color = kind === 'olt' ? '#7c3aed' : '#2563eb';
@@ -21,18 +21,46 @@ function napIcon(name: string, kind: string) {
   });
 }
 
+function onuIcon(online: boolean) {
+  const color = online ? '#22c55e' : '#ef4444';
+  const glow = online ? 'rgba(34,197,94,0.55)' : 'transparent';
+  return L.divIcon({
+    className: 'onu-marker',
+    html: `<span class="onu-dot ${online ? 'online' : 'offline'}" style="--onu-color:${color};--onu-glow:${glow}"></span>`,
+    iconSize: [12, 12],
+    iconAnchor: [6, 6],
+  });
+}
+
+/** Fit the map to all topology + client points once they load. */
+function FitBounds({ points }: { points: [number, number][] }) {
+  const map = useMap();
+  useEffect(() => {
+    if (points.length > 1) {
+      map.fitBounds(L.latLngBounds(points), { padding: [50, 50] });
+    }
+  }, [map, points]);
+  return null;
+}
+
 export default function ClientsMap() {
   const [naps, setNaps] = useState<Nap[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [stats, setStats] = useState<any>({});
   const [search, setSearch] = useState('');
 
-  useEffect(() => {
+  const load = () =>
     api.get('/map').then((r) => {
       setNaps(r.data.naps);
       setClients(r.data.clients);
       setStats(r.data.stats);
     });
+
+  useEffect(() => {
+    load();
+    // Live refresh so ONU online/offline status stays current.
+    const t = setInterval(load, 15000);
+    return () => clearInterval(t);
   }, []);
 
   const olt = useMemo(() => naps.find((n) => n.kind === 'olt'), [naps]);
@@ -42,6 +70,11 @@ export default function ClientsMap() {
 
   const filteredClients = clients.filter(
     (c) => !search || c.username.toLowerCase().includes(search.toLowerCase()) || (c.customer || '').toLowerCase().includes(search.toLowerCase())
+  );
+
+  const allPoints: [number, number][] = useMemo(
+    () => [...naps.map((n) => [n.lat, n.lng] as [number, number]), ...clients.map((c) => [c.lat, c.lng] as [number, number])],
+    [naps, clients]
   );
 
   const enterFullscreen = () => {
@@ -56,7 +89,9 @@ export default function ClientsMap() {
           <span>Servers: <b className="text-slate-700">{stats.servers ?? '—'}</b></span>
           <span>OLTs: <b className="text-slate-700">{stats.olts ?? '—'}</b></span>
           <span>NAPs: <b className="text-slate-700">{stats.naps ?? '—'}</b></span>
-          <span>Clients with location: <b className="text-slate-700">{stats.totalClients - (stats.withoutLocation || 0)}</b>
+          <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block" /> ONU Online: <b className="text-emerald-600">{stats.onlineOnu ?? '—'}</b></span>
+          <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-rose-500 inline-block" /> ONU Offline: <b className="text-rose-600">{stats.offlineOnu ?? '—'}</b></span>
+          <span>Clients with location: <b className="text-slate-700">{(stats.totalClients ?? 0) - (stats.withoutLocation || 0)}</b>
             <span className="text-slate-400"> ({stats.withoutLocation ?? 0} not shown)</span>
           </span>
         </div>
@@ -76,9 +111,10 @@ export default function ClientsMap() {
         </div>
       </div>
 
-      <div className="text-xs text-slate-400 mb-2">
-        Clients: <span className="text-emerald-600 font-medium">Online green</span> · <span className="text-amber-600 font-medium">Offline orange</span> ·
-        <span className="text-rose-600 font-medium"> Disabled red</span> — Lines show Server → OLT → NAP → Client
+      <div className="text-xs text-slate-400 mb-2 flex items-center gap-3 flex-wrap">
+        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block animate-pulse" /> ONU Online</span>
+        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-rose-500 inline-block" /> ONU Offline</span>
+        <span>· Animated links show live traffic flow: Server → OLT → NAP → ONU</span>
       </div>
 
       <div id="map-wrap" className="card overflow-hidden relative" style={{ height: '70vh' }}>
@@ -89,25 +125,35 @@ export default function ClientsMap() {
           <Maximize2 size={14} /> Fullscreen
         </button>
         <MapContainer center={center} zoom={15} style={{ height: '100%', width: '100%' }} scrollWheelZoom>
-          <TileLayer
-            attribution='&copy; OpenStreetMap contributors'
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          />
+          <TileLayer attribution="&copy; OpenStreetMap contributors" url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+          <FitBounds points={allPoints} />
 
-          {/* OLT -> NAP topology lines */}
+          {/* OLT -> NAP backbone (always animated) */}
           {olt &&
             naps
               .filter((n) => n.kind === 'nap')
               .map((n) => (
-                <Polyline key={`l-${n.id}`} positions={[[olt.lat, olt.lng], [n.lat, n.lng]]} pathOptions={{ color: '#3b82f6', weight: 1.5, dashArray: '5 6', opacity: 0.7 }} />
+                <Polyline
+                  key={`l-${n.id}`}
+                  positions={[[olt.lat, olt.lng], [n.lat, n.lng]]}
+                  pathOptions={{ color: '#2563eb', weight: 2, opacity: 0.8, className: 'flow-line' }}
+                />
               ))}
 
-          {/* NAP -> client lines */}
+          {/* NAP -> client (animated when the ONU is online, dim & static when offline) */}
           {filteredClients.map((c) => {
             const nap = napsById[c.napId];
             if (!nap) return null;
             return (
-              <Polyline key={`cl-${c.id}`} positions={[[nap.lat, nap.lng], [c.lat, c.lng]]} pathOptions={{ color: '#93c5fd', weight: 0.8, opacity: 0.4 }} />
+              <Polyline
+                key={`cl-${c.id}`}
+                positions={[[nap.lat, nap.lng], [c.lat, c.lng]]}
+                pathOptions={
+                  c.online
+                    ? { color: '#22c55e', weight: 1.4, opacity: 0.7, className: 'flow-line-slow' }
+                    : { color: '#f87171', weight: 1, opacity: 0.35, dashArray: '2 4' }
+                }
+              />
             );
           })}
 
@@ -121,26 +167,21 @@ export default function ClientsMap() {
             </Marker>
           ))}
 
-          {/* Client markers */}
-          {filteredClients.map((c) => {
-            const color = c.status === 'Active' ? '#22c55e' : c.status === 'expired' ? '#ef4444' : '#f59e0b';
-            return (
-              <CircleMarker
-                key={c.id}
-                center={[c.lat, c.lng]}
-                radius={6}
-                pathOptions={{ color: '#fff', weight: 1.5, fillColor: color, fillOpacity: 1 }}
-              >
-                <LTooltip>{c.customer}</LTooltip>
-                <Popup>
-                  <b>{c.customer}</b><br />
-                  {c.username}<br />
-                  Status: {c.status}<br />
-                  Service: {c.service.toUpperCase()}
-                </Popup>
-              </CircleMarker>
-            );
-          })}
+          {/* ONU markers with online/offline status */}
+          {filteredClients.map((c) => (
+            <Marker key={c.id} position={[c.lat, c.lng]} icon={onuIcon(c.online)}>
+              <LTooltip direction="top" offset={[0, -6]}>
+                {c.customer} — {c.online ? 'Online' : 'Offline'}
+              </LTooltip>
+              <Popup>
+                <b>{c.customer}</b><br />
+                {c.username}<br />
+                ONU: <b style={{ color: c.online ? '#16a34a' : '#dc2626' }}>{c.online ? 'Online' : 'Offline'}</b><br />
+                Account: {c.status}<br />
+                Service: {c.service.toUpperCase()}
+              </Popup>
+            </Marker>
+          ))}
         </MapContainer>
       </div>
     </Layout>
