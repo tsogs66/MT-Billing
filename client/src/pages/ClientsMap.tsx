@@ -9,7 +9,7 @@ import { api } from '../api';
 import { useRouterDevice } from '../context/RouterContext';
 
 interface ServerNode { id: number; name: string; host?: string; status: string; lat: number; lng: number }
-interface Nap { id: number; name: string; kind: string; lat: number; lng: number; ports: number; parentId: number | null }
+interface Nap { id: number; name: string; kind: string; lat: number; lng: number; ports: number; parentId: number | null; clientCount?: number; clientsWithLocation?: number }
 interface Connector { id: number; kind: string; fromId: number; toId: number; points: [number, number][] }
 interface Client {
   id: number; username: string; customer: string; status: string; online: boolean;
@@ -167,6 +167,54 @@ export default function ClientsMap() {
   const napNodes = useMemo(() => naps.filter((n) => n.kind === 'nap'), [naps]);
   const napsById = useMemo(() => Object.fromEntries(naps.map((n) => [n.id, n])), [naps]);
 
+  const routeToClients = useMemo(() => {
+    if (routeKind !== 'nap-client' || !routeFrom) return [];
+    return clients
+      .filter((c) => c.napId === Number(routeFrom))
+      .sort((a, b) => (a.customer || a.username).localeCompare(b.customer || b.username));
+  }, [routeKind, routeFrom, clients]);
+
+  const routeToNaps = useMemo(() => {
+    if (routeKind !== 'olt-nap' || !routeFrom) return [];
+    return napNodes
+      .filter((n) => n.parentId === Number(routeFrom))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [routeKind, routeFrom, napNodes]);
+
+  const selectedRouteNap = routeKind === 'nap-client' && routeFrom ? napsById[Number(routeFrom)] : null;
+
+  useEffect(() => {
+    if (!routeTo) return;
+    if (routeKind === 'nap-client') {
+      if (!routeFrom || !routeToClients.some((c) => c.id === Number(routeTo))) setRouteTo('');
+    } else if (routeKind === 'olt-nap') {
+      if (!routeFrom || !routeToNaps.some((n) => n.id === Number(routeTo))) setRouteTo('');
+    }
+  }, [routeKind, routeFrom, routeTo, routeToClients, routeToNaps]);
+
+  const selectNapForRouting = (napId: number) => {
+    setRouteKind('nap-client');
+    setRouteFrom(napId);
+    setRouteTo('');
+    setDrawMode(false);
+    setDrawPoints([]);
+  };
+
+  const onRouteFromChange = (val: number | '') => {
+    setRouteFrom(val);
+    setRouteTo('');
+    setDrawMode(false);
+    setDrawPoints([]);
+  };
+
+  const onRouteKindChange = (kind: RouteKind) => {
+    setRouteKind(kind);
+    setRouteFrom('');
+    setRouteTo('');
+    setDrawMode(false);
+    setDrawPoints([]);
+  };
+
   const center: [number, number] = olt ? [olt.lat, olt.lng] : servers[0] ? [servers[0].lat, servers[0].lng] : [15.1785, 120.5945];
   const highlightId = selected?.id ?? hoveredId;
 
@@ -314,9 +362,29 @@ export default function ClientsMap() {
             </TopoPanel>
             <TopoPanel title="NAP Configuration" action={<button type="button" className="text-xs text-brand-600 hover:underline" onClick={() => setEditNap({ ...emptyNap(), parentId: olt?.id || null })}><Plus size={12} className="inline" /> New NAP</button>}>
               <div className="max-h-48 overflow-y-auto space-y-1 pr-1">
-                {napNodes.length === 0 ? <p className="text-sm text-slate-400 py-4 text-center">No NAPs.</p> : napNodes.map((n) => (
-                  <TopoRow key={n.id} name={n.name} sub={n.parentId ? `From: ${napsById[n.parentId]?.name}` : 'No parent'} right={<div className="flex gap-2"><button type="button" className="text-xs text-sky-600" onClick={() => setEditNap({ ...n })}>Edit</button><button type="button" className="text-xs text-rose-600" onClick={() => deleteNap(n.id)}>Delete</button></div>} />
-                ))}
+                {napNodes.length === 0 ? <p className="text-sm text-slate-400 py-4 text-center">No NAPs.</p> : napNodes.map((n) => {
+                  const parent = n.parentId ? napsById[n.parentId] : null;
+                  const parentLabel = parent ? (parent.kind === 'olt' ? parent.name : `From: ${parent.name}`) : 'No parent';
+                  const clientLabel = `${n.clientCount ?? 0} client${(n.clientCount ?? 0) === 1 ? '' : 's'}${(n.clientsWithLocation ?? 0) < (n.clientCount ?? 0) ? ` · ${n.clientsWithLocation ?? 0} on map` : ''}`;
+                  const routing = routeKind === 'nap-client' && routeFrom === n.id;
+                  return (
+                    <button
+                      key={n.id}
+                      type="button"
+                      onClick={() => selectNapForRouting(n.id)}
+                      className={`w-full text-left rounded-lg px-2 py-1.5 transition-colors ${routing ? 'bg-brand-50 ring-1 ring-brand-200' : 'hover:bg-slate-50'}`}
+                    >
+                      <TopoRow
+                        name={n.name}
+                        sub={`${parentLabel} · ${clientLabel}`}
+                        right={<div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
+                          <button type="button" className="text-xs text-sky-600" onClick={() => setEditNap({ ...n })}>Edit</button>
+                          <button type="button" className="text-xs text-rose-600" onClick={() => deleteNap(n.id)}>Delete</button>
+                        </div>}
+                      />
+                    </button>
+                  );
+                })}
               </div>
             </TopoPanel>
           </div>
@@ -329,26 +397,28 @@ export default function ClientsMap() {
             </div>
             <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
               <FormField label="Route type">
-                <select className="input" value={routeKind} onChange={(e) => { setRouteKind(e.target.value as RouteKind); setRouteFrom(''); setRouteTo(''); }}>
+                <select className="input" value={routeKind} onChange={(e) => onRouteKindChange(e.target.value as RouteKind)}>
                   <option value="server-olt">Server → OLT</option>
                   <option value="olt-nap">OLT → NAP</option>
                   <option value="nap-client">NAP → Client</option>
                 </select>
               </FormField>
-              <FormField label="From">
-                <select className="input" value={routeFrom} onChange={(e) => setRouteFrom(e.target.value ? Number(e.target.value) : '')}>
+              <FormField label={routeKind === 'server-olt' ? 'From Server' : routeKind === 'olt-nap' ? 'From OLT' : 'From NAP'}>
+                <select className="input" value={routeFrom} onChange={(e) => onRouteFromChange(e.target.value ? Number(e.target.value) : '')}>
                   <option value="">Select…</option>
                   {routeKind === 'server-olt' && servers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
                   {routeKind === 'olt-nap' && olts.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-                  {routeKind === 'nap-client' && napNodes.map((n) => <option key={n.id} value={n.id}>{n.name}</option>)}
+                  {routeKind === 'nap-client' && napNodes.map((n) => <option key={n.id} value={n.id}>{n.name} ({n.clientsWithLocation ?? 0} on map)</option>)}
                 </select>
               </FormField>
-              <FormField label="To">
-                <select className="input" value={routeTo} onChange={(e) => setRouteTo(e.target.value ? Number(e.target.value) : '')}>
-                  <option value="">Select…</option>
+              <FormField label={routeKind === 'server-olt' ? 'To OLT' : routeKind === 'olt-nap' ? 'To NAP' : 'To Client'}>
+                <select className="input" value={routeTo} onChange={(e) => setRouteTo(e.target.value ? Number(e.target.value) : '')} disabled={!routeFrom}>
+                  <option value="">{routeFrom ? 'Select…' : 'Select source first'}</option>
                   {routeKind === 'server-olt' && olts.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-                  {routeKind === 'olt-nap' && napNodes.map((n) => <option key={n.id} value={n.id}>{n.name}</option>)}
-                  {routeKind === 'nap-client' && clients.map((c) => <option key={c.id} value={c.id}>{c.customer || c.username}</option>)}
+                  {routeKind === 'olt-nap' && routeToNaps.map((n) => <option key={n.id} value={n.id}>{n.name}</option>)}
+                  {routeKind === 'nap-client' && routeToClients.map((c) => (
+                    <option key={c.id} value={c.id}>{c.customer || c.username} ({c.username})</option>
+                  ))}
                 </select>
               </FormField>
               <div className="flex flex-wrap gap-2">
@@ -357,6 +427,22 @@ export default function ClientsMap() {
                 <button type="button" className="text-sm text-rose-600 px-3 py-2 border border-rose-200 rounded-xl hover:bg-rose-50" onClick={deleteRoute}>Delete Saved</button>
               </div>
             </div>
+            {routeKind === 'nap-client' && routeFrom && routeToClients.length === 0 && (
+              <p className="text-xs text-amber-700 mt-2">
+                No clients with map coordinates are assigned to {selectedRouteNap?.name || 'this NAP'}.
+                {(selectedRouteNap?.clientCount ?? 0) > 0
+                  ? ` ${selectedRouteNap?.clientCount} client(s) are assigned but missing location data.`
+                  : ' Assign clients to this NAP in PPPoE / IPoE users.'}
+              </p>
+            )}
+            {routeKind === 'olt-nap' && routeFrom && routeToNaps.length === 0 && (
+              <p className="text-xs text-amber-700 mt-2">No NAPs are linked to the selected OLT. Set parent OLT on each NAP first.</p>
+            )}
+            {routeKind === 'nap-client' && routeFrom && routeToClients.length > 0 && (
+              <p className="text-xs text-slate-500 mt-2">
+                Showing {routeToClients.length} client{routeToClients.length === 1 ? '' : 's'} assigned to {selectedRouteNap?.name}.
+              </p>
+            )}
             {drawMode && <p className="text-xs text-brand-700 mt-2">Click the map to add street waypoints between endpoints, then Save Route.</p>}
           </div>
         </>
@@ -477,7 +563,17 @@ export default function ClientsMap() {
               <FormField label="Ports"><input className="input" type="number" value={editNap.ports || 8} onChange={(e) => setEditNap({ ...editNap, ports: Number(e.target.value) })} /></FormField>
             </div>
             {editNap.kind === 'nap' && (
-              <FormField label="Parent OLT"><select className="input" value={editNap.parentId || ''} onChange={(e) => setEditNap({ ...editNap, parentId: e.target.value ? Number(e.target.value) : null })}><option value="">—</option>{olts.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}</select></FormField>
+              <FormField label="Parent (OLT or NAP)">
+                <select className="input" value={editNap.parentId || ''} onChange={(e) => setEditNap({ ...editNap, parentId: e.target.value ? Number(e.target.value) : null })}>
+                  <option value="">—</option>
+                  <optgroup label="OLT">
+                    {olts.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                  </optgroup>
+                  <optgroup label="NAP">
+                    {napNodes.filter((n) => n.id !== editNap.id).map((n) => <option key={n.id} value={n.id}>{n.name}</option>)}
+                  </optgroup>
+                </select>
+              </FormField>
             )}
             <div className="grid grid-cols-2 gap-3">
               <FormField label="Latitude"><input className="input" type="number" step="any" value={editNap.lat ?? ''} onChange={(e) => setEditNap({ ...editNap, lat: Number(e.target.value) })} /></FormField>

@@ -915,11 +915,24 @@ app.get('/api/map', (req, res) => {
   const napCount = (db.prepare("SELECT COUNT(*) AS c FROM naps WHERE kind = 'nap'").get() as any).c;
   const onlineOnu = clients.filter((c) => c.online && c.status === 'Active').length;
   const offlineOnu = clients.filter((c) => c.status === 'Active' && !c.online).length;
+  const napClientStats = db
+    .prepare(
+      `SELECT nap_id AS napId, COUNT(*) AS total,
+              SUM(CASE WHEN lat IS NOT NULL AND lng IS NOT NULL THEN 1 ELSE 0 END) AS withLocation
+       FROM pppoe_users WHERE nap_id IS NOT NULL GROUP BY nap_id`
+    )
+    .all() as { napId: number; total: number; withLocation: number }[];
+  const statsByNap = Object.fromEntries(napClientStats.map((s) => [s.napId, s]));
+  const napsWithStats = (naps as any[]).map((n) => ({
+    ...n,
+    clientCount: statsByNap[n.id]?.total ?? 0,
+    clientsWithLocation: statsByNap[n.id]?.withLocation ?? 0,
+  }));
   const connectors = (db.prepare('SELECT id, kind, from_id AS fromId, to_id AS toId, points FROM map_connectors').all() as any[]).map(
     (c) => ({ ...c, points: JSON.parse(c.points || '[]') })
   );
   res.json({
-    naps,
+    naps: napsWithStats,
     clients,
     servers,
     connectors,
