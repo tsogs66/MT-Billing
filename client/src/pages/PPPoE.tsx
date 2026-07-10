@@ -45,6 +45,8 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
   const [editFor, setEditFor] = useState<PUser | null>(null);
   const [toast, setToast] = useState('');
   const [fetching, setFetching] = useState(false);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
   const { current } = useRouterDevice();
 
   const loadUsers = () => api.get(`/pppoe/users?service=${service}`).then((r) => setUsers(r.data));
@@ -80,6 +82,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
   useEffect(() => {
     setTab('users');
     setSearch('');
+    setSelected(new Set());
     loadUsers();
     api.get('/pppoe/profiles').then((r) => setProfiles(r.data));
     api.get(`/pppoe/active?service=${service}`).then((r) => setActive(r.data));
@@ -95,6 +98,68 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
       (u.account || '').includes(search)
   );
   const offline = filtered.filter((u) => u.status !== 'Active');
+  const listUsers = tab === 'offline' ? offline : filtered;
+  const allSelected = listUsers.length > 0 && listUsers.every((u) => selected.has(u.id));
+  const someSelected = listUsers.some((u) => selected.has(u.id));
+
+  const toggleSelect = (id: number) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (allSelected) {
+      setSelected((prev) => {
+        const next = new Set(prev);
+        listUsers.forEach((u) => next.delete(u.id));
+        return next;
+      });
+    } else {
+      setSelected((prev) => {
+        const next = new Set(prev);
+        listUsers.forEach((u) => next.add(u.id));
+        return next;
+      });
+    }
+  };
+
+  const bulkDisable = async () => {
+    const ids = [...selected];
+    if (!ids.length) return;
+    if (!confirm(`Disable ${ids.length} selected user(s)?`)) return;
+    setBulkBusy(true);
+    try {
+      const r = await api.post('/pppoe/users/bulk-disable', { ids });
+      showToast(`Disabled ${r.data.count} user(s).`);
+      setSelected(new Set());
+      loadUsers();
+    } catch (e: any) {
+      showToast(e?.response?.data?.error || 'Bulk disable failed.');
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const bulkDelete = async () => {
+    const ids = [...selected];
+    if (!ids.length) return;
+    if (!confirm(`Permanently delete ${ids.length} selected user(s)? This cannot be undone.`)) return;
+    setBulkBusy(true);
+    try {
+      const r = await api.post('/pppoe/users/bulk-delete', { ids });
+      showToast(`Deleted ${r.data.count} user(s).`);
+      setSelected(new Set());
+      loadUsers();
+    } catch (e: any) {
+      showToast(e?.response?.data?.error || 'Bulk delete failed.');
+    } finally {
+      setBulkBusy(false);
+    }
+  };
 
   const remove = async (id: number) => {
     await api.delete(`/pppoe/users/${id}`);
@@ -109,9 +174,28 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
         {(tab === 'users' || tab === 'offline') && (
           <>
             <Toolbar
-              left={<>Total Users <span className="font-semibold text-slate-800">{tab === 'offline' ? offline.length : users.length}</span></>}
+              left={
+                <div className="flex items-center gap-3 flex-wrap">
+                  <span>
+                    Total Users <span className="font-semibold text-slate-800">{tab === 'offline' ? offline.length : users.length}</span>
+                  </span>
+                  {someSelected && (
+                    <span className="text-brand-600 font-medium text-sm">{selected.size} selected</span>
+                  )}
+                </div>
+              }
               right={
                 <>
+                  {someSelected && (
+                    <>
+                      <button type="button" className="btn-secondary text-amber-700 border-amber-200 hover:bg-amber-50" onClick={bulkDisable} disabled={bulkBusy}>
+                        <KeyRound size={16} /> Disable selected
+                      </button>
+                      <button type="button" className="btn-secondary text-rose-700 border-rose-200 hover:bg-rose-50" onClick={bulkDelete} disabled={bulkBusy}>
+                        <Trash2 size={16} /> Delete selected
+                      </button>
+                    </>
+                  )}
                   <SearchInput
                     value={search}
                     onChange={setSearch}
@@ -137,6 +221,22 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
             <div className="p-4 pt-0">
               <DataTable
                 columns={[
+                  {
+                    key: 'sel',
+                    label: (
+                      <input
+                        type="checkbox"
+                        className="w-4 h-4 accent-brand-500 rounded"
+                        checked={allSelected}
+                        ref={(el) => {
+                          if (el) el.indeterminate = someSelected && !allSelected;
+                        }}
+                        onChange={toggleSelectAll}
+                        aria-label="Select all users"
+                      />
+                    ),
+                    className: 'w-10',
+                  },
                   { key: 'user', label: 'Username / Customer' },
                   { key: 'account', label: 'Account #' },
                   { key: 'profile', label: 'Profile' },
@@ -144,9 +244,17 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                   { key: 'due', label: 'Subscription Due' },
                   { key: 'actions', label: 'Actions', align: 'right' },
                 ]}
-                rows={(tab === 'offline' ? offline : filtered).map((u) => ({
+                rows={listUsers.map((u) => ({
                   key: u.id,
                   cells: [
+                    <input
+                      key="cb"
+                      type="checkbox"
+                      className="w-4 h-4 accent-brand-500 rounded"
+                      checked={selected.has(u.id)}
+                      onChange={() => toggleSelect(u.id)}
+                      aria-label={`Select ${u.username}`}
+                    />,
                     <div key="u">
                       <div className="font-semibold text-slate-800">{u.username}</div>
                       <div className="text-xs text-slate-400">{u.customer}</div>

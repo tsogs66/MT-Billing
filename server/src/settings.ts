@@ -2,6 +2,7 @@ import express from 'express';
 import bcrypt from 'bcryptjs';
 import fs from 'fs';
 import path from 'path';
+import { exec } from 'child_process';
 import { db, backupsDir, dbPath } from './db.js';
 
 export const settingsRouter = express.Router();
@@ -168,6 +169,25 @@ settingsRouter.post('/account/reset-password', (req: any, res) => {
   db.prepare('UPDATE users SET password_hash = ? WHERE username = ?').run(hash, username);
   db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run('warning', 'account', `Password changed for ${username}`);
   res.json({ ok: true });
+});
+
+// ---------- Server restart ----------
+settingsRouter.post('/settings/restart-server', (_req, res) => {
+  db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+    'warning',
+    'server',
+    'API server restart requested from System Settings'
+  );
+  res.json({ ok: true, message: 'Server is restarting. The panel may be unavailable for a few seconds.' });
+
+  setTimeout(() => {
+    exec('systemctl restart mt-billing-api', (err) => {
+      if (err) {
+        // Fallback when not running under systemd (dev / manual node)
+        process.exit(0);
+      }
+    });
+  }, 400);
 });
 
 // ---------- Router management (CRUD) ----------

@@ -371,7 +371,7 @@ export function DataTable({
   emptyMessage = 'No records found.',
   stickyHeader,
 }: {
-  columns: { key: string; label: string; align?: 'left' | 'right' | 'center'; className?: string }[];
+  columns: { key: string; label: ReactNode; align?: 'left' | 'right' | 'center'; className?: string }[];
   rows: { key: string | number; cells: ReactNode[] }[];
   emptyMessage?: string;
   stickyHeader?: boolean;

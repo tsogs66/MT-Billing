@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Settings as SettingsIcon, Sun, Moon, Monitor, Database as DbIcon, Bot, Clock, KeyRound,
-  Router as RouterIcon, Globe2, Download, Trash2, RefreshCw, Plus, Pencil,
+  Router as RouterIcon, Globe2, Download, Trash2, RefreshCw, Plus, Pencil, Power,
 } from 'lucide-react';
 import Layout from '../components/Layout';
 import {
@@ -54,7 +54,12 @@ export default function SystemSettings() {
 
       <TabBar tabs={[...TABS]} active={tab} onChange={setTab} className="mb-5" />
 
-      {tab === 'panel' && <PanelSettings app={app} setA={setA} save={saveApp} />}
+      {tab === 'panel' && (
+        <>
+          <PanelSettings app={app} setA={setA} save={saveApp} />
+          <ServerRestart flash={flash} />
+        </>
+      )}
       {tab === 'ngrok' && <NgrokSettings app={app} setA={setA} save={saveApp} flash={flash} reload={load} />}
       {tab === 'database' && <DatabaseManagement flash={flash} />}
       {tab === 'ai' && <AiSettings app={app} setA={setA} save={saveApp} />}
@@ -108,6 +113,49 @@ function PanelSettings({ app, setA, save }: any) {
         <div className="flex justify-end">
           <button className="btn-primary" onClick={() => save()}>Save Panel Settings</button>
         </div>
+      </div>
+    </SettingsSection>
+  );
+}
+
+function ServerRestart({ flash }: { flash: (m: string) => void }) {
+  const [busy, setBusy] = useState(false);
+  const [confirm, setConfirm] = useState(false);
+
+  const restart = async () => {
+    setBusy(true);
+    try {
+      await api.post('/settings/restart-server');
+      flash('Server restart initiated. The panel will reconnect in a few seconds.');
+      setConfirm(false);
+    } catch (e: any) {
+      flash(e?.response?.data?.error || 'Restart failed.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <SettingsSection icon={Power} title="Server Restart" className="mt-5">
+      <div className="max-w-2xl space-y-4">
+        <p className="text-sm text-slate-500">
+          Restart the MT-Billing API service. Active sessions will be disconnected briefly. Use this after configuration changes or updates that require a full service restart.
+        </p>
+        {!confirm ? (
+          <button type="button" className="btn-secondary border-rose-200 text-rose-700 hover:bg-rose-50" onClick={() => setConfirm(true)}>
+            <Power size={16} /> Restart API server
+          </button>
+        ) : (
+          <div className="rounded-xl border border-rose-200 bg-rose-50/50 p-4 space-y-3">
+            <p className="text-sm text-rose-800 font-medium">Restart the API server now? The panel may be unavailable for a few seconds.</p>
+            <div className="flex gap-2">
+              <button type="button" className="btn-primary bg-rose-600 hover:bg-rose-700 from-rose-600 to-rose-700" onClick={restart} disabled={busy}>
+                {busy ? 'Restarting…' : 'Yes, restart now'}
+              </button>
+              <button type="button" className="btn-secondary" onClick={() => setConfirm(false)} disabled={busy}>Cancel</button>
+            </div>
+          </div>
+        )}
       </div>
     </SettingsSection>
   );

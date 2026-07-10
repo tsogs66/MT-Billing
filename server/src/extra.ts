@@ -1,13 +1,11 @@
 import express from 'express';
-import os from 'os';
-import crypto from 'crypto';
 import { db } from './db.js';
+import { panelHardwareId, expectedLicenseKey, normalizeCode } from './panelId.js';
 
 export const extraRouter = express.Router();
 
 // Shared license signing secret (vendor-side). The standalone activator script
 // uses the same value + algorithm to generate keys from a hardware ID.
-const LICENSE_SECRET = 'MT-BILLING-LICENSE-2026';
 
 function columnExists(table: string, col: string): boolean {
   const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
@@ -322,28 +320,13 @@ extraRouter.get('/logs/email', (req, res) => {
 
 // ---------------- License ----------------
 function hardwareId(): string {
-  const nets = os.networkInterfaces();
-  let mac = '';
-  for (const key of Object.keys(nets)) {
-    for (const ni of nets[key] || []) {
-      if (!ni.internal && ni.mac && ni.mac !== '00:00:00:00:00:00') {
-        mac = ni.mac;
-        break;
-      }
-    }
-    if (mac) break;
-  }
-  const cpu = os.cpus()[0]?.model || 'cpu';
-  const raw = [os.hostname(), mac, os.arch(), os.platform(), cpu].join('|');
-  const h = crypto.createHash('sha256').update(raw).digest('hex').toUpperCase();
-  return `${h.slice(0, 4)}-${h.slice(4, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}`;
+  return panelHardwareId();
 }
 export function expectedKeyFor(hwid: string): string {
-  const h = crypto.createHmac('sha256', LICENSE_SECRET).update(hwid).digest('hex').toUpperCase();
-  return `${h.slice(0, 5)}-${h.slice(5, 10)}-${h.slice(10, 15)}-${h.slice(15, 20)}`;
+  return expectedLicenseKey(hwid);
 }
 function normalizeKey(k: string): string {
-  return String(k || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return normalizeCode(k);
 }
 extraRouter.get('/license', (_req, res) => {
   const s = db.prepare('SELECT license_activated, license_key FROM app_settings WHERE id = 1').get() as any;

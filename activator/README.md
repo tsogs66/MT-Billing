@@ -51,3 +51,22 @@ Same algorithm and output as the `.exe`.
 
 The key is bound to that exact Hardware ID (HMAC-SHA256), so it only activates the
 machine it was generated for.
+
+---
+
+## Password Reset Activator
+
+If a customer forgets the panel login password, they use **Forgot password?** on the
+login screen. That shows their **Panel ID** (same value as Hardware ID on the License page).
+
+Generate a reset code with:
+
+```bash
+node server/scripts/password-reset-activator.mjs <PANEL-ID>
+```
+
+Or use **`activator/password-reset.cjs`** (build to `.exe` the same way as the license activator).
+
+The customer enters the code (format `RST-XXXX-XXXX-XXXX-XXXX`) on the login page to
+restore the default admin username and password (`admin` / `admin123`, or values from
+`ADMIN_USER` / `ADMIN_PASS` in `server/.env`).

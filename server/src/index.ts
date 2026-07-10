@@ -6,6 +6,7 @@ import bcrypt from 'bcryptjs';
 import si from 'systeminformation';
 import { db, initSchema, seed, migrate } from './db.js';
 import { signToken, requireAuth, type AuthedRequest } from './auth.js';
+import { panelHardwareId, expectedPasswordResetCode, normalizeCode } from './panelId.js';
 import { tryLiveResource, withRouter } from './mikrotik.js';
 import { getUptime, getUptimeSummary, runUptimeChecks, startUptime } from './uptime.js';
 import { getInterfaceNames, getTrafficSnapshot } from './interfaces.js';
@@ -63,6 +64,65 @@ app.post('/api/login', (req, res) => {
 
 app.get('/api/me', requireAuth, (req: AuthedRequest, res) => {
   res.json({ user: req.user });
+});
+
+// Public: panel hardware ID for license / password-reset activator tools
+app.get('/api/auth/panel-id', (_req, res) => {
+  res.json({
+    panelId: panelHardwareId(),
+    defaultUser: process.env.ADMIN_USER || 'admin',
+  });
+});
+
+// Public: reset panel login to default credentials using vendor activation code
+app.post('/api/auth/forgot-password-reset', (req, res) => {
+  const hwid = panelHardwareId();
+  const provided = normalizeCode(req.body?.code);
+  const expected = normalizeCode(expectedPasswordResetCode(hwid));
+  if (!provided) return res.status(400).json({ error: 'Reset code is required.' });
+  if (provided !== expected) {
+    db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+      'warning',
+      'auth',
+      'Invalid password reset code attempt'
+    );
+    return res.status(400).json({ error: 'Invalid reset code for this panel ID.' });
+  }
+
+  const defaultUser = process.env.ADMIN_USER || 'admin';
+  const defaultPass = process.env.ADMIN_PASS || 'admin123';
+  const hash = bcrypt.hashSync(defaultPass, 10);
+
+  let admin = db.prepare("SELECT * FROM users WHERE role = 'superadmin' ORDER BY id LIMIT 1").get() as any;
+  if (!admin) admin = db.prepare('SELECT * FROM users ORDER BY id LIMIT 1').get() as any;
+
+  if (admin) {
+    const conflict = db.prepare('SELECT id FROM users WHERE username = ? AND id != ?').get(defaultUser, admin.id);
+    if (conflict) {
+      return res.status(409).json({
+        error: `Cannot reset username to "${defaultUser}" — that username is already in use.`,
+      });
+    }
+    db.prepare('UPDATE users SET username = ?, password_hash = ? WHERE id = ?').run(defaultUser, hash, admin.id);
+  } else {
+    db.prepare('INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)').run(
+      defaultUser,
+      hash,
+      'superadmin'
+    );
+  }
+
+  db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+    'warning',
+    'auth',
+    `Panel credentials reset to default user "${defaultUser}" via activation code`
+  );
+
+  res.json({
+    ok: true,
+    username: defaultUser,
+    message: `Panel login reset. Sign in with ${defaultUser} / (your default password).`,
+  });
 });
 
 app.use('/api', requireAuth);
@@ -398,6 +458,48 @@ app.post('/api/pppoe/users/:id/toggle-enabled', (req, res) => {
 app.delete('/api/pppoe/users/:id', (req, res) => {
   db.prepare('DELETE FROM pppoe_users WHERE id = ?').run(Number(req.params.id));
   res.json({ ok: true });
+});
+
+app.post('/api/pppoe/users/bulk-disable', (req, res) => {
+  const ids = (Array.isArray(req.body?.ids) ? req.body.ids : [])
+    .map((id: unknown) => Number(id))
+    .filter((id: number) => Number.isFinite(id) && id > 0);
+  if (!ids.length) return res.status(400).json({ error: 'No user IDs provided.' });
+
+  const stmt = db.prepare("UPDATE pppoe_users SET status = 'disabled', online = 0 WHERE id = ?");
+  let count = 0;
+  for (const id of ids) {
+    const u = db.prepare('SELECT username, service FROM pppoe_users WHERE id = ?').get(id) as any;
+    if (!u) continue;
+    stmt.run(id);
+    count++;
+    db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+      'info',
+      'mikrotik',
+      `Bulk disabled ${u.service} secret for ${u.username}`
+    );
+  }
+  res.json({ ok: true, count });
+});
+
+app.post('/api/pppoe/users/bulk-delete', (req, res) => {
+  const ids = (Array.isArray(req.body?.ids) ? req.body.ids : [])
+    .map((id: unknown) => Number(id))
+    .filter((id: number) => Number.isFinite(id) && id > 0);
+  if (!ids.length) return res.status(400).json({ error: 'No user IDs provided.' });
+
+  const stmt = db.prepare('DELETE FROM pppoe_users WHERE id = ?');
+  let count = 0;
+  for (const id of ids) {
+    const info = stmt.run(id);
+    if (info.changes) count++;
+  }
+  db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+    'warning',
+    'mikrotik',
+    `Bulk deleted ${count} PPPoE/IPoE user(s)`
+  );
+  res.json({ ok: true, count });
 });
 
 // Execute a payment: extends the subscription by whole month(s) from the
