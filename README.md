@@ -87,8 +87,23 @@ data otherwise).
 | `npm run lint`      | Lint the frontend |
 | `npm --prefix server run build` | Compile the backend to `server/dist` |
 | `npm --prefix server run start` | Run the compiled backend |
+| `scripts/proxmox-install.sh` | Proxmox LXC + Ubuntu guest install helper (see below) |
 
 ## Deploying on Ubuntu (Proxmox)
+
+Use the helper script for a guided install on Proxmox VE:
+
+```bash
+# On the Proxmox host — create an Ubuntu 24.04 LXC (adjust storage/bridge/IP)
+sudo ./scripts/proxmox-install.sh create-lxc --ctid 120 --ip dhcp
+
+# Inside the new container/VM — install Node, build, nginx + systemd
+sudo ./scripts/proxmox-install.sh install
+# Or from an existing clone:
+sudo ./scripts/proxmox-install.sh install --source /path/to/MT-Billing
+```
+
+Manual steps (if you prefer):
 
 1. Create an Ubuntu 22.04/24.04 VM or LXC on Proxmox.
 2. Install Node.js 20+ and `git`.
