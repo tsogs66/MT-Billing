@@ -54,14 +54,24 @@ npm install
 npm run dev
 ```
 
-Then open <http://localhost:5173> and sign in with the default credentials:
+### Importing a production database backup
 
-```
-username: admin
-password: admin123
+If you have a backup from the legacy Pa-North panel (e.g.
+`panel-db-backup-*.sqlite`), import it into the current schema:
+
+```bash
+npm --prefix server run import-backup
+# or with a custom path:
+npx tsx server/src/import-backup.ts /path/to/backup.sqlite
 ```
 
-The SQLite database is created and seeded automatically on first run.
+This replaces `server/data/mt-billing.db` with migrated data (customers, sales,
+routers, NAPs/OLTs, users with preserved bcrypt passwords, company profile).
+Restart the server after importing.
+
+Then open <http://localhost:5173> and sign in. After a fresh seed the default
+credentials are `admin` / `admin123`. If you imported a production backup,
+use your existing panel usernames and passwords (e.g. `admin`, `tsogs66`).
 
 ### Configuration
 
