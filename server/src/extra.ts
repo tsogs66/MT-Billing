@@ -66,7 +66,7 @@ export function initExtra() {
   }
 
   // Drop stale sample WAN routes that were never synced from a live router.
-  db.prepare('DELETE FROM wan_routes WHERE route_id IS NULL OR route_id = ""').run();
+  db.prepare("DELETE FROM wan_routes WHERE route_id IS NULL OR route_id = ''").run();
 
   for (const [col, type] of [
     ['license_key', 'TEXT'],
