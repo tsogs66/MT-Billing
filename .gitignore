@@ -8,3 +8,4 @@ server/data/*.db
 server/data/*.db-*
 coverage/
 *.tsbuildinfo
+activator/dist/

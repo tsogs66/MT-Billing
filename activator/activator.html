@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MT-Billing License Activator</title>
+    <style>
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+        background: linear-gradient(135deg, #0f172a, #1e293b 60%, #ea580c); font-family: 'Segoe UI', system-ui, sans-serif; color: #1f2937; }
+      .card { background: #fff; width: 100%; max-width: 460px; border-radius: 16px; box-shadow: 0 20px 60px rgba(0,0,0,.35); padding: 28px; margin: 16px; }
+      .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
+      .logo { width: 40px; height: 40px; border-radius: 10px; background: #f97316; color: #fff; font-weight: 700; font-size: 20px; display: flex; align-items: center; justify-content: center; }
+      h1 { font-size: 18px; margin: 0; }
+      .sub { font-size: 12px; color: #94a3b8; }
+      label { display: block; font-size: 13px; font-weight: 600; margin: 16px 0 6px; }
+      input { width: 100%; padding: 10px 12px; border: 1px solid #e2e8f0; border-radius: 10px; font-size: 14px; font-family: ui-monospace, monospace; }
+      button { margin-top: 16px; width: 100%; padding: 11px; border: 0; border-radius: 10px; background: #f97316; color: #fff; font-weight: 600; font-size: 14px; cursor: pointer; }
+      button:hover { background: #ea580c; }
+      .out { margin-top: 18px; padding: 14px; border-radius: 10px; background: #f8fafc; border: 1px solid #e2e8f0; display: none; }
+      .out.show { display: block; }
+      .out .k { font-size: 12px; color: #64748b; }
+      .out .v { font-family: ui-monospace, monospace; font-size: 18px; font-weight: 700; color: #0f172a; letter-spacing: 1px; word-break: break-all; }
+      .copy { margin-top: 10px; background: #0ea5e9; }
+      .copy:hover { background: #0284c7; }
+      .note { font-size: 11px; color: #94a3b8; margin-top: 16px; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div class="brand">
+        <div class="logo">M</div>
+        <div>
+          <h1>MT-Billing License Activator</h1>
+          <div class="sub">Vendor tool — generate a key from a Hardware ID</div>
+        </div>
+      </div>
+
+      <label for="hwid">Customer Hardware ID</label>
+      <input id="hwid" placeholder="1A2B-3C4D-5E6F-7890" autocomplete="off" spellcheck="false" />
+      <button id="gen">Generate License Key</button>
+
+      <div class="out" id="out">
+        <div class="k">License Key</div>
+        <div class="v" id="key">—</div>
+        <button class="copy" id="copy">Copy key</button>
+      </div>
+
+      <div class="note">Runs fully offline. The generated key is bound to this exact Hardware ID.</div>
+    </div>
+
+    <script>
+      const SECRET = 'MT-BILLING-LICENSE-2026';
+      async function keyFor(hwid) {
+        const norm = String(hwid || '').toUpperCase().replace(/[^A-Z0-9-]/g, '');
+        const enc = new TextEncoder();
+        const key = await crypto.subtle.importKey('raw', enc.encode(SECRET), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+        const sig = await crypto.subtle.sign('HMAC', key, enc.encode(norm));
+        const hex = Array.from(new Uint8Array(sig)).map((b) => b.toString(16).padStart(2, '0')).join('').toUpperCase();
+        return hex.slice(0, 5) + '-' + hex.slice(5, 10) + '-' + hex.slice(10, 15) + '-' + hex.slice(15, 20);
+      }
+      const out = document.getElementById('out');
+      const keyEl = document.getElementById('key');
+      async function run() {
+        const hwid = document.getElementById('hwid').value.trim();
+        if (!hwid) return;
+        keyEl.textContent = await keyFor(hwid);
+        out.classList.add('show');
+      }
+      document.getElementById('gen').addEventListener('click', run);
+      document.getElementById('hwid').addEventListener('keydown', (e) => { if (e.key === 'Enter') run(); });
+      document.getElementById('copy').addEventListener('click', () => navigator.clipboard && navigator.clipboard.writeText(keyEl.textContent));
+    </script>
+  </body>
+</html>

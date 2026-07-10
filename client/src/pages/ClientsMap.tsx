@@ -6,7 +6,24 @@ import Layout from '../components/Layout';
 import { api } from '../api';
 
 interface Nap { id: number; name: string; kind: string; lat: number; lng: number; ports: number; parentId: number | null }
-interface Client { id: number; username: string; customer: string; status: string; online: boolean; lat: number; lng: number; napId: number; service: string }
+interface Client {
+  id: number; username: string; customer: string; status: string; online: boolean;
+  lat: number; lng: number; napId: number; service: string;
+  account?: string; plan?: string; due?: string; napName?: string; oltName?: string;
+  serverName?: string; upstreamPort?: number; plcPort?: number;
+  rxBps?: number; txBps?: number; rxGB?: number; txGB?: number; topology?: string;
+}
+
+function fmtRate(bps?: number): string {
+  const v = bps || 0;
+  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(2)} Mbps`;
+  if (v >= 1_000) return `${(v / 1_000).toFixed(2)} Kbps`;
+  return `${Math.round(v)} bps`;
+}
+function fmtGB(gb?: number): string {
+  const v = gb || 0;
+  return `${v >= 100 ? v.toFixed(1) : v.toFixed(2)} GB`;
+}
 
 function napIcon(name: string, kind: string) {
   const color = kind === 'olt' ? '#7c3aed' : '#2563eb';
@@ -167,23 +184,50 @@ export default function ClientsMap() {
             </Marker>
           ))}
 
-          {/* ONU markers with online/offline status */}
-          {filteredClients.map((c) => (
-            <Marker key={c.id} position={[c.lat, c.lng]} icon={onuIcon(c.online)}>
-              <LTooltip direction="top" offset={[0, -6]}>
-                {c.customer} — {c.online ? 'Online' : 'Offline'}
-              </LTooltip>
-              <Popup>
-                <b>{c.customer}</b><br />
-                {c.username}<br />
-                ONU: <b style={{ color: c.online ? '#16a34a' : '#dc2626' }}>{c.online ? 'Online' : 'Offline'}</b><br />
-                Account: {c.status}<br />
-                Service: {c.service.toUpperCase()}
-              </Popup>
-            </Marker>
-          ))}
+          {/* ONU markers: brief details on hover, full details on click */}
+          {filteredClients.map((c) => {
+            const statusColor = c.online ? '#16a34a' : '#dc2626';
+            const statusText = c.online ? 'Online' : 'Offline';
+            return (
+              <Marker key={c.id} position={[c.lat, c.lng]} icon={onuIcon(c.online)}>
+                <LTooltip direction="top" offset={[0, -8]}>
+                  <div className="text-[12px] leading-snug">
+                    <div className="font-semibold text-slate-800">{c.customer}</div>
+                    <div><span className="text-slate-500">User:</span> {c.username}</div>
+                    <div><span className="text-slate-500">Status:</span> <b style={{ color: statusColor }}>{statusText}</b></div>
+                    <div><span className="text-slate-500">Topo:</span> {c.topology || '-'}</div>
+                  </div>
+                </LTooltip>
+                <Popup maxWidth={320}>
+                  <div className="text-[12px] leading-relaxed">
+                    <div className="font-bold text-slate-800 text-[13px] mb-1">{c.customer}</div>
+                    <Detail k="Username" v={c.username} />
+                    <Detail k="Account #" v={c.account} />
+                    <Detail k="Status" v={<b style={{ color: statusColor }}>{statusText}</b>} />
+                    <Detail k="Traffic" v={`Rx ${fmtRate(c.rxBps)} \u00b7 Tx ${fmtRate(c.txBps)}`} />
+                    <Detail k="Usage" v={`Rx ${fmtGB(c.rxGB)} \u00b7 Tx ${fmtGB(c.txGB)}`} />
+                    <Detail k="Plan" v={c.plan} />
+                    <Detail k="Due" v={c.due} />
+                    <Detail k="NAP" v={c.napName} />
+                    <Detail k="Upstream Port" v={c.upstreamPort} />
+                    <Detail k="OLT" v={c.oltName} />
+                    <Detail k="PLC Port" v={c.plcPort} />
+                    <Detail k="Topology" v={c.topology} />
+                  </div>
+                </Popup>
+              </Marker>
+            );
+          })}
         </MapContainer>
       </div>
     </Layout>
+  );
+}
+
+function Detail({ k, v }: { k: string; v: React.ReactNode }) {
+  return (
+    <div>
+      <span className="font-semibold text-slate-700">{k}:</span> <span className="text-slate-600">{v ?? '-'}</span>
+    </div>
   );
 }

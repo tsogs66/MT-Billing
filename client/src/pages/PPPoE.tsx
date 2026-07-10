@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
-import { Users, WifiOff, Activity, Layers, Server, ReceiptText, Plus, Search, Pencil, Trash2, Power, X, CalendarClock, CheckCircle2 } from 'lucide-react';
+import { Users, WifiOff, Activity, Layers, Server, ReceiptText, Plus, Search, Pencil, Trash2, KeyRound, X, CheckCircle2, Eye, EyeOff, MapPin, Printer, DownloadCloud } from 'lucide-react';
 import Layout from '../components/Layout';
 import { StatusBadge } from '../components/ui';
-import { api, peso, addMonthsPreserveDay } from '../api';
+import { api, peso } from '../api';
+import LocationEditor, { DEFAULT_PIN } from '../components/LocationEditor';
+import { useRouterDevice } from '../context/RouterContext';
 
 interface PUser {
   id: number;
@@ -13,6 +15,9 @@ interface PUser {
   status: string;
   subscriptionDue: string;
   price: number;
+  email?: string | null;
+  contact?: string | null;
+  online?: boolean | number;
 }
 
 const TABS = [
@@ -34,9 +39,40 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
   const [search, setSearch] = useState('');
   const [showAdd, setShowAdd] = useState(false);
   const [payFor, setPayFor] = useState<PUser | null>(null);
+  const [editFor, setEditFor] = useState<PUser | null>(null);
   const [toast, setToast] = useState('');
+  const [fetching, setFetching] = useState(false);
+  const { current } = useRouterDevice();
 
   const loadUsers = () => api.get(`/pppoe/users?service=${service}`).then((r) => setUsers(r.data));
+
+  const showToast = (msg: string) => {
+    setToast(msg);
+    setTimeout(() => setToast(''), 6000);
+  };
+
+  const fetchFromMikrotik = async () => {
+    if (!current) {
+      showToast('Select a router in the top bar first.');
+      return;
+    }
+    setFetching(true);
+    try {
+      const r = await api.post(`/pppoe/fetch-mikrotik?routerId=${current.id}`);
+      showToast(`Fetched from ${r.data.router}: ${r.data.profilesImported} profiles, ${r.data.fetched} secrets (${r.data.created} new, ${r.data.updated} updated).`);
+      loadUsers();
+    } catch (e: any) {
+      showToast(e?.response?.data?.error || 'Fetch from MikroTik failed.');
+    } finally {
+      setFetching(false);
+    }
+  };
+
+  const toggleEnabled = async (u: PUser) => {
+    const r = await api.post(`/pppoe/users/${u.id}/toggle-enabled`);
+    showToast(`${u.username} ${r.data.status === 'disabled' ? 'disabled' : 'enabled'} in MikroTik.`);
+    loadUsers();
+  };
 
   useEffect(() => {
     setTab('users');
@@ -100,6 +136,14 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                     className="text-sm border border-slate-200 rounded-lg pl-8 pr-3 py-2 w-64 focus:outline-none focus:ring-2 focus:ring-brand-500"
                   />
                 </div>
+                <button
+                  className="inline-flex items-center gap-2 text-sm border border-slate-200 rounded-lg px-3 py-2 hover:bg-slate-50 text-slate-600 disabled:opacity-60"
+                  onClick={fetchFromMikrotik}
+                  disabled={fetching}
+                  title="Read /ppp/secret from the selected router and import billing data from the comments"
+                >
+                  <DownloadCloud size={16} /> {fetching ? 'Fetching…' : 'Fetch from MikroTik'}
+                </button>
                 <button className="btn-primary" onClick={() => setShowAdd(true)}>
                   <Plus size={16} /> Add New User
                 </button>
@@ -131,9 +175,15 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                       <td className="px-5 py-2.5 text-slate-500">{u.subscriptionDue}</td>
                       <td className="px-5 py-2.5">
                         <div className="flex items-center justify-end gap-3 text-slate-400">
-                          <button title="Payment" className="hover:text-emerald-600" onClick={() => setPayFor(u)}><ReceiptText size={16} /></button>
-                          <button title="Edit" className="hover:text-sky-600"><Pencil size={16} /></button>
-                          <button title="Enable/Disable" className="hover:text-amber-600"><Power size={16} /></button>
+                          <button title="Process Payment" className="hover:text-emerald-600" onClick={() => setPayFor(u)}><ReceiptText size={16} /></button>
+                          <button title="Edit user details" className="hover:text-sky-600" onClick={() => setEditFor(u)}><Pencil size={16} /></button>
+                          <button
+                            title={u.status === 'disabled' ? 'Enable account in MikroTik' : 'Disable account in MikroTik'}
+                            className={u.status === 'disabled' ? 'text-rose-500 hover:text-rose-600' : 'hover:text-emerald-600'}
+                            onClick={() => toggleEnabled(u)}
+                          >
+                            <KeyRound size={16} />
+                          </button>
                           <button title="Delete" className="hover:text-rose-600" onClick={() => remove(u.id)}><Trash2 size={16} /></button>
                         </div>
                       </td>
@@ -178,26 +228,44 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
       </div>
 
       {showAdd && (
-        <AddUserModal
+        <UserFormModal
           service={service}
           profiles={profiles}
+          naps={undefined}
+          editUser={null}
           onClose={() => setShowAdd(false)}
           onSaved={() => {
             setShowAdd(false);
+            showToast('User created.');
+            loadUsers();
+          }}
+        />
+      )}
+
+      {editFor && (
+        <UserFormModal
+          service={service}
+          profiles={profiles}
+          naps={undefined}
+          editUser={editFor}
+          onClose={() => setEditFor(null)}
+          onSaved={() => {
+            setEditFor(null);
+            showToast('User details updated.');
             loadUsers();
           }}
         />
       )}
 
       {payFor && (
-        <PaymentModal
+        <ProcessPaymentModal
           user={payFor}
+          profiles={profiles}
           onClose={() => setPayFor(null)}
           onPaid={(msg) => {
             setPayFor(null);
-            setToast(msg);
+            showToast(msg);
             loadUsers();
-            setTimeout(() => setToast(''), 4000);
           }}
         />
       )}
@@ -211,21 +279,65 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
   );
 }
 
-function PaymentModal({ user, onClose, onPaid }: { user: PUser; onClose: () => void; onPaid: (msg: string) => void }) {
+function printReceipt(receipt: any) {
+  const line = (a: string, b: string) => `<div style="display:flex;justify-content:space-between;margin:2px 0"><span>${a}</span><span>${b}</span></div>`;
+  const html = `<!doctype html><html><head><title>Receipt ${receipt.account}</title>
+    <style>body{font-family:Arial,sans-serif;color:#111;padding:24px;max-width:360px;margin:auto}
+    h2{margin:0 0 2px} .muted{color:#666;font-size:12px} hr{border:none;border-top:1px dashed #bbb;margin:10px 0}
+    .tot{display:flex;justify-content:space-between;font-weight:700;font-size:16px;margin-top:6px}</style></head>
+    <body>
+      <h2>${receipt.company}</h2><div class="muted">Official Payment Receipt</div><hr/>
+      ${line('Account #', receipt.account)}
+      ${line('Customer', receipt.customer)}
+      ${line('Plan', `${receipt.plan} × ${receipt.months} mo`)}
+      ${line('Payment date', receipt.paymentDate)}
+      ${line('Next due date', receipt.newDue)}
+      <hr/>
+      ${line('Subtotal', `\u20b1${receipt.subtotal.toFixed(2)}`)}
+      ${line(`Discount (${receipt.discountDays} day/s downtime)`, `- \u20b1${receipt.discount.toFixed(2)}`)}
+      <div class="tot"><span>TOTAL</span><span>\u20b1${receipt.total.toFixed(2)}</span></div>
+      <hr/><div class="muted">Thank you for your payment.</div>
+      <script>window.onload=function(){window.print();}</script>
+    </body></html>`;
+  const w = window.open('', '_blank', 'width=420,height=640');
+  if (w) {
+    w.document.write(html);
+    w.document.close();
+  }
+}
+
+function ProcessPaymentModal({ user, profiles, onClose, onPaid }: { user: PUser; profiles: any[]; onClose: () => void; onPaid: (msg: string) => void }) {
+  const [plan, setPlan] = useState(user.profile || profiles[0]?.name || '');
   const [months, setMonths] = useState(1);
+  const [nonPaymentProfile, setNonPaymentProfile] = useState('default');
+  const [paymentDate, setPaymentDate] = useState(new Date().toISOString().slice(0, 10));
+  const [discountDays, setDiscountDays] = useState(0);
+  const [sendReceipt, setSendReceipt] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
-  const currentDue = (user.subscriptionDue || '').slice(0, 10);
-  const newDue = addMonthsPreserveDay(currentDue, months);
-  const amount = (user.price || 0) * months;
+  const planPrice = profiles.find((p) => p.name === plan)?.price ?? user.price ?? 0;
+  const subtotal = planPrice * months;
+  const discount = Math.round((planPrice / 30) * Math.max(0, discountDays) * 100) / 100;
+  const total = Math.max(0, subtotal - discount);
+  const hasEmail = !!user.email;
 
   const pay = async () => {
     setSaving(true);
     setError('');
     try {
-      const r = await api.post(`/pppoe/users/${user.id}/payment`, { months });
-      onPaid(`Payment applied to ${user.username}. Expiration ${r.data.previousDue} \u2192 ${r.data.subscriptionDue}`);
+      const r = await api.post(`/pppoe/users/${user.id}/payment`, {
+        months,
+        plan,
+        expiration_profile: nonPaymentProfile,
+        payment_date: paymentDate,
+        discount_days: discountDays,
+        send_receipt: sendReceipt,
+      });
+      printReceipt(r.data.receipt);
+      onPaid(
+        `Payment of ${peso(r.data.total)} recorded for ${user.username}. Due ${r.data.previousDue} \u2192 ${r.data.subscriptionDue}${r.data.emailed ? ' · receipt emailed' : ''}`
+      );
     } catch (e: any) {
       setError(e?.response?.data?.error || 'Payment failed');
     } finally {
@@ -235,24 +347,29 @@ function PaymentModal({ user, onClose, onPaid }: { user: PUser; onClose: () => v
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-[1000] p-4" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100">
-          <h3 className="font-semibold text-slate-700 flex items-center gap-2"><CalendarClock size={18} className="text-emerald-600" /> Execute Payment</h3>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X size={18} /></button>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md max-h-[92vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+        <div className="px-5 pt-4 pb-2">
+          <h3 className="text-brand-600 font-bold text-xl">Process Payment</h3>
+          <div className="text-sm text-slate-400">For user: {user.username}</div>
         </div>
-        <div className="p-5 space-y-4">
+
+        <div className="p-5 pt-2 space-y-4 overflow-y-auto">
           {error && <div className="text-sm text-rose-600 bg-rose-50 rounded-lg px-3 py-2">{error}</div>}
-          <div>
-            <div className="font-medium text-slate-800">{user.customer || user.username}</div>
-            <div className="text-xs text-slate-400">{user.username} · {user.profile}</div>
-          </div>
 
           <label className="block">
-            <span className="text-sm text-slate-600 mb-1 block">Months to extend</span>
+            <span className="text-sm font-semibold text-slate-700 mb-1 block">Billing Plan</span>
+            <select className="input" value={plan} onChange={(e) => setPlan(e.target.value)}>
+              {profiles.map((p) => <option key={p.id} value={p.name}>{p.name} ({peso(p.price)})</option>)}
+            </select>
+          </label>
+
+          <div>
+            <span className="text-sm font-semibold text-slate-700 mb-1 block">Months of Extension</span>
             <div className="flex items-center gap-2">
               {[1, 2, 3, 6, 12].map((m) => (
                 <button
                   key={m}
+                  type="button"
                   onClick={() => setMonths(m)}
                   className={`px-3 py-1.5 rounded-lg text-sm border ${months === m ? 'bg-brand-500 text-white border-brand-500' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}
                 >
@@ -260,20 +377,51 @@ function PaymentModal({ user, onClose, onPaid }: { user: PUser; onClose: () => v
                 </button>
               ))}
             </div>
+            <span className="text-xs text-slate-400 mt-1 block">Extends the expiration by whole month(s) from the current due date (billing day preserved).</span>
+          </div>
+
+          <label className="block">
+            <span className="text-sm font-semibold text-slate-700 mb-1 block">Non-Payment Profile</span>
+            <select className="input" value={nonPaymentProfile} onChange={(e) => setNonPaymentProfile(e.target.value)}>
+              <option value="default">default</option>
+              {profiles.map((p) => <option key={p.id} value={p.name}>{p.name}</option>)}
+            </select>
+            <span className="text-xs text-slate-400 mt-1 block">Profile to apply on due date.</span>
           </label>
 
-          <div className="rounded-lg bg-slate-50 border border-slate-100 p-3 text-sm space-y-1.5">
-            <div className="flex justify-between"><span className="text-slate-500">Current expiration</span><span className="font-medium text-slate-700">{currentDue || '—'}</span></div>
-            <div className="flex justify-between"><span className="text-slate-500">New expiration</span><span className="font-semibold text-emerald-600">{newDue || '—'}</span></div>
-            <div className="flex justify-between"><span className="text-slate-500">Amount</span><span className="font-medium text-slate-700">{peso(amount)}</span></div>
-            <p className="text-[11px] text-slate-400 pt-1">
-              Extended by whole month(s) from the original expiration date — the billing day ({currentDue.slice(8) || '—'}) is preserved and is not adjusted to today.
-            </p>
+          <label className="block">
+            <span className="text-sm font-semibold text-slate-700 mb-1 block">Payment Date</span>
+            <input className="input" type="date" value={paymentDate} onChange={(e) => setPaymentDate(e.target.value)} />
+          </label>
+
+          <label className="block">
+            <span className="text-sm font-semibold text-slate-700 mb-1 block">Discount for Downtime (Days)</span>
+            <input className="input" type="number" min={0} value={discountDays} onChange={(e) => setDiscountDays(Math.max(0, Number(e.target.value)))} />
+          </label>
+
+          <label className="flex items-start justify-between gap-3 border-t border-slate-100 pt-3">
+            <span>
+              <span className="text-sm font-semibold text-slate-700 block">Send receipt to email</span>
+              <span className="text-xs text-slate-400">{hasEmail ? user.email : 'No email set in account details.'}</span>
+            </span>
+            <input type="checkbox" className="mt-1 w-4 h-4" disabled={!hasEmail} checked={sendReceipt && hasEmail} onChange={(e) => setSendReceipt(e.target.checked)} />
+          </label>
+
+          <div className="border-t border-slate-100 pt-3 text-sm space-y-1">
+            <div className="flex justify-between text-slate-500"><span>Subtotal</span><span>{peso(subtotal)}</span></div>
+            <div className="flex justify-between text-slate-500"><span>Discount</span><span>- {peso(discount)}</span></div>
+            <div className="flex justify-between items-center pt-1">
+              <span className="font-bold text-slate-800">TOTAL</span>
+              <span className="font-bold text-slate-900 text-lg">{peso(total)}</span>
+            </div>
           </div>
         </div>
-        <div className="flex justify-end gap-2 px-5 py-3 border-t border-slate-100">
-          <button className="px-4 py-2 text-sm rounded-lg text-slate-600 hover:bg-slate-100" onClick={onClose}>Cancel</button>
-          <button className="btn-primary bg-emerald-600 hover:bg-emerald-700" disabled={saving} onClick={pay}>{saving ? 'Processing...' : 'Confirm Payment'}</button>
+
+        <div className="flex justify-end gap-3 px-5 py-3 border-t border-slate-100 bg-slate-50 rounded-b-xl">
+          <button className="px-4 py-2 text-sm rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-100" onClick={onClose} disabled={saving}>Cancel</button>
+          <button className="btn-primary" disabled={saving} onClick={pay}>
+            <Printer size={16} /> {saving ? 'Processing...' : 'Process Payment & Print'}
+          </button>
         </div>
       </div>
     </div>
@@ -302,10 +450,73 @@ function SimpleTable({ columns, rows }: { columns: string[]; rows: React.ReactNo
   );
 }
 
-function AddUserModal({ service, profiles, onClose, onSaved }: { service: string; profiles: any[]; onClose: () => void; onSaved: () => void }) {
-  const [form, setForm] = useState({ username: '', customer_name: '', account_number: '', profile: profiles[0]?.name || '15mbps', status: 'Active' });
+function UserFormModal({
+  service,
+  profiles,
+  editUser,
+  onClose,
+  onSaved,
+}: {
+  service: string;
+  profiles: any[];
+  naps?: any;
+  editUser?: PUser | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const isEdit = !!editUser;
+  const defaultPlan = profiles.find((p) => p.name === 'UNLI500')?.name || profiles[0]?.name || '15mbps';
+  const [form, setForm] = useState({
+    username: '',
+    password: '',
+    profile: defaultPlan,
+    subscription_due: '',
+    expiration_profile: 'default',
+    customer_name: '',
+    address: '',
+    contact: '',
+    email: '',
+    nap_id: '',
+    plc_port: '',
+    lat: DEFAULT_PIN[0] as number | null,
+    lng: DEFAULT_PIN[1] as number | null,
+  });
+  const [showPass, setShowPass] = useState(false);
+  const [naps, setNaps] = useState<any[]>([]);
+  const [showLoc, setShowLoc] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    api.get('/naps').then((r) => setNaps(r.data));
+    if (editUser) {
+      api.get(`/pppoe/users/${editUser.id}`).then((r) => {
+        const u = r.data;
+        setForm({
+          username: u.username || '',
+          password: u.password || '',
+          profile: u.profile || defaultPlan,
+          subscription_due: (u.subscription_due || '').slice(0, 10),
+          expiration_profile: u.expiration_profile || 'default',
+          customer_name: u.customer_name || '',
+          address: u.address || '',
+          contact: u.contact || '',
+          email: u.email || '',
+          nap_id: u.nap_id ? String(u.nap_id) : '',
+          plc_port: u.plc_port || '',
+          lat: u.lat ?? null,
+          lng: u.lng ?? null,
+        });
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const set = (patch: Partial<typeof form>) => setForm((f) => ({ ...f, ...patch }));
+  const selectedNap = naps.find((n) => String(n.id) === String(form.nap_id));
+  const topology = selectedNap
+    ? `${selectedNap.oltName || 'OLT'} \u2192 ${selectedNap.name}${form.plc_port ? ` \u2192 Port ${form.plc_port}` : ''}`
+    : '-';
 
   const save = async () => {
     if (!form.username.trim()) {
@@ -313,8 +524,14 @@ function AddUserModal({ service, profiles, onClose, onSaved }: { service: string
       return;
     }
     setSaving(true);
+    setError('');
     try {
-      await api.post('/pppoe/users', { ...form, service });
+      const payload = { ...form, nap_id: form.nap_id ? Number(form.nap_id) : null, service };
+      if (isEdit) {
+        await api.put(`/pppoe/users/${editUser!.id}`, payload);
+      } else {
+        await api.post('/pppoe/users', payload);
+      }
       onSaved();
     } catch (e: any) {
       setError(e?.response?.data?.error || 'Failed to save');
@@ -324,44 +541,141 @@ function AddUserModal({ service, profiles, onClose, onSaved }: { service: string
   };
 
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-[1000] p-4" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100">
-          <h3 className="font-semibold text-slate-700">Add New {service.toUpperCase()} User</h3>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X size={18} /></button>
-        </div>
-        <div className="p-5 space-y-3">
-          {error && <div className="text-sm text-rose-600 bg-rose-50 rounded-lg px-3 py-2">{error}</div>}
-          <Field label="Username">
-            <input className="input" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
-          </Field>
-          <Field label="Customer Name">
-            <input className="input" value={form.customer_name} onChange={(e) => setForm({ ...form, customer_name: e.target.value })} />
-          </Field>
-          <Field label="Account #">
-            <input className="input" value={form.account_number} onChange={(e) => setForm({ ...form, account_number: e.target.value })} />
-          </Field>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Profile">
-              <select className="input" value={form.profile} onChange={(e) => setForm({ ...form, profile: e.target.value })}>
+    <>
+      <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-[1000] p-4" onClick={onClose}>
+        <div className="bg-white rounded-xl shadow-2xl w-full max-w-md max-h-[92vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+          <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100">
+            <h3 className="font-bold text-slate-800 text-lg">{isEdit ? 'Edit User' : 'Add New User'}</h3>
+            <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X size={18} /></button>
+          </div>
+
+          <div className="p-5 space-y-4 overflow-y-auto">
+            {error && <div className="text-sm text-rose-600 bg-rose-50 rounded-lg px-3 py-2">{error}</div>}
+
+            <Field label="Username">
+              <input
+                className={`input ${isEdit ? 'bg-slate-50 text-slate-500' : ''}`}
+                value={form.username}
+                onChange={(e) => set({ username: e.target.value })}
+                readOnly={isEdit}
+                autoFocus={!isEdit}
+              />
+            </Field>
+
+            <Field label="Password">
+              <div className="relative">
+                <input
+                  className="input pr-10"
+                  type={showPass ? 'text' : 'password'}
+                  value={form.password}
+                  onChange={(e) => set({ password: e.target.value })}
+                />
+                <button type="button" onClick={() => setShowPass((v) => !v)} className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600">
+                  {showPass ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
+            </Field>
+
+            <Field label="Billing Plan">
+              <select className="input" value={form.profile} onChange={(e) => set({ profile: e.target.value })}>
                 {profiles.map((p) => <option key={p.id} value={p.name}>{p.name}</option>)}
               </select>
             </Field>
-            <Field label="Status">
-              <select className="input" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
-                <option value="Active">Active</option>
-                <option value="inactive">inactive</option>
-                <option value="expired">expired</option>
+
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Expiration Date">
+                <input className="input" type="date" value={form.subscription_due} onChange={(e) => set({ subscription_due: e.target.value })} />
+              </Field>
+              <Field label="Expiration Profile">
+                <select className="input" value={form.expiration_profile} onChange={(e) => set({ expiration_profile: e.target.value })}>
+                  <option value="default">default</option>
+                  {profiles.map((p) => <option key={p.id} value={p.name}>{p.name}</option>)}
+                </select>
+              </Field>
+            </div>
+
+            <div className="pt-1 border-t border-slate-100" />
+            <h4 className="font-semibold text-slate-800">Customer Information (Optional)</h4>
+
+            <Field label="Full Name">
+              <input className="input" value={form.customer_name} onChange={(e) => set({ customer_name: e.target.value })} />
+            </Field>
+            <Field label="Full Address">
+              <input className="input" value={form.address} onChange={(e) => set({ address: e.target.value })} />
+            </Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Contact Number">
+                <input className="input" value={form.contact} onChange={(e) => set({ contact: e.target.value })} />
+              </Field>
+              <Field label="Email">
+                <input className="input" type="email" value={form.email} onChange={(e) => set({ email: e.target.value })} />
+              </Field>
+            </div>
+
+            <Field label="NAP (Optional)">
+              <select className="input" value={form.nap_id} onChange={(e) => set({ nap_id: e.target.value })}>
+                <option value="">-- None --</option>
+                {naps.map((n) => <option key={n.id} value={n.id}>{n.name}{n.oltName ? ` (${n.oltName})` : ''}</option>)}
               </select>
             </Field>
+
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="PLC Port (Optional)">
+                <input className="input" placeholder="e.g. 1, 2, 3..." value={form.plc_port} onChange={(e) => set({ plc_port: e.target.value })} />
+              </Field>
+              <Field label="Linked (Read-only)">
+                <div className="input bg-slate-50 text-slate-500 truncate" title={topology}>Topology: {topology}</div>
+              </Field>
+            </div>
+
+            <div className="pt-1 border-t border-slate-100" />
+            <div className="flex items-center justify-between">
+              <h4 className="font-semibold text-slate-800">Map Location (Optional)</h4>
+              <button
+                type="button"
+                onClick={() => setShowLoc(true)}
+                className="inline-flex items-center gap-2 text-sm border border-slate-200 rounded-lg px-3 py-1.5 hover:bg-slate-50 text-slate-600"
+              >
+                <MapPin size={15} /> Edit Location
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Latitude">
+                <div className="input bg-slate-50 text-slate-600 truncate">{form.lat != null ? Number(form.lat).toFixed(6) : '—'}</div>
+              </Field>
+              <Field label="Longitude">
+                <div className="input bg-slate-50 text-slate-600 truncate">{form.lng != null ? Number(form.lng).toFixed(6) : '—'}</div>
+              </Field>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowLoc(true)}
+              className="w-full h-20 rounded-lg border-2 border-dashed border-slate-200 text-slate-400 hover:bg-slate-50 hover:text-brand-600 hover:border-brand-300 flex items-center justify-center gap-2 text-sm"
+            >
+              <MapPin size={18} /> {form.lat != null ? 'Open map to adjust the pin' : 'Open map to set a location'}
+            </button>
+          </div>
+
+          <div className="flex justify-end items-center gap-5 px-5 py-3 border-t border-slate-100">
+            <button className="text-sm text-slate-600 hover:text-slate-800" onClick={onClose} disabled={saving}>Cancel</button>
+            <button className="text-sm font-semibold text-brand-600 hover:text-brand-700 disabled:opacity-50" onClick={save} disabled={saving}>
+              {saving ? 'Saving...' : 'Save'}
+            </button>
           </div>
         </div>
-        <div className="flex justify-end gap-2 px-5 py-3 border-t border-slate-100">
-          <button className="px-4 py-2 text-sm rounded-lg text-slate-600 hover:bg-slate-100" onClick={onClose}>Cancel</button>
-          <button className="btn-primary" disabled={saving} onClick={save}>{saving ? 'Saving...' : 'Create User'}</button>
-        </div>
       </div>
-    </div>
+
+      {showLoc && (
+        <LocationEditor
+          initial={{ lat: form.lat, lng: form.lng }}
+          onDone={(c) => {
+            set({ lat: c.lat, lng: c.lng });
+            setShowLoc(false);
+          }}
+          onCancel={() => setShowLoc(false)}
+        />
+      )}
+    </>
   );
 }
 

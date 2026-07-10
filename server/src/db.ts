@@ -5,10 +5,29 @@ import path from 'path';
 import fs from 'fs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const dataDir = path.join(__dirname, '..', 'data');
+export const dataDir = path.join(__dirname, '..', 'data');
+export const backupsDir = path.join(dataDir, 'backups');
+export const dbPath = path.join(dataDir, 'mt-billing.db');
 if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+if (!fs.existsSync(backupsDir)) fs.mkdirSync(backupsDir, { recursive: true });
 
-export const db = new Database(path.join(dataDir, 'mt-billing.db'));
+// If a restore was requested, apply the pending database file before opening
+// the connection (safe: the live DB is never overwritten while it is open).
+const pendingPath = `${dbPath}.pending`;
+if (fs.existsSync(pendingPath)) {
+  try {
+    if (fs.existsSync(dbPath)) fs.renameSync(dbPath, path.join(backupsDir, `prerestore-${Date.now()}.db`));
+    for (const ext of ['-wal', '-shm']) {
+      const p = `${dbPath}${ext}`;
+      if (fs.existsSync(p)) fs.rmSync(p);
+    }
+    fs.renameSync(pendingPath, dbPath);
+  } catch {
+    /* ignore and boot with existing db */
+  }
+}
+
+export const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
 
 export function initSchema() {
@@ -56,7 +75,12 @@ export function initSchema() {
       lng REAL,
       nap_id INTEGER,
       service TEXT DEFAULT 'pppoe',
-      online INTEGER DEFAULT 1
+      online INTEGER DEFAULT 1,
+      password TEXT,
+      expiration_profile TEXT DEFAULT 'default',
+      contact TEXT,
+      email TEXT,
+      plc_port TEXT
     );
 
     CREATE TABLE IF NOT EXISTS naps (
@@ -110,6 +134,51 @@ export function initSchema() {
       email TEXT,
       currency TEXT DEFAULT 'PHP'
     );
+
+    CREATE TABLE IF NOT EXISTS notify_settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      reminder_enabled INTEGER DEFAULT 1,
+      days_before INTEGER DEFAULT 3,
+      email_enabled INTEGER DEFAULT 1,
+      sms_enabled INTEGER DEFAULT 1,
+      autodisable_enabled INTEGER DEFAULT 1,
+      autodisable_hours INTEGER DEFAULT 24,
+      email_from TEXT DEFAULT 'billing@pa-north.net',
+      sms_sender TEXT DEFAULT 'PA-NORTH'
+    );
+
+    CREATE TABLE IF NOT EXISTS notifications (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      channel TEXT NOT NULL,
+      recipient TEXT,
+      client_id INTEGER,
+      customer_name TEXT,
+      subject TEXT,
+      message TEXT,
+      type TEXT DEFAULT 'manual',
+      status TEXT DEFAULT 'sent',
+      detail TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS app_settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      theme TEXT DEFAULT 'system',
+      language TEXT DEFAULT 'en',
+      currency TEXT DEFAULT 'PHP',
+      ngrok_enabled INTEGER DEFAULT 0,
+      ngrok_authtoken TEXT,
+      ngrok_region TEXT DEFAULT 'ap',
+      ngrok_port INTEGER DEFAULT 5173,
+      ngrok_status TEXT DEFAULT 'stopped',
+      ngrok_url TEXT,
+      ai_provider TEXT DEFAULT 'openai',
+      ai_api_key TEXT,
+      ai_model TEXT DEFAULT 'gpt-4o-mini',
+      ai_enabled INTEGER DEFAULT 0,
+      tz TEXT DEFAULT 'Asia/Manila',
+      ntp_server TEXT DEFAULT 'time.cloudflare.com'
+    );
   `);
 }
 
@@ -127,6 +196,71 @@ export function migrate() {
   if (!columnExists('pppoe_users', 'online')) {
     db.exec('ALTER TABLE pppoe_users ADD COLUMN online INTEGER DEFAULT 1');
     setOnlineStates();
+  }
+  const addCols: [string, string][] = [
+    ['password', 'TEXT'],
+    ['expiration_profile', "TEXT DEFAULT 'default'"],
+    ['contact', 'TEXT'],
+    ['email', 'TEXT'],
+    ['plc_port', 'TEXT'],
+    ['nonpayment_since', 'TEXT'],
+    ['reminder_sent', 'TEXT'],
+  ];
+  for (const [col, type] of addCols) {
+    if (!columnExists('pppoe_users', col)) {
+      db.exec(`ALTER TABLE pppoe_users ADD COLUMN ${col} ${type}`);
+    }
+  }
+  ensureBillingPlans();
+  ensureNotifySettings();
+
+  // Gateway configuration columns (added over time).
+  const notifyCols: [string, string][] = [
+    ['smtp_host', 'TEXT'],
+    ['smtp_port', 'INTEGER DEFAULT 587'],
+    ['smtp_secure', 'INTEGER DEFAULT 0'],
+    ['smtp_user', 'TEXT'],
+    ['smtp_pass', 'TEXT'],
+    ['smtp_from', 'TEXT'],
+    ['sms_api_url', "TEXT DEFAULT 'https://smtpapi.vocotext.com/isms_send_all_id.php'"],
+    ['sms_api_user', 'TEXT'],
+    ['sms_api_pass', 'TEXT'],
+    ['sms_type', 'INTEGER DEFAULT 1'],
+  ];
+  for (const [col, type] of notifyCols) {
+    if (!columnExists('notify_settings', col)) db.exec(`ALTER TABLE notify_settings ADD COLUMN ${col} ${type}`);
+  }
+  if (!columnExists('company', 'logo')) db.exec('ALTER TABLE company ADD COLUMN logo TEXT');
+
+  if (count('app_settings') === 0) {
+    db.prepare('INSERT INTO app_settings (id) VALUES (1)').run();
+  }
+
+  db.prepare("UPDATE naps SET name = 'OLT Main Server' WHERE kind = 'olt' AND name = 'OLT-1'").run();
+}
+
+/** Single-row notification settings, created with sensible defaults. */
+function ensureNotifySettings() {
+  if (count('notify_settings') === 0) {
+    db.prepare(
+      `INSERT INTO notify_settings
+        (id, reminder_enabled, days_before, email_enabled, sms_enabled, autodisable_enabled, autodisable_hours, email_from, sms_sender)
+       VALUES (1, 1, 3, 1, 1, 1, 24, 'billing@pa-north.net', 'PA-NORTH')`
+    ).run();
+  }
+}
+
+/** Ensure the UNLI billing plans referenced by the Add-User template exist. */
+function ensureBillingPlans() {
+  const plans: [string, string, number][] = [
+    ['UNLI500', '30M/30M', 500],
+    ['UNLI700', '50M/50M', 700],
+    ['UNLI1000', '100M/100M', 1000],
+  ];
+  const has = db.prepare('SELECT 1 FROM profiles WHERE name = ?');
+  const ins = db.prepare('INSERT INTO profiles (name, rate_limit, price, type) VALUES (?, ?, ?, ?)');
+  for (const [name, rate, price] of plans) {
+    if (!has.get(name)) ins.run(name, rate, price, 'pppoe');
   }
 }
 
@@ -190,7 +324,7 @@ export function seed() {
     const baseLat = 15.1785;
     const baseLng = 120.5945;
     const insNap = db.prepare('INSERT INTO naps (name, kind, lat, lng, ports, parent_id) VALUES (?, ?, ?, ?, ?, ?)');
-    const oltId = insNap.run('OLT-1', 'olt', baseLat, baseLng, 128, null).lastInsertRowid as number;
+    const oltId = insNap.run('OLT Main Server', 'olt', baseLat, baseLng, 128, null).lastInsertRowid as number;
     for (let i = 1; i <= 18; i++) {
       const angle = (i / 18) * Math.PI * 2;
       const radius = 0.006 + (i % 4) * 0.0018;

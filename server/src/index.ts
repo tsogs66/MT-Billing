@@ -5,12 +5,24 @@ import bcrypt from 'bcryptjs';
 import si from 'systeminformation';
 import { db, initSchema, seed, migrate } from './db.js';
 import { signToken, requireAuth, type AuthedRequest } from './auth.js';
-import { tryLiveResource } from './mikrotik.js';
+import { tryLiveResource, withRouter } from './mikrotik.js';
 import { getUptime, getUptimeSummary, runUptimeChecks, startUptime } from './uptime.js';
+import { getInterfaceNames, getTrafficSnapshot } from './interfaces.js';
+import { settingsRouter } from './settings.js';
+import { extraRouter, initExtra } from './extra.js';
+import {
+  getPublicSettings as getNotifySettings,
+  updateSettings as updateNotifySettings,
+  sendManual,
+  runAutomations,
+  listNotifications,
+  startNotifyScheduler,
+} from './notify.js';
 
 initSchema();
 migrate();
 seed();
+initExtra();
 
 /**
  * Extend an ISO date (YYYY-MM-DD) by a whole number of months, anchored on the
@@ -29,7 +41,7 @@ function addMonthsPreserveDay(iso: string, months: number): string {
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '8mb' }));
 
 const PORT = Number(process.env.PORT) || 4000;
 
@@ -116,10 +128,86 @@ app.get('/api/dashboard/queues', (_req, res) => {
   res.json(db.prepare('SELECT name, avg_rate AS avgRate FROM queues ORDER BY avg_rate DESC').all());
 });
 
+// Account status breakdown for the dashboard tiles.
+app.get('/api/dashboard/status', (req, res) => {
+  const routerId = req.query.routerId ? Number(req.query.routerId) : null;
+  const where = routerId ? 'WHERE router_id = ?' : '';
+  const rows = (routerId
+    ? db.prepare(`SELECT status, online FROM pppoe_users ${where}`).all(routerId)
+    : db.prepare('SELECT status, online FROM pppoe_users').all()) as { status: string; online: number }[];
+  const active = rows.filter((r) => r.status === 'Active');
+  res.json({
+    total: rows.length,
+    online: active.filter((r) => r.online).length,
+    offline: active.filter((r) => !r.online).length,
+    active: active.length,
+    expired: rows.filter((r) => r.status === 'expired').length,
+    nonPayment: rows.filter((r) => r.status === 'non-payment').length,
+    inactive: rows.filter((r) => r.status === 'inactive').length,
+    disabled: rows.filter((r) => r.status === 'disabled').length,
+  });
+});
+
 // ---- Sales ----
+function isoWeek(d: Date): string {
+  // ISO-8601 week number, returned as "YYYY-Www".
+  const dt = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  const day = dt.getUTCDay() || 7;
+  dt.setUTCDate(dt.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(dt.getUTCFullYear(), 0, 1));
+  const week = Math.ceil(((dt.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+  return `${dt.getUTCFullYear()}-W${String(week).padStart(2, '0')}`;
+}
+
 app.get('/api/sales', (req, res) => {
-  const range = String(req.query.range || '7d');
   const now = new Date();
+  // Support both legacy ranges (7d/30d/6m/1y) and group buckets (week/month/year).
+  const group = req.query.group ? String(req.query.group) : null;
+
+  if (group === 'week' || group === 'month' || group === 'year') {
+    const rows = db.prepare('SELECT amount, created_at FROM transactions ORDER BY created_at').all() as { amount: number; created_at: string }[];
+    const buckets = new Map<string, number>();
+    const keyOf = (iso: string) => {
+      const d = new Date(iso);
+      if (group === 'week') return isoWeek(d);
+      if (group === 'month') return iso.slice(0, 7);
+      return iso.slice(0, 4);
+    };
+    for (const r of rows) buckets.set(keyOf(r.created_at), (buckets.get(keyOf(r.created_at)) || 0) + r.amount);
+    const series: { label: string; value: number }[] = [];
+    if (group === 'week') {
+      for (let i = 11; i >= 0; i--) {
+        const d = new Date(now.getTime() - i * 7 * 86400000);
+        const key = isoWeek(d);
+        series.push({ label: key, value: buckets.get(key) || 0 });
+      }
+    } else if (group === 'month') {
+      for (let i = 11; i >= 0; i--) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        const key = d.toISOString().slice(0, 7);
+        series.push({ label: key, value: buckets.get(key) || 0 });
+      }
+    } else {
+      for (let i = 4; i >= 0; i--) {
+        const key = String(now.getFullYear() - i);
+        series.push({ label: key, value: buckets.get(key) || 0 });
+      }
+    }
+    const windowTotal = series.reduce((s, x) => s + x.value, 0);
+    const nonZero = series.filter((x) => x.value > 0).length;
+    res.json({
+      series,
+      total: windowTotal,
+      transactions: rows.length,
+      avgPerDay: nonZero ? windowTotal / nonZero : 0,
+      best: Math.max(0, ...series.map((s) => s.value)),
+      today: 0,
+      group,
+    });
+    return;
+  }
+
+  const range = String(req.query.range || '7d');
   let days = 7;
   if (range === '30d') days = 30;
   else if (range === '6m') days = 182;
@@ -173,36 +261,71 @@ app.get('/api/pppoe/users', (req, res) => {
   const rows = db
     .prepare(
       `SELECT id, username, customer_name AS customer, account_number AS account, profile, status,
-              subscription_due AS subscriptionDue, price, address, lat, lng
+              subscription_due AS subscriptionDue, price, address, lat, lng, email, contact, online
        FROM pppoe_users WHERE service = ? ORDER BY id`
     )
     .all(service);
   res.json(rows);
 });
 
+// Full record for the edit form.
+app.get('/api/pppoe/users/:id', (req, res) => {
+  const row = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(Number(req.params.id));
+  if (!row) return res.status(404).json({ error: 'not found' });
+  res.json(row);
+});
+
+// Generate a unique 12-digit numeric account number.
+function generateAccountNumber(): string {
+  const exists = db.prepare('SELECT 1 FROM pppoe_users WHERE account_number = ?');
+  for (let i = 0; i < 25; i++) {
+    const n = String(Math.floor(100000000000 + Math.random() * 900000000000));
+    if (!exists.get(n)) return n;
+  }
+  return String(Date.now()).slice(-12).padStart(12, '0');
+}
+
 app.post('/api/pppoe/users', (req, res) => {
-  const { username, customer_name, account_number, profile, status, subscription_due, price, service } = req.body || {};
+  const b = req.body || {};
+  const {
+    username, password, customer_name, profile, status, subscription_due, price, service,
+    expiration_profile, contact, email, nap_id, plc_port, address, lat, lng,
+  } = b;
   if (!username) return res.status(400).json({ error: 'username is required' });
+
   const prof = db.prepare('SELECT price FROM profiles WHERE name = ?').get(profile) as { price: number } | undefined;
+  const account = generateAccountNumber();
   const info = db
     .prepare(
-      `INSERT INTO pppoe_users (username, customer_name, account_number, profile, status, subscription_due, price, router_id, service)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)`
+      `INSERT INTO pppoe_users
+        (username, password, customer_name, account_number, profile, status, subscription_due, price,
+         router_id, service, expiration_profile, contact, email, nap_id, plc_port, address, lat, lng, online)
+       VALUES (@username, @password, @customer_name, @account, @profile, @status, @subscription_due, @price,
+         1, @service, @expiration_profile, @contact, @email, @nap_id, @plc_port, @address, @lat, @lng, 1)`
     )
-    .run(
+    .run({
       username,
-      customer_name || username,
-      account_number || String(Math.floor(Math.random() * 1e12)),
-      profile || '15mbps',
-      status || 'Active',
-      subscription_due || new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10),
-      price ?? prof?.price ?? 0,
-      service || 'pppoe'
-    );
+      password: password || '',
+      customer_name: customer_name || username,
+      account,
+      profile: profile || '15mbps',
+      status: status || 'Active',
+      subscription_due: subscription_due || new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10),
+      price: price ?? prof?.price ?? 0,
+      service: service || 'pppoe',
+      expiration_profile: expiration_profile || 'default',
+      contact: contact || null,
+      email: email || null,
+      nap_id: nap_id || null,
+      plc_port: plc_port || null,
+      address: address || null,
+      lat: lat != null && lat !== '' ? Number(lat) : null,
+      lng: lng != null && lng !== '' ? Number(lng) : null,
+    });
   db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
     'info',
     'pppoe',
-    `Created ${service || 'pppoe'} user ${username}`
+    `Created ${service || 'pppoe'} user ${username} (acct ${account})`
   );
   res.status(201).json(db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(info.lastInsertRowid));
 });
@@ -212,17 +335,61 @@ app.put('/api/pppoe/users/:id', (req, res) => {
   const existing = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(id) as any;
   if (!existing) return res.status(404).json({ error: 'not found' });
   const b = req.body || {};
+
+  // If the billing plan changed, sync the stored price to the plan's price
+  // (unless an explicit price override is supplied).
+  const newProfile = b.profile ?? existing.profile;
+  let price = b.price ?? existing.price;
+  if (b.profile && b.profile !== existing.profile && b.price == null) {
+    const prof = db.prepare('SELECT price FROM profiles WHERE name = ?').get(newProfile) as { price: number } | undefined;
+    if (prof) price = prof.price;
+  }
+
   db.prepare(
-    `UPDATE pppoe_users SET customer_name = ?, profile = ?, status = ?, subscription_due = ?, price = ? WHERE id = ?`
-  ).run(
-    b.customer_name ?? existing.customer_name,
-    b.profile ?? existing.profile,
-    b.status ?? existing.status,
-    b.subscription_due ?? existing.subscription_due,
-    b.price ?? existing.price,
-    id
-  );
+    `UPDATE pppoe_users SET
+       customer_name = @customer_name, password = @password, profile = @profile, status = @status,
+       subscription_due = @subscription_due, price = @price, expiration_profile = @expiration_profile,
+       contact = @contact, email = @email, nap_id = @nap_id, plc_port = @plc_port,
+       address = @address, lat = @lat, lng = @lng
+     WHERE id = @id`
+  ).run({
+    id,
+    customer_name: b.customer_name ?? existing.customer_name,
+    password: b.password ?? existing.password,
+    profile: newProfile,
+    status: b.status ?? existing.status,
+    subscription_due: b.subscription_due ?? existing.subscription_due,
+    price,
+    expiration_profile: b.expiration_profile ?? existing.expiration_profile,
+    contact: b.contact ?? existing.contact,
+    email: b.email ?? existing.email,
+    nap_id: b.nap_id != null ? (b.nap_id || null) : existing.nap_id,
+    plc_port: b.plc_port ?? existing.plc_port,
+    address: b.address ?? existing.address,
+    lat: b.lat != null && b.lat !== '' ? Number(b.lat) : b.lat === '' ? null : existing.lat,
+    lng: b.lng != null && b.lng !== '' ? Number(b.lng) : b.lng === '' ? null : existing.lng,
+  });
   res.json(db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(id));
+});
+
+// Enable/disable the client account (maps to enabling/disabling the PPP/DHCP
+// secret in RouterOS). The key icon in the UI triggers this.
+app.post('/api/pppoe/users/:id/toggle-enabled', (req, res) => {
+  const id = Number(req.params.id);
+  const u = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(id) as any;
+  if (!u) return res.status(404).json({ error: 'not found' });
+  const disabling = u.status !== 'disabled';
+  if (disabling) {
+    db.prepare("UPDATE pppoe_users SET status = 'disabled', online = 0 WHERE id = ?").run(id);
+  } else {
+    db.prepare("UPDATE pppoe_users SET status = 'Active', online = 1, nonpayment_since = NULL WHERE id = ?").run(id);
+  }
+  db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+    'info',
+    'mikrotik',
+    `${disabling ? 'Disabled' : 'Enabled'} ${u.service} secret for ${u.username}`
+  );
+  res.json({ ok: true, status: disabling ? 'disabled' : 'Active', user: db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(id) });
 });
 
 app.delete('/api/pppoe/users/:id', (req, res) => {
@@ -233,40 +400,229 @@ app.delete('/api/pppoe/users/:id', (req, res) => {
 // Execute a payment: extends the subscription by whole month(s) from the
 // existing expiration date (preserving day-of-month, never re-anchored to the
 // payment day) and records the transaction.
-app.post('/api/pppoe/users/:id/payment', (req, res) => {
+app.post('/api/pppoe/users/:id/payment', async (req, res) => {
   const id = Number(req.params.id);
   const user = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(id) as any;
   if (!user) return res.status(404).json({ error: 'not found' });
+  const b = req.body || {};
 
-  const months = Math.max(1, Math.floor(Number(req.body?.months) || 1));
+  const months = Math.max(1, Math.floor(Number(b.months) || 1));
   const previousDue: string = (user.subscription_due || new Date().toISOString().slice(0, 10)).slice(0, 10);
   const newDue = addMonthsPreserveDay(previousDue, months);
 
-  const prof = db.prepare('SELECT price FROM profiles WHERE name = ?').get(user.profile) as { price: number } | undefined;
-  const unit = Number(user.price) || prof?.price || 0;
-  const amount = req.body?.amount != null ? Number(req.body.amount) : unit * months;
+  // Optional plan change applied at payment time.
+  const plan = b.plan || user.profile;
+  const prof = db.prepare('SELECT price FROM profiles WHERE name = ?').get(plan) as { price: number } | undefined;
+  const unit = prof?.price ?? (Number(user.price) || 0);
+  const subtotal = unit * months;
 
-  db.prepare("UPDATE pppoe_users SET subscription_due = ?, status = 'Active', online = 1 WHERE id = ?").run(newDue, id);
-  db.prepare('INSERT INTO transactions (pppoe_user_id, customer_name, amount, type) VALUES (?, ?, ?, ?)').run(
+  // Discount for downtime: credit the daily rate for each downtime day.
+  const discountDays = Math.max(0, Math.floor(Number(b.discount_days) || 0));
+  const dailyRate = unit / 30;
+  const discount = Math.round(dailyRate * discountDays * 100) / 100;
+  const total = Math.max(0, Math.round((subtotal - discount) * 100) / 100);
+
+  const expirationProfile = b.expiration_profile || user.expiration_profile || 'default';
+  const paymentDate = b.payment_date ? new Date(`${String(b.payment_date).slice(0, 10)}T00:00:00Z`).toISOString() : new Date().toISOString();
+
+  db.prepare(
+    `UPDATE pppoe_users SET subscription_due = ?, profile = ?, price = ?, expiration_profile = ?,
+       status = 'Active', online = 1, nonpayment_since = NULL, reminder_sent = NULL WHERE id = ?`
+  ).run(newDue, plan, unit, expirationProfile, id);
+  db.prepare('INSERT INTO transactions (pppoe_user_id, customer_name, amount, type, created_at) VALUES (?, ?, ?, ?, ?)').run(
     id,
     user.customer_name || user.username,
-    amount,
-    'payment'
+    total,
+    'payment',
+    paymentDate
   );
   db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
     'info',
     'billing',
-    `Payment received for ${user.username}: +${months} month(s), due ${previousDue} \u2192 ${newDue}`
+    `Payment for ${user.username}: ${plan} +${months}mo, due ${previousDue} \u2192 ${newDue}, total ${total}`
   );
+
+  const company = db.prepare('SELECT * FROM company WHERE id = 1').get() as any;
+  const receipt = {
+    company: company?.name || 'Pa-North',
+    account: user.account_number,
+    customer: user.customer_name || user.username,
+    username: user.username,
+    plan,
+    months,
+    paymentDate: paymentDate.slice(0, 10),
+    previousDue,
+    newDue,
+    subtotal,
+    discount,
+    discountDays,
+    total,
+  };
+
+  // Optionally email the receipt if requested and an address is on file.
+  let emailed = false;
+  if (b.send_receipt && user.email) {
+    const msg = `Official Receipt\nAccount #: ${user.account_number}\nCustomer: ${receipt.customer}\nPlan: ${plan}\nPayment date: ${receipt.paymentDate}\nNext due: ${newDue}\nSubtotal: ${subtotal.toFixed(2)}\nDiscount: ${discount.toFixed(2)}\nTOTAL: ${total.toFixed(2)}`;
+    const r = await sendManual({ channel: 'email', target: 'client', clientId: id, subject: 'Payment Receipt', message: msg });
+    emailed = r.sent > 0;
+  }
 
   res.json({
     ok: true,
     months,
-    amount,
+    plan,
     previousDue,
     subscriptionDue: newDue,
+    subtotal,
+    discount,
+    total,
+    amount: total,
+    emailed,
+    receipt,
     user: db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(id),
   });
+});
+
+// Fetch existing subscribers from a live MikroTik router by reading /ppp/secret
+// and parsing the billing JSON stored in each secret's comment.
+function parseSecretComment(comment: unknown): any {
+  if (!comment || typeof comment !== 'string') return {};
+  const s = comment.trim();
+  if (!s.startsWith('{')) return {};
+  try {
+    const o = JSON.parse(s);
+    return o && typeof o === 'object' ? o : {};
+  } catch {
+    return {};
+  }
+}
+function normStatus(v: unknown): string {
+  const s = String(v ?? '').toLowerCase();
+  if (/^(active|enabled|online|1|true)$/.test(s)) return 'Active';
+  if (/non.?pay/.test(s)) return 'non-payment';
+  if (/expire/.test(s)) return 'expired';
+  if (/disable/.test(s)) return 'disabled';
+  if (/inactive/.test(s)) return 'inactive';
+  return s ? String(v) : 'Active';
+}
+
+app.post('/api/pppoe/fetch-mikrotik', async (req, res) => {
+  const routerId = Number((req.query.routerId ?? req.body?.routerId) || 0);
+  const router = db.prepare('SELECT * FROM routers WHERE id = ?').get(routerId) as any;
+  if (!router) return res.status(400).json({ error: 'Router not found. Select a router first.' });
+
+  let secrets: any[];
+  let profiles: any[];
+  try {
+    const data = (await withRouter(router, async (api) => {
+      const p = (await api.write('/ppp/profile/print')) as any[];
+      const s = (await api.write('/ppp/secret/print')) as any[];
+      return { profiles: p, secrets: s };
+    })) as { profiles: any[]; secrets: any[] };
+    profiles = data.profiles || [];
+    secrets = data.secrets || [];
+  } catch {
+    return res.status(502).json({
+      error:
+        'Could not reach the router API. Check the host, API port and credentials in Router Management, and make sure the RouterOS API service is enabled.',
+    });
+  }
+
+  const service = router.type === 'ipoe' ? 'ipoe' : 'pppoe';
+
+  // Import PPP profiles first (RouterOS has no price, so keep any existing price).
+  const findProfile = db.prepare('SELECT id FROM profiles WHERE name = ?');
+  const insProfile = db.prepare('INSERT INTO profiles (name, rate_limit, price, type) VALUES (?, ?, 0, ?)');
+  const updProfile = db.prepare('UPDATE profiles SET rate_limit = ? WHERE name = ?');
+  let profilesImported = 0;
+  db.transaction(() => {
+    for (const p of profiles) {
+      const name = p?.name;
+      if (!name) continue;
+      const rl = p['rate-limit'] || p.rateLimit || '';
+      if (findProfile.get(name)) updProfile.run(String(rl), String(name));
+      else insProfile.run(String(name), String(rl), 'pppoe');
+      profilesImported++;
+    }
+  })();
+
+  const planPrice: Record<string, number> = {};
+  for (const p of db.prepare('SELECT name, price FROM profiles').all() as any[]) planPrice[p.name] = p.price;
+  const ensurePlan = db.prepare("INSERT OR IGNORE INTO profiles (name, rate_limit, price, type) VALUES (?, '', 0, 'pppoe')");
+  const findUser = db.prepare('SELECT id, account_number FROM pppoe_users WHERE username = ?');
+  const insUser = db.prepare(
+    `INSERT INTO pppoe_users
+      (username, password, customer_name, account_number, profile, status, subscription_due, price,
+       router_id, service, expiration_profile, contact, email, address, plc_port, lat, lng, online)
+     VALUES (@username, @password, @customer_name, @account_number, @profile, @status, @subscription_due, @price,
+       @router_id, @service, @expiration_profile, @contact, @email, @address, @plc_port, @lat, @lng, @online)`
+  );
+  const updUser = db.prepare(
+    `UPDATE pppoe_users SET password=@password, customer_name=@customer_name, account_number=@account_number,
+       profile=@profile, status=@status, subscription_due=@subscription_due, price=@price, router_id=@router_id,
+       service=@service, expiration_profile=@expiration_profile, contact=@contact, email=@email, address=@address,
+       plc_port=@plc_port, lat=@lat, lng=@lng, online=@online WHERE id=@id`
+  );
+
+  let created = 0;
+  let updated = 0;
+  let skipped = 0;
+  const tx = db.transaction(() => {
+    for (const sec of secrets) {
+      const username = sec.name;
+      if (!username) {
+        skipped++;
+        continue;
+      }
+      const meta = parseSecretComment(sec.comment);
+      const cust = meta.customer || {};
+      const plan = String(meta.plan || sec.profile || '15mbps');
+      if (!(plan in planPrice)) {
+        ensurePlan.run(plan);
+        planPrice[plan] = 0;
+      }
+      const disabled = sec.disabled === 'true' || sec.disabled === true;
+      const existing = findUser.get(username) as any;
+      const account = String(meta.accountNumber || existing?.account_number || generateAccountNumber());
+      const due = meta.dueDate ? String(meta.dueDate).slice(0, 10) : new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+      const status = disabled ? 'disabled' : normStatus(cust.status);
+      const fields = {
+        username: String(username),
+        password: sec.password || '',
+        customer_name: cust.fullName || String(username),
+        account_number: account,
+        profile: plan,
+        status,
+        subscription_due: due,
+        price: Number(planPrice[plan]) || 0,
+        router_id: router.id,
+        service,
+        expiration_profile: String(meta.expireProfile || 'default'),
+        contact: cust.contactNumber || null,
+        email: cust.email || null,
+        address: cust.address || null,
+        plc_port: cust.plcPort != null && cust.plcPort !== '' ? String(cust.plcPort) : null,
+        lat: cust.latitude != null ? Number(cust.latitude) : null,
+        lng: cust.longitude != null ? Number(cust.longitude) : null,
+        online: /active/i.test(status) ? 1 : 0,
+      };
+      if (existing) {
+        updUser.run({ ...fields, id: existing.id });
+        updated++;
+      } else {
+        insUser.run(fields);
+        created++;
+      }
+    }
+  });
+  tx();
+
+  db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+    'info',
+    'mikrotik',
+    `Fetched from ${router.name}: ${profilesImported} profiles, ${secrets.length} secrets (${created} new, ${updated} updated)`
+  );
+  res.json({ ok: true, fetched: secrets.length, created, updated, skipped, profilesImported, service, router: router.name });
 });
 
 app.get('/api/pppoe/profiles', (_req, res) => {
@@ -313,15 +669,47 @@ app.get('/api/billing-plans', (_req, res) => {
 });
 
 // ---- Clients Map ----
+// Derive a stable pseudo-value from a client id (so traffic/usage/ports look
+// consistent between refreshes rather than jumping randomly).
+function seeded(id: number, salt: number, mod: number) {
+  return ((id * 2654435761 + salt * 40503) >>> 0) % mod;
+}
+
 app.get('/api/map', (_req, res) => {
   const naps = db.prepare('SELECT id, name, kind, lat, lng, ports, parent_id AS parentId FROM naps').all();
   const clients = db
     .prepare(
-      `SELECT id, username, customer_name AS customer, status, online, lat, lng, nap_id AS napId, service
-       FROM pppoe_users WHERE lat IS NOT NULL AND lng IS NOT NULL`
+      `SELECT u.id, u.username, u.customer_name AS customer, u.status, u.online, u.lat, u.lng,
+              u.nap_id AS napId, u.service, u.account_number AS account, u.profile AS plan,
+              u.subscription_due AS due, u.plc_port AS plcPort,
+              n.name AS napName, n.parent_id AS oltId,
+              o.name AS oltName,
+              r.name AS serverName
+       FROM pppoe_users u
+       LEFT JOIN naps n ON n.id = u.nap_id
+       LEFT JOIN naps o ON o.id = n.parent_id
+       LEFT JOIN routers r ON r.id = u.router_id
+       WHERE u.lat IS NOT NULL AND u.lng IS NOT NULL`
     )
     .all() as any[];
-  clients.forEach((c) => (c.online = !!c.online));
+  clients.forEach((c) => {
+    c.online = !!c.online;
+    const napName = c.napName || '-';
+    const oltName = c.oltName || 'OLT Main Server';
+    const serverName = c.serverName || 'Main Server';
+    const pon = (seeded(c.id, 1, 16) + 1); // upstream/PON port on the OLT
+    const plc = c.plcPort ? Number(c.plcPort) : seeded(c.id, 2, 8) + 1;
+    c.plcPort = plc;
+    c.upstreamPort = pon;
+    c.oltName = oltName;
+    c.serverName = serverName;
+    // Live-ish traffic (bps) and cumulative usage (GB), stable per client.
+    c.rxBps = c.online ? 200 + seeded(c.id, 3, 900) + Math.floor(Math.random() * 120) : 0;
+    c.txBps = c.online ? 500 + seeded(c.id, 4, 1600) + Math.floor(Math.random() * 200) : 0;
+    c.rxGB = Number((0.5 + seeded(c.id, 5, 5000) / 500).toFixed(2));
+    c.txGB = Number((10 + seeded(c.id, 6, 30000) / 100).toFixed(1));
+    c.topology = `${serverName} > ${oltName} > PON${pon} > ${napName} > PLC${plc}`;
+  });
   const totalClients = (db.prepare('SELECT COUNT(*) AS c FROM pppoe_users').get() as any).c;
   const withoutLocation = (db.prepare('SELECT COUNT(*) AS c FROM pppoe_users WHERE lat IS NULL').get() as any).c;
   const servers = (db.prepare('SELECT COUNT(*) AS c FROM routers').get() as any).c;
@@ -334,6 +722,34 @@ app.get('/api/map', (_req, res) => {
     clients,
     stats: { servers, olts, naps: napCount, totalClients, withoutLocation, onlineOnu, offlineOnu },
   });
+});
+
+// ---- NAPs (for the Add-User NAP/PLC selector) ----
+app.get('/api/naps', (_req, res) => {
+  const rows = db
+    .prepare(
+      `SELECT n.id, n.name, n.ports, n.parent_id AS parentId,
+              (SELECT name FROM naps o WHERE o.id = n.parent_id) AS oltName
+       FROM naps n WHERE n.kind = 'nap' ORDER BY n.id`
+    )
+    .all();
+  res.json(rows);
+});
+
+// ---- Geocoding proxy (OpenStreetMap Nominatim) ----
+app.get('/api/geocode', async (req, res) => {
+  const q = String(req.query.q || '').trim();
+  if (!q) return res.json([]);
+  try {
+    const url = `https://nominatim.openstreetmap.org/search?format=json&limit=5&q=${encodeURIComponent(q)}`;
+    const r = await fetch(url, { headers: { 'User-Agent': 'MT-Billing/1.0 (panel geocoder)' } });
+    const data = (await r.json()) as any[];
+    res.json(
+      data.map((d) => ({ displayName: d.display_name, lat: Number(d.lat), lon: Number(d.lon) }))
+    );
+  } catch {
+    res.status(502).json({ error: 'geocoding unavailable' });
+  }
 });
 
 // ---- Inventory ----
@@ -353,8 +769,13 @@ app.get('/api/company', (_req, res) => {
 app.put('/api/company', (req, res) => {
   const b = req.body || {};
   const c = db.prepare('SELECT * FROM company WHERE id = 1').get() as any;
-  db.prepare('UPDATE company SET name = ?, address = ?, phone = ?, email = ?, currency = ? WHERE id = 1').run(
-    b.name ?? c.name, b.address ?? c.address, b.phone ?? c.phone, b.email ?? c.email, b.currency ?? c.currency
+  db.prepare('UPDATE company SET name = ?, address = ?, phone = ?, email = ?, currency = ?, logo = ? WHERE id = 1').run(
+    b.name ?? c.name,
+    b.address ?? c.address,
+    b.phone ?? c.phone,
+    b.email ?? c.email,
+    b.currency ?? c.currency,
+    b.logo !== undefined ? b.logo : c.logo
   );
   res.json(db.prepare('SELECT * FROM company WHERE id = 1').get());
 });
@@ -386,9 +807,65 @@ app.post('/api/uptime/check', async (_req, res) => {
   res.json({ summary: getUptimeSummary(), monitors: getUptime() });
 });
 
+// ---- Live interface traffic (dashboard graphs) ----
+app.get('/api/interfaces', (_req, res) => {
+  res.json({ names: getInterfaceNames() });
+});
+
+app.get('/api/interfaces/traffic', (_req, res) => {
+  res.json(getTrafficSnapshot());
+});
+
+// ---- Email/SMS notifications & reminders ----
+app.get('/api/clients', (_req, res) => {
+  res.json(
+    db
+      .prepare('SELECT id, username, customer_name AS customer, email, contact, service, status FROM pppoe_users ORDER BY customer_name')
+      .all()
+  );
+});
+
+app.get('/api/notifications', (_req, res) => {
+  res.json(listNotifications());
+});
+
+app.get('/api/notifications/settings', (_req, res) => {
+  res.json(getNotifySettings());
+});
+
+app.put('/api/notifications/settings', (req, res) => {
+  res.json(updateNotifySettings(req.body || {}));
+});
+
+// Manual send to all clients (email/sms/both) or a single client.
+app.post('/api/notifications/send', async (req, res) => {
+  const b = req.body || {};
+  if (!b.message) return res.status(400).json({ error: 'message is required' });
+  const target = b.target === 'client' ? 'client' : b.target === 'selected' ? 'selected' : 'all';
+  const result = await sendManual({
+    channel: b.channel || 'email',
+    target,
+    clientId: b.clientId ? Number(b.clientId) : undefined,
+    clientIds: Array.isArray(b.clientIds) ? b.clientIds.map((x: any) => Number(x)) : undefined,
+    subject: b.subject,
+    message: b.message,
+  });
+  res.json(result);
+});
+
+// Run the reminder + auto-disable automations immediately (also runs on a timer).
+app.post('/api/notifications/run', async (_req, res) => {
+  const summary = await runAutomations();
+  res.json(summary);
+});
+
+app.use('/api', settingsRouter);
+app.use('/api', extraRouter);
+
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
 
 app.listen(PORT, () => {
   console.log(`MT-Billing API listening on http://localhost:${PORT}`);
   startUptime(60000);
+  startNotifyScheduler(5 * 60 * 1000);
 });

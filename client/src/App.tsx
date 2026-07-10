@@ -13,6 +13,13 @@ import Hotspot from './pages/Hotspot';
 import Logs from './pages/Logs';
 import Company from './pages/Company';
 import Uptime from './pages/Uptime';
+import Notifications from './pages/Notifications';
+import SystemSettings from './pages/SystemSettings';
+import Network from './pages/Network';
+import ZeroTier from './pages/ZeroTier';
+import Updater from './pages/Updater';
+import PanelRoles from './pages/PanelRoles';
+import License from './pages/License';
 import { Loader2 } from 'lucide-react';
 
 function Protected({ children }: { children: React.ReactNode }) {
@@ -53,18 +60,19 @@ export default function App() {
               <Route path="/inventory" element={<Inventory />} />
               <Route path="/hotspot" element={<Hotspot />} />
               <Route path="/uptime" element={<Uptime />} />
+              <Route path="/notifications" element={<Notifications />} />
               <Route path="/logs" element={<Logs />} />
               <Route path="/company" element={<Company />} />
               <Route path="/ai-scripting" element={stub('AI Scripting', 'Generate and deploy RouterOS scripts with AI assistance.')} />
               <Route path="/terminal" element={stub('Terminal', 'Web SSH/API terminal to the selected MikroTik router.')} />
-              <Route path="/network" element={stub('Network', 'Interfaces, IP addresses, DHCP, firewall and routing overview.')} />
+              <Route path="/network" element={<Network />} />
               <Route path="/files" element={stub('Mikrotik Files', 'Browse, upload and manage files stored on the router.')} />
-              <Route path="/zerotier" element={stub('ZeroTier', 'Manage ZeroTier networks and member authorization.')} />
-              <Route path="/settings" element={stub('System Settings', 'Panel configuration, backups, notifications and integrations.')} />
-              <Route path="/roles" element={stub('Panel Roles', 'Create roles and assign granular permissions to operators.')} />
-              <Route path="/updater" element={stub('Updater', 'Check for panel updates and apply them safely.')} />
+              <Route path="/zerotier" element={<ZeroTier />} />
+              <Route path="/settings" element={<SystemSettings />} />
+              <Route path="/roles" element={<PanelRoles />} />
+              <Route path="/updater" element={<Updater />} />
               <Route path="/super-router" element={stub('Super Router', 'Central controller for managing multiple MikroTik routers.')} />
-              <Route path="/license" element={stub('License', 'View and activate your MT-Billing license.')} />
+              <Route path="/license" element={<License />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </Protected>
