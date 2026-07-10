@@ -36,7 +36,7 @@ resolve_script_path() {
 SCRIPT_PATH="$(resolve_script_path)"
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
 
-# Do not enable `set -u` — community-scripts build.func references optional env vars (e.g. SSH_CLIENT).
+# Do not enable `set -u` in this script — optional env defaults are set above instead.
 
 # Embed guest install script so build.func never curls GitHub for install/*.sh
 extract_install_script() {
@@ -48,6 +48,11 @@ extract_install_script() {
 }
 
 INSTALL_CACHE="$(extract_install_script)"
+
+# community-scripts core.func ssh_check() reads $SSH_CLIENT; catch_errors may enable
+# set -u (STRICT_UNSET=1). On the Proxmox local console SSH_CLIENT is unset → crash.
+: "${SSH_CLIENT:=}"
+: "${SSH_CONNECTION:=}"
 
 # Patch community-scripts build.func: route install fetch to embedded script
 BUILD_FUNC="$(
