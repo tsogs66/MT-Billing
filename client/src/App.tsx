@@ -20,6 +20,7 @@ import ZeroTier from './pages/ZeroTier';
 import Updater from './pages/Updater';
 import PanelRoles from './pages/PanelRoles';
 import License from './pages/License';
+import AiScripting from './pages/AiScripting';
 import { Loader2 } from 'lucide-react';
 
 function Protected({ children }: { children: React.ReactNode }) {
@@ -63,7 +64,7 @@ export default function App() {
               <Route path="/notifications" element={<Notifications />} />
               <Route path="/logs" element={<Logs />} />
               <Route path="/company" element={<Company />} />
-              <Route path="/ai-scripting" element={stub('AI Scripting', 'Generate and deploy RouterOS scripts with AI assistance.')} />
+              <Route path="/ai-scripting" element={<AiScripting />} />
               <Route path="/terminal" element={stub('Terminal', 'Web SSH/API terminal to the selected MikroTik router.')} />
               <Route path="/network" element={<Network />} />
               <Route path="/files" element={stub('Mikrotik Files', 'Browse, upload and manage files stored on the router.')} />

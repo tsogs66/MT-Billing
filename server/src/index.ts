@@ -9,6 +9,7 @@ import { tryLiveResource, withRouter } from './mikrotik.js';
 import { getUptime, getUptimeSummary, runUptimeChecks, startUptime } from './uptime.js';
 import { getInterfaceNames, getTrafficSnapshot } from './interfaces.js';
 import { settingsRouter } from './settings.js';
+import { aiRouter } from './ai.js';
 import { extraRouter, initExtra } from './extra.js';
 import {
   getPublicSettings as getNotifySettings,
@@ -860,6 +861,7 @@ app.post('/api/notifications/run', async (_req, res) => {
 });
 
 app.use('/api', settingsRouter);
+app.use('/api', aiRouter);
 app.use('/api', extraRouter);
 
 app.get('/api/health', (_req, res) => res.json({ ok: true }));

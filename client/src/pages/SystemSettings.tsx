@@ -291,27 +291,32 @@ function AiSettings({ app, setA, save }: any) {
   return (
     <Section icon={<Bot size={20} className="text-brand-500" />} title="AI Settings">
       <div className="space-y-4 max-w-2xl">
+        <p className="text-sm text-slate-500">
+          Full Claude &amp; Cursor API setup lives under{' '}
+          <a href="/ai-scripting" className="text-brand-600 hover:underline font-medium">AI Scripting → Setup</a>.
+        </p>
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" className="w-4 h-4" checked={!!app.ai_enabled} onChange={(e) => setA({ ai_enabled: e.target.checked ? 1 : 0 })} /> Enable AI Scripting assistant
         </label>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <label className="block">
-            <span className="text-sm font-semibold text-slate-700 mb-1 block">Provider</span>
+            <span className="text-sm font-semibold text-slate-700 mb-1 block">Default provider</span>
             <select className="input" value={app.ai_provider} onChange={(e) => setA({ ai_provider: e.target.value })}>
+              <option value="anthropic">Claude (Anthropic)</option>
+              <option value="cursor">Cursor Cloud Agents</option>
               <option value="openai">OpenAI</option>
-              <option value="anthropic">Anthropic</option>
               <option value="google">Google Gemini</option>
               <option value="ollama">Ollama (local)</option>
             </select>
           </label>
           <label className="block">
-            <span className="text-sm font-semibold text-slate-700 mb-1 block">Model</span>
-            <input className="input" value={app.ai_model} onChange={(e) => setA({ ai_model: e.target.value })} />
+            <span className="text-sm font-semibold text-slate-700 mb-1 block">Claude model</span>
+            <input className="input" value={app.ai_model} onChange={(e) => setA({ ai_model: e.target.value })} placeholder="claude-sonnet-4-20250514" />
           </label>
         </div>
         <label className="block">
-          <span className="text-sm font-semibold text-slate-700 mb-1 block">API Key {app.ai_api_key_set && <span className="text-emerald-600 text-xs">(saved)</span>}</span>
-          <input className="input" type="password" placeholder={app.ai_api_key_set ? '••••••• (leave blank to keep)' : 'sk-...'} value={key} onChange={(e) => setKey(e.target.value)} />
+          <span className="text-sm font-semibold text-slate-700 mb-1 block">Claude API Key {app.ai_api_key_set && <span className="text-emerald-600 text-xs">(saved)</span>}</span>
+          <input className="input" type="password" placeholder={app.ai_api_key_set ? '••••••• (leave blank to keep)' : 'sk-ant-...'} value={key} onChange={(e) => setKey(e.target.value)} />
         </label>
         <div className="flex justify-end">
           <button className="btn-primary" onClick={() => save(key ? { ai_api_key: key } : {})}>Save AI Settings</button>

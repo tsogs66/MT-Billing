@@ -172,12 +172,25 @@ export function initSchema() {
       ngrok_port INTEGER DEFAULT 5173,
       ngrok_status TEXT DEFAULT 'stopped',
       ngrok_url TEXT,
-      ai_provider TEXT DEFAULT 'openai',
+      ai_provider TEXT DEFAULT 'anthropic',
       ai_api_key TEXT,
-      ai_model TEXT DEFAULT 'gpt-4o-mini',
+      ai_model TEXT DEFAULT 'claude-sonnet-4-20250514',
       ai_enabled INTEGER DEFAULT 0,
+      cursor_api_key TEXT,
+      cursor_model TEXT DEFAULT 'composer-2',
+      cursor_repo_url TEXT,
       tz TEXT DEFAULT 'Asia/Manila',
       ntp_server TEXT DEFAULT 'time.cloudflare.com'
+    );
+
+    CREATE TABLE IF NOT EXISTS ai_scripts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      provider TEXT,
+      model TEXT,
+      prompt TEXT,
+      script TEXT,
+      router_id INTEGER,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
   `);
 }
@@ -234,6 +247,15 @@ export function migrate() {
 
   if (count('app_settings') === 0) {
     db.prepare('INSERT INTO app_settings (id) VALUES (1)').run();
+  }
+
+  const appCols: [string, string][] = [
+    ['cursor_api_key', 'TEXT'],
+    ['cursor_model', "TEXT DEFAULT 'composer-2'"],
+    ['cursor_repo_url', 'TEXT'],
+  ];
+  for (const [col, type] of appCols) {
+    if (!columnExists('app_settings', col)) db.exec(`ALTER TABLE app_settings ADD COLUMN ${col} ${type}`);
   }
 
   db.prepare("UPDATE naps SET name = 'OLT Main Server' WHERE kind = 'olt' AND name = 'OLT-1'").run();

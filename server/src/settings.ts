@@ -7,11 +7,12 @@ import { db, backupsDir, dbPath } from './db.js';
 export const settingsRouter = express.Router();
 
 // ---------- Panel / app settings ----------
-const SECRET_FIELDS = ['ngrok_authtoken', 'ai_api_key'];
+const SECRET_FIELDS = ['ngrok_authtoken', 'ai_api_key', 'cursor_api_key'];
 const BOOL_FIELDS = ['ngrok_enabled', 'ai_enabled'];
 const EDITABLE = [
   'theme', 'language', 'currency', 'ngrok_enabled', 'ngrok_authtoken', 'ngrok_region',
-  'ngrok_port', 'ai_provider', 'ai_api_key', 'ai_model', 'ai_enabled', 'tz', 'ntp_server',
+  'ngrok_port', 'ai_provider', 'ai_api_key', 'ai_model', 'ai_enabled', 'cursor_api_key',
+  'cursor_model', 'cursor_repo_url', 'tz', 'ntp_server',
 ];
 
 function getApp(): any {
@@ -46,7 +47,8 @@ settingsRouter.put('/settings/app', (req, res) => {
     `UPDATE app_settings SET theme=@theme, language=@language, currency=@currency,
        ngrok_enabled=@ngrok_enabled, ngrok_authtoken=@ngrok_authtoken, ngrok_region=@ngrok_region,
        ngrok_port=@ngrok_port, ai_provider=@ai_provider, ai_api_key=@ai_api_key, ai_model=@ai_model,
-       ai_enabled=@ai_enabled, tz=@tz, ntp_server=@ntp_server WHERE id=1`
+       ai_enabled=@ai_enabled, cursor_api_key=@cursor_api_key, cursor_model=@cursor_model,
+       cursor_repo_url=@cursor_repo_url, tz=@tz, ntp_server=@ntp_server WHERE id=1`
   ).run({
     theme: cur.theme || 'system',
     language: cur.language || 'en',
@@ -55,10 +57,13 @@ settingsRouter.put('/settings/app', (req, res) => {
     ngrok_authtoken: cur.ngrok_authtoken || null,
     ngrok_region: cur.ngrok_region || 'ap',
     ngrok_port: Number(cur.ngrok_port) || 5173,
-    ai_provider: cur.ai_provider || 'openai',
+    ai_provider: cur.ai_provider || 'anthropic',
     ai_api_key: cur.ai_api_key || null,
-    ai_model: cur.ai_model || 'gpt-4o-mini',
+    ai_model: cur.ai_model || 'claude-sonnet-4-20250514',
     ai_enabled: cur.ai_enabled ? 1 : 0,
+    cursor_api_key: cur.cursor_api_key || null,
+    cursor_model: cur.cursor_model || 'composer-2',
+    cursor_repo_url: cur.cursor_repo_url || null,
     tz: cur.tz || 'Asia/Manila',
     ntp_server: cur.ntp_server || 'time.cloudflare.com',
   });
