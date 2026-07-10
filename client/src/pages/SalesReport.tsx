@@ -4,20 +4,19 @@ import Layout from '../components/Layout';
 import { Card, Stat } from '../components/ui';
 import { api, peso } from '../api';
 
-const RANGES = [
-  { key: '7d', label: '7 Days' },
-  { key: '30d', label: '30 Days' },
-  { key: '6m', label: '6 Months' },
-  { key: '1y', label: '1 Year' },
+const GROUPS = [
+  { key: 'week', label: 'Weekly' },
+  { key: 'month', label: 'Monthly' },
+  { key: 'year', label: 'Yearly' },
 ];
 
 export default function SalesReport() {
-  const [range, setRange] = useState('30d');
+  const [range, setRange] = useState('month');
   const [sales, setSales] = useState<any>(null);
   const [tx, setTx] = useState<any[]>([]);
 
   useEffect(() => {
-    api.get(`/sales?range=${range}`).then((r) => setSales(r.data));
+    api.get(`/sales?group=${range}`).then((r) => setSales(r.data));
   }, [range]);
   useEffect(() => {
     api.get('/sales/transactions').then((r) => setTx(r.data));
@@ -34,7 +33,7 @@ export default function SalesReport() {
 
       <Card title="Revenue" right={
         <div className="flex gap-1">
-          {RANGES.map((r) => (
+          {GROUPS.map((r) => (
             <button key={r.key} onClick={() => setRange(r.key)} className={`text-xs px-2.5 py-1 rounded-md ${range === r.key ? 'bg-brand-500 text-white' : 'text-slate-500 hover:bg-slate-100'}`}>
               {r.label}
             </button>
@@ -45,7 +44,7 @@ export default function SalesReport() {
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={sales?.series ?? []}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-              <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#94a3b8' }} tickFormatter={(v) => String(v).slice(5)} />
+              <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#94a3b8' }} tickFormatter={(v) => (String(v).includes('-') ? String(v).slice(5) : String(v))} />
               <YAxis tick={{ fontSize: 11, fill: '#94a3b8' }} tickFormatter={(v) => (v >= 1000 ? `${v / 1000}k` : v)} width={40} />
               <Tooltip formatter={(v: number) => peso(v)} />
               <Bar dataKey="value" fill="#f97316" radius={[4, 4, 0, 0]} />

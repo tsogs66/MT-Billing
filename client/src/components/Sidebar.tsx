@@ -2,7 +2,7 @@ import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, Bot, TerminalSquare, Router, Network, Users, Share2, Map,
   BarChart3, Boxes, Wifi, FileCode2, Globe, Building2, Settings, ShieldCheck,
-  DownloadCloud, ServerCog, ScrollText, KeyRound, Activity,
+  DownloadCloud, ServerCog, ScrollText, KeyRound, Activity, Bell,
 } from 'lucide-react';
 
 const NAV = [
@@ -18,6 +18,7 @@ const NAV = [
   { to: '/inventory', label: 'Stock & Inventory', icon: Boxes },
   { to: '/hotspot', label: 'Hotspot', icon: Wifi },
   { to: '/uptime', label: 'Uptime Monitor', icon: Activity },
+  { to: '/notifications', label: 'Notifications', icon: Bell },
   { to: '/files', label: 'Mikrotik Files', icon: FileCode2 },
   { to: '/zerotier', label: 'ZeroTier', icon: Globe },
   { to: '/company', label: 'Company', icon: Building2 },

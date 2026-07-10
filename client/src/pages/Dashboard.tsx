@@ -5,6 +5,7 @@ import Layout from '../components/Layout';
 import { Card, Progress, Stat } from '../components/ui';
 import { api, peso } from '../api';
 import { useRouterDevice } from '../context/RouterContext';
+import InterfaceTraffic from '../components/InterfaceTraffic';
 
 interface Host {
   board: string;
@@ -56,12 +57,17 @@ export default function Dashboard() {
   const [router, setRouter] = useState<RouterStat | null>(null);
   const [sales, setSales] = useState<Sales | null>(null);
   const [queues, setQueues] = useState<{ name: string; avgRate: number }[]>([]);
+  const [statusCounts, setStatusCounts] = useState<any>(null);
   const [range, setRange] = useState('7d');
   const [queueSearch, setQueueSearch] = useState('');
 
   useEffect(() => {
     api.get('/dashboard/host').then((r) => setHost(r.data));
     api.get('/dashboard/queues').then((r) => setQueues(r.data));
+    const loadStatus = () => api.get('/dashboard/status').then((r) => setStatusCounts(r.data));
+    loadStatus();
+    const t = setInterval(loadStatus, 15000);
+    return () => clearInterval(t);
   }, []);
 
   useEffect(() => {
@@ -77,6 +83,16 @@ export default function Dashboard() {
 
   return (
     <Layout title="Dashboard">
+      <h2 className="text-base font-semibold text-slate-500 mb-3">Account Status</h2>
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4 mb-6">
+        <StatusTile label="Online" value={statusCounts?.online} dot="bg-emerald-500" tone="text-emerald-600" />
+        <StatusTile label="Offline" value={statusCounts?.offline} dot="bg-amber-500" tone="text-amber-600" />
+        <StatusTile label="Active" value={statusCounts?.active} dot="bg-sky-500" tone="text-sky-600" />
+        <StatusTile label="Expired" value={statusCounts?.expired} dot="bg-rose-500" tone="text-rose-600" />
+        <StatusTile label="Non-payment" value={statusCounts?.nonPayment} dot="bg-orange-500" tone="text-orange-600" />
+        <StatusTile label="Inactive" value={statusCounts?.inactive} dot="bg-slate-400" tone="text-slate-500" />
+      </div>
+
       <h2 className="text-base font-semibold text-slate-500 mb-3">System Overview</h2>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
@@ -227,7 +243,20 @@ export default function Dashboard() {
           </div>
         </Card>
       </div>
+
+      <InterfaceTraffic />
     </Layout>
+  );
+}
+
+function StatusTile({ label, value, dot, tone }: { label: string; value: number | undefined; dot: string; tone: string }) {
+  return (
+    <div className="card px-4 py-3 flex items-center justify-between">
+      <div>
+        <div className={`text-2xl font-bold ${tone}`}>{value ?? '—'}</div>
+        <div className="text-xs text-slate-400 flex items-center gap-1.5 mt-0.5"><span className={`w-2 h-2 rounded-full ${dot}`} />{label}</div>
+      </div>
+    </div>
   );
 }
 

@@ -5,6 +5,8 @@ build/
 .DS_Store
 .env
 server/data/*.db
+!server/data/mt-billing.db
 server/data/*.db-*
 coverage/
 *.tsbuildinfo
+activator/dist/
