@@ -27,28 +27,44 @@ export default function Network() {
 
 function WanFailover() {
   const [routes, setRoutes] = useState<any[]>([]);
-  const load = () => api.get('/network/wan').then((r) => setRoutes(r.data));
+  const [error, setError] = useState('');
+  const load = () =>
+    api.get('/network/wan').then((r) => {
+      setRoutes(r.data);
+      setError('');
+    }).catch((e) => setError(e?.response?.data?.error || 'Could not load WAN routes'));
   useEffect(() => {
     load();
   }, []);
 
   const allEnabled = routes.length > 0 && routes.every((r) => r.enabled);
   const toggleOne = async (id: number) => {
-    await api.post(`/network/wan/${id}/toggle`);
-    load();
+    try {
+      await api.post(`/network/wan/${id}/toggle`);
+      load();
+    } catch (e: any) {
+      setError(e?.response?.data?.error || 'Could not toggle route on MikroTik');
+    }
   };
   const toggleAll = async () => {
-    await api.post('/network/wan/toggle-all', { enabled: !allEnabled });
-    load();
+    try {
+      const r = await api.post('/network/wan/toggle-all', { enabled: !allEnabled });
+      if (r.data.errors?.length) setError(`Some routes failed: ${r.data.errors.join('; ')}`);
+      else setError('');
+      load();
+    } catch (e: any) {
+      setError(e?.response?.data?.error || 'Could not toggle routes on MikroTik');
+    }
   };
 
   return (
     <div className="space-y-5 max-w-4xl">
+      {error && <div className="text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">{error}</div>}
       <Card interactive>
         <div className="flex items-center justify-between">
           <div>
             <div className="font-semibold text-slate-800">Master Failover Switch</div>
-            <div className="text-sm text-slate-400">Enable or disable all WAN routes that have 'check-gateway' configured.</div>
+            <div className="text-sm text-slate-400">Enable or disable all monitored WAN routes on each MikroTik router (RouterOS /ip/route).</div>
           </div>
           <button
             onClick={toggleAll}

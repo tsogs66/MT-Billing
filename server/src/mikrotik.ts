@@ -90,12 +90,19 @@ export async function probeRouter(conn: RouterConn): Promise<RouterProbeResult> 
 }
 
 export interface WanRouteRow {
+  routeId: string;
   gateway: string;
   checkMethod: string;
   distance: number;
   status: string;
   interfaceName: string | null;
   dstAddress: string;
+  enabled: boolean;
+}
+
+/** Enable or disable a route on the router by its .id. */
+export async function setRouteEnabled(conn: RouterConn, routeId: string, enabled: boolean): Promise<void> {
+  await withRouter(conn, (api) => api.write(enabled ? '/ip/route/enable' : '/ip/route/disable', [`=numbers=${routeId}`]));
 }
 
 /** Fetch monitored WAN routes (check-gateway or default routes) from a router. */
@@ -104,22 +111,25 @@ export async function fetchWanRoutes(conn: RouterConn): Promise<WanRouteRow[]> {
     const routes = (await api.write('/ip/route/print')) as Record<string, string>[];
     const out: WanRouteRow[] = [];
     for (const r of routes || []) {
+      const routeId = r['.id'] || '';
       const check = r['check-gateway'] || '';
       const gateway = r.gateway || '';
       const dst = r['dst-address'] || '0.0.0.0/0';
-      if (!gateway) continue;
-      // Include routes with check-gateway or default routes on WAN interfaces.
-      const iface = r['interface'] || r.interface || null;
+      if (!gateway || !routeId) continue;
+      const iface = r.interface || r['interface'] || null;
       const isDefault = dst === '0.0.0.0/0';
       if (!check && !isDefault) continue;
+      const disabled = r.disabled === 'true' || r.disabled === 'yes';
       const active = r.active === 'true' || r.active === 'yes';
       out.push({
+        routeId,
         gateway,
         checkMethod: check || (isDefault ? 'route' : 'ping'),
         distance: Number(r.distance) || 1,
-        status: active ? 'Active' : 'Inactive',
+        status: disabled ? 'Disabled' : active ? 'Active' : 'Inactive',
         interfaceName: iface,
         dstAddress: dst,
+        enabled: !disabled,
       });
     }
     return out;

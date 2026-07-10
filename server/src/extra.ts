@@ -1,7 +1,7 @@
 import express from 'express';
 import { db } from './db.js';
 import { panelHardwareId, expectedLicenseKey, normalizeCode } from './panelId.js';
-import { fetchWanRoutes } from './mikrotik.js';
+import { fetchWanRoutes, setRouteEnabled } from './mikrotik.js';
 
 export const extraRouter = express.Router();
 
@@ -51,6 +51,7 @@ export function initExtra() {
     ['router_name', 'TEXT'],
     ['interface_name', 'TEXT'],
     ['dst_address', "TEXT DEFAULT '0.0.0.0/0'"],
+    ['route_id', 'TEXT'],
   ] as [string, string][]) {
     if (!columnExists('wan_routes', col)) db.exec(`ALTER TABLE wan_routes ADD COLUMN ${col} ${type}`);
   }
@@ -87,10 +88,12 @@ async function syncWanRoutesFromRouters() {
   const collected: {
     router_id: number;
     router_name: string;
+    route_id: string;
     gateway: string;
     check_method: string;
     distance: number;
     status: string;
+    enabled: number;
     interface_name: string | null;
     dst_address: string;
   }[] = [];
@@ -103,10 +106,12 @@ async function syncWanRoutesFromRouters() {
         collected.push({
           router_id: r.id,
           router_name: r.name,
+          route_id: route.routeId,
           gateway: route.gateway,
           check_method: route.checkMethod,
           distance: route.distance,
           status: route.status,
+          enabled: route.enabled ? 1 : 0,
           interface_name: route.interfaceName,
           dst_address: route.dstAddress,
         });
@@ -118,30 +123,30 @@ async function syncWanRoutesFromRouters() {
 
   if (collected.length === 0) return false;
 
-  const prev = db.prepare('SELECT gateway, router_id, enabled FROM wan_routes').all() as { gateway: string; router_id: number; enabled: number }[];
-  const enabledMap = new Map(prev.map((p) => [`${p.router_id}:${p.gateway}`, p.enabled]));
-
   db.prepare('DELETE FROM wan_routes').run();
   const ins = db.prepare(
-    `INSERT INTO wan_routes (router_id, router_name, gateway, check_method, distance, status, enabled, interface_name, dst_address)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO wan_routes (router_id, router_name, route_id, gateway, check_method, distance, status, enabled, interface_name, dst_address)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
   for (const row of collected) {
-    const key = `${row.router_id}:${row.gateway}`;
-    const enabled = enabledMap.has(key) ? enabledMap.get(key)! : 1;
     ins.run(
       row.router_id,
       row.router_name,
+      row.route_id,
       row.gateway,
       row.check_method,
       row.distance,
       row.status,
-      enabled,
+      row.enabled,
       row.interface_name,
       row.dst_address
     );
   }
   return true;
+}
+
+function getRouterConn(routerId: number) {
+  return db.prepare('SELECT * FROM routers WHERE id = ?').get(routerId) as any;
 }
 
 extraRouter.get('/network/wan', async (_req, res) => {
@@ -157,18 +162,74 @@ extraRouter.get('/network/wan', async (_req, res) => {
       .all()
   );
 });
-extraRouter.post('/network/wan/:id/toggle', (req, res) => {
+extraRouter.post('/network/wan/:id/toggle', async (req, res) => {
   const id = Number(req.params.id);
-  const r = db.prepare('SELECT enabled FROM wan_routes WHERE id = ?').get(id) as any;
-  if (!r) return res.status(404).json({ error: 'not found' });
-  const enabled = r.enabled ? 0 : 1;
-  db.prepare('UPDATE wan_routes SET enabled = ?, status = ? WHERE id = ?').run(enabled, enabled ? 'Active' : 'Disabled', id);
-  res.json({ ok: true, enabled });
+  const row = db
+    .prepare('SELECT id, router_id, route_id, gateway, enabled FROM wan_routes WHERE id = ?')
+    .get(id) as any;
+  if (!row) return res.status(404).json({ error: 'not found' });
+  if (!row.route_id) return res.status(400).json({ error: 'Route is not linked to a live MikroTik route. Refresh the WAN list.' });
+
+  const router = getRouterConn(row.router_id);
+  if (!router?.host || !router?.api_user) {
+    return res.status(400).json({ error: 'Router API credentials not configured.' });
+  }
+
+  const enable = !row.enabled;
+  try {
+    await setRouteEnabled(router, row.route_id, enable);
+    db.prepare('UPDATE wan_routes SET enabled = ?, status = ? WHERE id = ?').run(
+      enable ? 1 : 0,
+      enable ? 'Active' : 'Disabled',
+      id
+    );
+    db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+      'info',
+      'network',
+      `${enable ? 'Enabled' : 'Disabled'} WAN route ${row.gateway} on ${router.name}`
+    );
+    res.json({ ok: true, enabled: enable });
+  } catch (e: any) {
+    res.status(502).json({ error: e?.message || 'Could not update route on MikroTik router' });
+  }
 });
-extraRouter.post('/network/wan/toggle-all', (req, res) => {
-  const enabled = req.body?.enabled ? 1 : 0;
-  db.prepare('UPDATE wan_routes SET enabled = ?, status = ?').run(enabled, enabled ? 'Active' : 'Disabled');
-  res.json({ ok: true, enabled });
+
+extraRouter.post('/network/wan/toggle-all', async (req, res) => {
+  const enable = !!req.body?.enabled;
+  const rows = db
+    .prepare('SELECT id, router_id, route_id, gateway FROM wan_routes WHERE route_id IS NOT NULL')
+    .all() as { id: number; router_id: number; route_id: string; gateway: string }[];
+
+  if (rows.length === 0) {
+    return res.status(400).json({ error: 'No live WAN routes to update. Add routers and refresh.' });
+  }
+
+  const errors: string[] = [];
+  for (const row of rows) {
+    const router = getRouterConn(row.router_id);
+    if (!router?.host || !router?.api_user) continue;
+    try {
+      await setRouteEnabled(router, row.route_id, enable);
+      db.prepare('UPDATE wan_routes SET enabled = ?, status = ? WHERE id = ?').run(
+        enable ? 1 : 0,
+        enable ? 'Active' : 'Disabled',
+        row.id
+      );
+    } catch (e: any) {
+      errors.push(`${router.name} ${row.gateway}: ${e?.message || 'failed'}`);
+    }
+  }
+
+  if (errors.length === rows.length) {
+    return res.status(502).json({ error: errors[0] || 'Could not update routes on MikroTik' });
+  }
+
+  db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+    'info',
+    'network',
+    `${enable ? 'Enabled' : 'Disabled'} all WAN routes (${rows.length - errors.length}/${rows.length})`
+  );
+  res.json({ ok: true, enabled: enable, errors: errors.length ? errors : undefined });
 });
 extraRouter.get('/network/firewall', (_req, res) => {
   res.json([
