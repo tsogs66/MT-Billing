@@ -22,9 +22,10 @@ function fmtAxis(bps: number): string {
   return `${Math.round(bps)}`;
 }
 
-function loadGraphs(names: string[]): GraphCfg[] {
+function loadGraphs(names: string[], routerId?: number): GraphCfg[] {
+  const key = routerId ? `${STORAGE_KEY}:${routerId}` : STORAGE_KEY;
   try {
-    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
+    const saved = JSON.parse(localStorage.getItem(key) || 'null');
     if (Array.isArray(saved) && saved.length) return saved;
   } catch {
     /* ignore */
@@ -32,7 +33,7 @@ function loadGraphs(names: string[]): GraphCfg[] {
   return names.slice(0, 3).map((iface, i) => ({ id: `g${i}`, iface, enabled: true }));
 }
 
-export default function InterfaceTraffic() {
+export default function InterfaceTraffic({ routerId, routerName }: { routerId?: number; routerName?: string }) {
   const [names, setNames] = useState<string[]>([]);
   const [graphs, setGraphs] = useState<GraphCfg[]>([]);
   const [history, setHistory] = useState<Record<string, Point[]>>({});
@@ -40,23 +41,34 @@ export default function InterfaceTraffic() {
   const ready = useRef(false);
 
   useEffect(() => {
-    api.get('/interfaces').then((r) => {
-      setNames(r.data.names);
-      setGraphs(loadGraphs(r.data.names));
+    ready.current = false;
+    setHistory({});
+    const q = routerId ? `?routerId=${routerId}` : '';
+    api.get(`/interfaces${q}`).then((r) => {
+      const list: string[] = r.data.names || [];
+      setNames(list);
+      setGraphs(loadGraphs(list, routerId));
       ready.current = true;
       force((n) => n + 1);
     });
-  }, []);
+  }, [routerId]);
 
   useEffect(() => {
-    if (ready.current) localStorage.setItem(STORAGE_KEY, JSON.stringify(graphs));
-  }, [graphs]);
+    if (!ready.current) return;
+    const key = routerId ? `${STORAGE_KEY}:${routerId}` : STORAGE_KEY;
+    localStorage.setItem(key, JSON.stringify(graphs));
+  }, [graphs, routerId]);
 
   useEffect(() => {
     let alive = true;
     const poll = async () => {
       try {
-        const r = await api.get('/interfaces/traffic');
+        const ifaces = graphs.filter((g) => g.enabled).map((g) => g.iface).join(',');
+        const q = new URLSearchParams();
+        if (routerId) q.set('routerId', String(routerId));
+        if (ifaces) q.set('ifaces', ifaces);
+        const suffix = q.toString() ? `?${q}` : '';
+        const r = await api.get(`/interfaces/traffic${suffix}`);
         if (!alive) return;
         const t = r.data.t as number;
         setHistory((prev) => {
@@ -77,11 +89,12 @@ export default function InterfaceTraffic() {
       alive = false;
       clearInterval(id);
     };
-  }, []);
+  }, [routerId, graphs]);
 
   const addGraph = () => {
     const used = new Set(graphs.map((g) => g.iface));
     const iface = names.find((n) => !used.has(n)) || names[0];
+    if (!iface) return;
     setGraphs((g) => [...g, { id: `g${Date.now()}`, iface, enabled: true }]);
   };
 
@@ -91,9 +104,14 @@ export default function InterfaceTraffic() {
 
   return (
     <div className="mt-6">
-      <div className="flex items-center justify-between mb-3">
-        <h2 className="text-base font-semibold text-slate-500">Live Interface Traffic</h2>
-        <button className="btn-primary" onClick={addGraph}>
+      <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+        <div>
+          <h2 className="text-base font-semibold text-slate-500">Live Interface Traffic</h2>
+          <p className="text-xs text-slate-400 mt-0.5">
+            {routerId ? `From selected router${routerName ? `: ${routerName}` : ''}` : 'Panel server (no router selected)'}
+          </p>
+        </div>
+        <button className="btn-primary" onClick={addGraph} disabled={!names.length}>
           <Plus size={16} /> Add Graph
         </button>
       </div>
@@ -112,7 +130,7 @@ export default function InterfaceTraffic() {
         ))}
         {graphs.length === 0 && (
           <div className="card p-8 text-center text-slate-400 col-span-full">
-            No graphs yet. Click <b>Add Graph</b> to monitor an interface.
+            {routerId ? 'No interfaces from the selected router. Check API credentials and connectivity.' : 'Select a router in the top-right to monitor MikroTik interfaces.'}
           </div>
         )}
       </div>

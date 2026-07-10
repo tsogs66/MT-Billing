@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import http from 'http';
+import os from 'os';
 import express from 'express';
 import cors from 'cors';
 import bcrypt from 'bcryptjs';
@@ -7,7 +8,7 @@ import si from 'systeminformation';
 import { db, initSchema, seed, migrate } from './db.js';
 import { signToken, requireAuth, type AuthedRequest } from './auth.js';
 import { panelHardwareId, expectedPasswordResetCode, normalizeCode } from './panelId.js';
-import { tryLiveResource, withRouter, probeRouter, fetchWanRoutes, listRouterFiles } from './mikrotik.js';
+import { tryLiveResource, withRouter, probeRouter, fetchWanRoutes, listRouterFiles, fetchRouterDashboardStats, fetchRouterQueues, fetchRouterInterfaceNames, fetchRouterInterfaceTraffic } from './mikrotik.js';
 import { getUptime, getUptimeSummary, runUptimeChecks, startUptime } from './uptime.js';
 import { getInterfaceNames, getTrafficSnapshot } from './interfaces.js';
 import { settingsRouter } from './settings.js';
@@ -157,18 +158,22 @@ function getRouter(id: number) {
 // ---- Dashboard ----
 app.get('/api/dashboard/host', async (_req, res) => {
   try {
-    const [cpu, mem, temp, load, time, fs] = await Promise.all([
+    const [cpu, mem, temp, time, fs, system, osInfo] = await Promise.all([
       si.currentLoad(),
       si.mem(),
       si.cpuTemperature(),
-      si.currentLoad(),
       si.time(),
       si.fsSize(),
+      si.system(),
+      si.osInfo(),
     ]);
     const disk = fs[0] || ({ size: 1, used: 0 } as any);
+    const hostname = osInfo.hostname || os.hostname();
+    const board = [system.manufacturer, system.model].filter(Boolean).join(' ').trim() || hostname;
     res.json({
-      board: 'OrangePi Zero3',
-      cpuTemp: temp.main && temp.main > 0 ? Number(temp.main.toFixed(1)) : 51.9,
+      hostname,
+      board,
+      cpuTemp: temp.main && temp.main > 0 ? Number(temp.main.toFixed(1)) : null,
       cpuUsage: Number(cpu.currentLoad.toFixed(1)),
       ramTotal: mem.total,
       ramUsed: mem.active,
@@ -178,34 +183,62 @@ app.get('/api/dashboard/host', async (_req, res) => {
       diskTotal: disk.size,
       uptime: time.uptime,
     });
-  } catch (e) {
-    res.json({ board: 'OrangePi Zero3', cpuTemp: 51.9, cpuUsage: 3.2, ramPct: 26.1, diskPct: 15 });
+  } catch {
+    res.json({
+      hostname: os.hostname(),
+      board: 'Panel server',
+      cpuTemp: null,
+      cpuUsage: 0,
+      ramPct: 0,
+      diskPct: 0,
+      uptime: 0,
+    });
   }
 });
 
 app.get('/api/dashboard/router/:id', async (req, res) => {
   const r = getRouter(Number(req.params.id));
   if (!r) return res.status(404).json({ error: 'router not found' });
-  const users = db.prepare('SELECT status FROM pppoe_users WHERE router_id = ?').all(r.id) as { status: string }[];
-  const active = users.filter((u) => u.status === 'Active').length;
+
+  const users = db.prepare('SELECT status, online FROM pppoe_users WHERE router_id = ?').all(r.id) as {
+    status: string;
+    online: number;
+  }[];
+  const activeUsers = users.filter((u) => u.status === 'Active');
+  const activePPPoE = activeUsers.length;
+  const offline = activeUsers.filter((u) => !u.online).length;
   const expired = users.filter((u) => u.status === 'expired').length;
-  const offline = Math.max(0, Math.round(active * 0.09));
-  const { live } = await tryLiveResource(r, '/interface/print', []);
+
+  const liveStats = await fetchRouterDashboardStats(r);
+
   res.json({
     name: r.name,
-    board: r.board,
-    live,
-    uptime: '1w16h7m38s',
-    cpuLoad: 3,
-    memPct: 5,
-    memTotal: 16,
-    activePPPoE: active,
+    host: r.host,
+    board: liveStats.board || r.board,
+    live: liveStats.live,
+    uptime: liveStats.uptime || '—',
+    cpuLoad: liveStats.cpuLoad,
+    memPct: liveStats.memPct,
+    memTotal: liveStats.memTotalMb,
+    activePPPoE,
     offline,
     expired,
   });
 });
 
-app.get('/api/dashboard/queues', (_req, res) => {
+app.get('/api/dashboard/queues', async (req, res) => {
+  const routerId = req.query.routerId ? Number(req.query.routerId) : null;
+  if (routerId) {
+    const router = getRouter(routerId);
+    if (router?.host && router?.api_user) {
+      try {
+        const queues = await fetchRouterQueues(router);
+        if (queues.length) return res.json(queues);
+      } catch {
+        /* fall through to local sample queues */
+      }
+    }
+  }
   res.json(db.prepare('SELECT name, avg_rate AS avgRate FROM queues ORDER BY avg_rate DESC').all());
 });
 
@@ -1050,12 +1083,46 @@ app.post('/api/uptime/check', async (_req, res) => {
 });
 
 // ---- Live interface traffic (dashboard graphs) ----
-app.get('/api/interfaces', (_req, res) => {
-  res.json({ names: getInterfaceNames() });
+app.get('/api/interfaces', async (req, res) => {
+  const routerId = req.query.routerId ? Number(req.query.routerId) : null;
+  if (routerId) {
+    const router = getRouter(routerId);
+    if (router?.host && router?.api_user) {
+      try {
+        const names = await fetchRouterInterfaceNames(router);
+        return res.json({ names, source: 'router', routerId });
+      } catch {
+        return res.json({ names: [], source: 'router', routerId, error: 'unreachable' });
+      }
+    }
+    return res.json({ names: [], source: 'router', routerId, error: 'not-configured' });
+  }
+  res.json({ names: getInterfaceNames(), source: 'panel' });
 });
 
-app.get('/api/interfaces/traffic', (_req, res) => {
-  res.json(getTrafficSnapshot());
+app.get('/api/interfaces/traffic', async (req, res) => {
+  const routerId = req.query.routerId ? Number(req.query.routerId) : null;
+  const ifaces = String(req.query.ifaces || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  if (routerId) {
+    const router = getRouter(routerId);
+    if (router?.host && router?.api_user) {
+      try {
+        const names = ifaces.length ? ifaces : await fetchRouterInterfaceNames(router);
+        const sample = names.slice(0, 12);
+        const interfaces = await fetchRouterInterfaceTraffic(router, sample);
+        return res.json({ t: Date.now(), interfaces, source: 'router', routerId });
+      } catch {
+        return res.json({ t: Date.now(), interfaces: [], source: 'router', routerId, error: 'unreachable' });
+      }
+    }
+    return res.json({ t: Date.now(), interfaces: [], source: 'router', routerId, error: 'not-configured' });
+  }
+
+  res.json({ ...getTrafficSnapshot(), source: 'panel' });
 });
 
 // ---- Email/SMS notifications & reminders ----

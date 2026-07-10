@@ -11,16 +11,19 @@ import { useRouterDevice } from '../context/RouterContext';
 import InterfaceTraffic from '../components/InterfaceTraffic';
 
 interface Host {
+  hostname?: string;
   board: string;
-  cpuTemp: number;
+  cpuTemp: number | null;
   cpuUsage: number;
   ramPct: number;
   ramUsed?: number;
   ramTotal?: number;
   diskPct: number;
+  uptime?: number;
 }
 interface RouterStat {
   name: string;
+  host?: string;
   board: string;
   live: boolean;
   uptime: string;
@@ -54,6 +57,16 @@ function bytes(n?: number) {
   return `${(n / 1024 ** 2).toFixed(0)}M`;
 }
 
+function fmtUptime(sec?: number) {
+  if (!sec) return '—';
+  const d = Math.floor(sec / 86400);
+  const h = Math.floor((sec % 86400) / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  if (d > 0) return `${d}d ${h}h ${m}m`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
 export default function Dashboard() {
   const { current } = useRouterDevice();
   const [host, setHost] = useState<Host | null>(null);
@@ -66,16 +79,27 @@ export default function Dashboard() {
 
   useEffect(() => {
     api.get('/dashboard/host').then((r) => setHost(r.data));
-    api.get('/dashboard/queues').then((r) => setQueues(r.data));
-    const loadStatus = () => api.get('/dashboard/status').then((r) => setStatusCounts(r.data));
-    loadStatus();
-    const t = setInterval(loadStatus, 15000);
-    return () => clearInterval(t);
   }, []);
 
   useEffect(() => {
-    if (current) api.get(`/dashboard/router/${current.id}`).then((r) => setRouter(r.data));
-  }, [current]);
+    const loadStatus = () => {
+      const q = current?.id ? `?routerId=${current.id}` : '';
+      api.get(`/dashboard/status${q}`).then((r) => setStatusCounts(r.data));
+    };
+    loadStatus();
+    const t = setInterval(loadStatus, 15000);
+    return () => clearInterval(t);
+  }, [current?.id]);
+
+  useEffect(() => {
+    if (!current?.id) {
+      setRouter(null);
+      setQueues([]);
+      return;
+    }
+    api.get(`/dashboard/router/${current.id}`).then((r) => setRouter(r.data));
+    api.get(`/dashboard/queues?routerId=${current.id}`).then((r) => setQueues(r.data));
+  }, [current?.id]);
 
   useEffect(() => {
     api.get(`/sales?range=${range}`).then((r) => setSales(r.data));
@@ -86,7 +110,7 @@ export default function Dashboard() {
 
   return (
     <Layout title="Dashboard">
-      <SectionTitle icon={Activity}>Account Status</SectionTitle>
+      <SectionTitle icon={Activity}>Account Status{current ? ` — ${current.name}` : ''}</SectionTitle>
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4 mb-8">
         <StatTile label="Online" value={statusCounts?.online ?? '—'} dot="bg-emerald-500" tone="text-emerald-600" icon={CircleDot} accent="from-emerald-500/15 to-transparent" delay={0} />
         <StatTile label="Offline" value={statusCounts?.offline ?? '—'} dot="bg-amber-500" tone="text-amber-600" icon={WifiOff} accent="from-amber-500/15 to-transparent" delay={50} />
@@ -97,14 +121,20 @@ export default function Dashboard() {
       </div>
 
       <SectionTitle icon={Server}>System Overview</SectionTitle>
+      <p className="text-sm text-slate-500 mb-4">
+        <b>Host Panel</b> shows this billing server. <b>Router</b> shows the MikroTik selected in the top-right dropdown
+        {current ? ` (${current.name})` : ''}.
+      </p>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-5 mb-8">
-        <Card title="Host Panel Status" icon={Cpu} interactive>
+        <Card title="Host Panel Status" icon={Cpu} interactive right={<span className="text-xs text-slate-400">This server</span>}>
           <div className="space-y-4">
-            <Row label="Board" value={host?.board ?? '—'} />
+            <Row label="Hostname" value={host?.hostname ?? '—'} />
+            <Row label="Board / Model" value={host?.board ?? '—'} />
+            <Row label="Uptime" value={fmtUptime(host?.uptime)} />
             <Row
               label={<span className="flex items-center gap-2"><Cpu size={15} className="text-brand-500" />CPU Temp</span>}
-              value={host ? `${host.cpuTemp}°C` : '—'}
+              value={host?.cpuTemp != null ? `${host.cpuTemp}°C` : '—'}
             />
             <Row
               label={<span className="flex items-center gap-2"><Cpu size={15} className="text-brand-500" />CPU Usage</span>}
@@ -130,23 +160,31 @@ export default function Dashboard() {
         </Card>
 
         <Card
-          title={`Router: ${router?.name ?? current?.name ?? ''}`}
+          title={current ? `Router: ${router?.name ?? current.name}` : 'Router Status'}
           icon={Server}
           interactive
           right={
-            <span className={`badge ${router?.live ? 'bg-emerald-100 text-emerald-700 ring-emerald-200/60' : 'bg-slate-100 text-slate-500'}`}>
-              {router?.live ? '● live' : 'sample data'}
-            </span>
+            current ? (
+              <span className={`badge ${router?.live ? 'bg-emerald-100 text-emerald-700 ring-emerald-200/60' : 'bg-amber-100 text-amber-700 ring-amber-200/60'}`}>
+                {router?.live ? '● live' : 'offline / unreachable'}
+              </span>
+            ) : (
+              <span className="badge bg-slate-100 text-slate-500">No router selected</span>
+            )
           }
         >
+          {!current ? (
+            <p className="text-sm text-slate-500 py-6 text-center">Select a router from the top-right menu to view its status.</p>
+          ) : (
           <div className="space-y-4">
+            <Row label="Host" value={router?.host ?? current.host ?? '—'} />
             <Row label={<span className="flex items-center gap-2"><Server size={15} className="text-brand-500" />Board Name</span>} value={router?.board ?? '—'} />
             <Row label="Uptime" value={router?.uptime ?? '—'} />
             <Row label="CPU Load" value={router ? `${router.cpuLoad}%` : '—'} />
             <div>
               <div className="flex justify-between text-sm mb-1.5">
                 <span className="text-slate-600 font-medium">Memory</span>
-                <span className="text-slate-500">{router ? `${router.memPct}% of ${router.memTotal}GB` : '—'}</span>
+                <span className="text-slate-500">{router ? `${router.memPct}% of ${router.memTotal} MB` : '—'}</span>
               </div>
               <Progress value={router?.memPct ?? 0} color="bg-gradient-to-r from-emerald-400 to-emerald-500" />
             </div>
@@ -156,6 +194,7 @@ export default function Dashboard() {
               <MiniStat icon={<AlertTriangle size={16} />} label="Expired" value={router?.expired ?? 0} tone="text-rose-600" bg="bg-rose-50 border-rose-100" />
             </div>
           </div>
+          )}
         </Card>
       </div>
 
@@ -238,7 +277,7 @@ export default function Dashboard() {
         </Card>
       </div>
 
-      <InterfaceTraffic />
+      <InterfaceTraffic routerId={current?.id} routerName={current?.name} />
     </Layout>
   );
 }

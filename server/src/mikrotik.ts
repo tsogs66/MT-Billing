@@ -155,3 +155,98 @@ export async function listRouterFiles(conn: RouterConn): Promise<RouterFileRow[]
     }));
   });
 }
+
+function parseRouterMemMb(raw: string | undefined): number {
+  if (!raw) return 0;
+  const m = raw.match(/^([\d.]+)\s*(\w+)?/i);
+  if (!m) return 0;
+  const n = Number(m[1]);
+  const unit = (m[2] || 'B').toLowerCase();
+  if (unit.startsWith('g')) return n * 1024;
+  if (unit.startsWith('m')) return n;
+  if (unit.startsWith('k')) return n / 1024;
+  return n / (1024 * 1024);
+}
+
+export interface RouterDashboardStats {
+  live: boolean;
+  board: string | null;
+  uptime: string | null;
+  cpuLoad: number;
+  memPct: number;
+  memTotalMb: number;
+}
+
+/** Live CPU, memory, uptime and board from a MikroTik router. */
+export async function fetchRouterDashboardStats(conn: RouterConn): Promise<RouterDashboardStats> {
+  try {
+    return await withRouter(conn, async (api) => {
+      const rows = (await api.write('/system/resource/print')) as Record<string, string>[];
+      const r = rows[0] || {};
+      const totalMb = parseRouterMemMb(r['total-memory']);
+      const freeMb = parseRouterMemMb(r['free-memory']);
+      const usedMb = Math.max(0, totalMb - freeMb);
+      return {
+        live: true,
+        board: r['board-name'] || null,
+        uptime: r.uptime || null,
+        cpuLoad: Number(r['cpu-load']) || 0,
+        memPct: totalMb > 0 ? Number(((usedMb / totalMb) * 100).toFixed(1)) : 0,
+        memTotalMb: Number(totalMb.toFixed(1)),
+      };
+    });
+  } catch {
+    return { live: false, board: null, uptime: null, cpuLoad: 0, memPct: 0, memTotalMb: 0 };
+  }
+}
+
+/** Queue tree entries from the router (name + bits/sec rate). */
+export async function fetchRouterQueues(conn: RouterConn): Promise<{ name: string; avgRate: number }[]> {
+  return withRouter(conn, async (api) => {
+    const rows = (await api.write('/queue/tree/print')) as Record<string, string>[];
+    return (rows || [])
+      .filter((q) => q.name)
+      .map((q) => {
+        const bps = Number(q.rate || q['bytes'] || 0);
+        // RouterOS rate is often bits/sec; convert to Mbps for display consistency.
+        const mbps = bps > 10_000 ? bps / 1_000_000 : bps;
+        return { name: q.name, avgRate: Number(mbps.toFixed(3)) || 0 };
+      })
+      .sort((a, b) => b.avgRate - a.avgRate);
+  });
+}
+
+/** Interface names from the router. */
+export async function fetchRouterInterfaceNames(conn: RouterConn): Promise<string[]> {
+  return withRouter(conn, async (api) => {
+    const rows = (await api.write('/interface/print')) as Record<string, string>[];
+    return (rows || [])
+      .filter((i) => i.name && i.disabled !== 'true')
+      .map((i) => i.name);
+  });
+}
+
+/** One-shot traffic sample for a set of interfaces on the router. */
+export async function fetchRouterInterfaceTraffic(
+  conn: RouterConn,
+  names: string[]
+): Promise<{ name: string; upload: number; download: number }[]> {
+  if (!names.length) return [];
+  return withRouter(conn, async (api) => {
+    const out: { name: string; upload: number; download: number }[] = [];
+    for (const name of names) {
+      try {
+        const rows = (await api.write('/interface/monitor-traffic', [`=interface=${name}`, '=once='])) as Record<string, string>[];
+        const r = rows[0] || {};
+        out.push({
+          name,
+          upload: Number(r['tx-bits-per-second']) || 0,
+          download: Number(r['rx-bits-per-second']) || 0,
+        });
+      } catch {
+        out.push({ name, upload: 0, download: 0 });
+      }
+    }
+    return out;
+  });
+}
