@@ -23,14 +23,19 @@ import License from './pages/License';
 import AiScripting from './pages/AiScripting';
 import TerminalPage from './pages/Terminal';
 import { Loader2 } from 'lucide-react';
+import Logo from './components/Logo';
 
 function Protected({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
   const loc = useLocation();
   if (loading)
     return (
-      <div className="min-h-screen flex items-center justify-center text-slate-400">
-        <Loader2 className="animate-spin" />
+      <div className="min-h-screen flex flex-col items-center justify-center bg-slate-950 bg-mesh-dark gap-6">
+        <Logo size="lg" variant="dark" className="animate-pulse-soft" />
+        <div className="flex items-center gap-3 text-slate-400">
+          <Loader2 className="animate-spin text-brand-400" size={20} />
+          <span className="text-sm font-medium">Loading panel…</span>
+        </div>
       </div>
     );
   if (!user) return <Navigate to="/login" state={{ from: loc }} replace />;

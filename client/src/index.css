@@ -4,6 +4,9 @@
 
 :root {
   color-scheme: light;
+  --brand: #f97316;
+  --brand-glow: rgba(249, 115, 22, 0.35);
+  --sidebar-width: 260px;
 }
 
 html,
@@ -15,22 +18,33 @@ body,
 body {
   margin: 0;
   background: #f1f5f9;
-  color: #1f2937;
+  color: #0f172a;
   font-family: 'Inter', system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 /* Thin scrollbars */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
 }
 ::-webkit-scrollbar-thumb {
   background: #cbd5e1;
-  border-radius: 8px;
+  border-radius: 999px;
 }
 ::-webkit-scrollbar-thumb:hover {
   background: #94a3b8;
+}
+
+.sidebar-scroll::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.25);
+}
+.sidebar-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.4);
 }
 
 .leaflet-container {
@@ -82,15 +96,55 @@ body {
 
 @layer components {
   .card {
-    @apply bg-white rounded-xl border border-slate-200 shadow-sm;
+    @apply bg-white/90 backdrop-blur-sm rounded-2xl border border-slate-200/80 shadow-card transition-all duration-300;
+  }
+  .card-interactive {
+    @apply card hover:shadow-card-hover hover:border-slate-300/80 hover:-translate-y-0.5;
+  }
+  .card-header {
+    @apply flex items-center justify-between px-5 py-3.5 border-b border-slate-100/80;
+  }
+  .card-title {
+    @apply font-semibold text-slate-800 tracking-tight;
   }
   .btn-primary {
-    @apply inline-flex items-center gap-2 bg-brand-500 hover:bg-brand-600 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors;
+    @apply inline-flex items-center justify-center gap-2 bg-gradient-to-r from-brand-500 to-brand-600 hover:from-brand-600 hover:to-brand-700 text-white text-sm font-semibold px-4 py-2.5 rounded-xl shadow-glow-sm hover:shadow-glow transition-all duration-200 active:scale-[0.98];
+  }
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 bg-white border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-slate-700 text-sm font-medium px-4 py-2 rounded-xl transition-all duration-200;
+  }
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 text-slate-500 hover:text-slate-800 hover:bg-slate-100/80 text-sm font-medium px-3 py-2 rounded-xl transition-all duration-200;
   }
   .badge {
-    @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium;
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold tracking-wide;
   }
   .input {
-    @apply w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500;
+    @apply w-full border border-slate-200 bg-white/80 rounded-xl px-3.5 py-2.5 text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-400 transition-all duration-200;
   }
+  .section-title {
+    @apply text-sm font-semibold uppercase tracking-wider text-slate-400 mb-3 flex items-center gap-2;
+  }
+  .glass {
+    @apply bg-white/70 backdrop-blur-xl border border-white/20;
+  }
+  .nav-active-indicator {
+    @apply absolute left-0 top-1/2 -translate-y-1/2 w-1 h-6 rounded-r-full bg-brand-500 shadow-glow-sm;
+  }
+  .stat-tile {
+    @apply card-interactive px-4 py-4 relative overflow-hidden;
+  }
+  .stat-tile::before {
+    content: '';
+    @apply absolute inset-0 bg-gradient-to-br from-white to-slate-50/50 pointer-events-none;
+  }
+  .page-enter {
+    @apply animate-fade-in-up;
+  }
+  .stagger-1 { animation-delay: 0.05s; opacity: 0; }
+  .stagger-2 { animation-delay: 0.1s; opacity: 0; }
+  .stagger-3 { animation-delay: 0.15s; opacity: 0; }
+  .stagger-4 { animation-delay: 0.2s; opacity: 0; }
+  .stagger-5 { animation-delay: 0.25s; opacity: 0; }
+  .stagger-6 { animation-delay: 0.3s; opacity: 0; }
 }
