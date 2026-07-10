@@ -175,9 +175,9 @@ settingsRouter.post('/routers', (req, res) => {
   const b = req.body || {};
   if (!b.name) return res.status(400).json({ error: 'name is required' });
   const info = db
-    .prepare('INSERT INTO routers (name, host, port, api_user, api_pass, board, type, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-    .run(b.name, b.host || null, Number(b.port) || 8728, b.api_user || null, b.api_pass || null, b.board || null, b.type || 'pppoe', b.status || 'online');
-  res.status(201).json(db.prepare('SELECT id, name, host, port, board, type, status FROM routers WHERE id = ?').get(info.lastInsertRowid));
+    .prepare('INSERT INTO routers (name, host, port, ssh_port, api_user, api_pass, board, type, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(b.name, b.host || null, Number(b.port) || 8728, Number(b.ssh_port) || 22, b.api_user || null, b.api_pass || null, b.board || null, b.type || 'pppoe', b.status || 'online');
+  res.status(201).json(db.prepare('SELECT id, name, host, port, ssh_port, board, type, status FROM routers WHERE id = ?').get(info.lastInsertRowid));
 });
 
 settingsRouter.put('/routers/:id', (req, res) => {
@@ -185,10 +185,11 @@ settingsRouter.put('/routers/:id', (req, res) => {
   const ex = db.prepare('SELECT * FROM routers WHERE id = ?').get(id) as any;
   if (!ex) return res.status(404).json({ error: 'not found' });
   const b = req.body || {};
-  db.prepare('UPDATE routers SET name=?, host=?, port=?, api_user=?, api_pass=?, board=?, type=?, status=? WHERE id=?').run(
+  db.prepare('UPDATE routers SET name=?, host=?, port=?, ssh_port=?, api_user=?, api_pass=?, board=?, type=?, status=? WHERE id=?').run(
     b.name ?? ex.name,
     b.host ?? ex.host,
     Number(b.port) || ex.port,
+    Number(b.ssh_port) || ex.ssh_port || 22,
     b.api_user ?? ex.api_user,
     b.api_pass != null && b.api_pass !== '' ? b.api_pass : ex.api_pass,
     b.board ?? ex.board,
@@ -196,7 +197,7 @@ settingsRouter.put('/routers/:id', (req, res) => {
     b.status ?? ex.status,
     id
   );
-  res.json(db.prepare('SELECT id, name, host, port, board, type, status FROM routers WHERE id = ?').get(id));
+  res.json(db.prepare('SELECT id, name, host, port, ssh_port, board, type, status FROM routers WHERE id = ?').get(id));
 });
 
 settingsRouter.delete('/routers/:id', (req, res) => {

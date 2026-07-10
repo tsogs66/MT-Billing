@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import http from 'http';
 import express from 'express';
 import cors from 'cors';
 import bcrypt from 'bcryptjs';
@@ -10,6 +11,7 @@ import { getUptime, getUptimeSummary, runUptimeChecks, startUptime } from './upt
 import { getInterfaceNames, getTrafficSnapshot } from './interfaces.js';
 import { settingsRouter } from './settings.js';
 import { aiRouter } from './ai.js';
+import { terminalRouter, initTerminalWs } from './terminal.js';
 import { extraRouter, initExtra } from './extra.js';
 import {
   getPublicSettings as getNotifySettings,
@@ -67,7 +69,7 @@ app.use('/api', requireAuth);
 
 // ---- Routers ----
 app.get('/api/routers', (_req, res) => {
-  res.json(db.prepare('SELECT id, name, host, port, board, type, status FROM routers').all());
+  res.json(db.prepare('SELECT id, name, host, port, ssh_port, board, type, status FROM routers').all());
 });
 
 function getRouter(id: number) {
@@ -862,11 +864,15 @@ app.post('/api/notifications/run', async (_req, res) => {
 
 app.use('/api', settingsRouter);
 app.use('/api', aiRouter);
+app.use('/api', terminalRouter);
 app.use('/api', extraRouter);
 
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
 
-app.listen(PORT, () => {
+const server = http.createServer(app);
+initTerminalWs(server);
+
+server.listen(PORT, () => {
   console.log(`MT-Billing API listening on http://localhost:${PORT}`);
   startUptime(60000);
   startNotifyScheduler(5 * 60 * 1000);

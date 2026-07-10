@@ -429,7 +429,7 @@ function RouterManagement({ flash }: any) {
     <Section icon={<RouterIcon size={20} className="text-brand-500" />} title="Router Management">
       <div className="space-y-3">
         <div className="flex justify-end">
-          <button className="btn-primary" onClick={() => setEdit({ name: '', host: '', port: 8728, api_user: '', api_pass: '', board: '', type: 'pppoe', status: 'online' })}>
+          <button className="btn-primary" onClick={() => setEdit({ name: '', host: '', port: 8728, ssh_port: 22, api_user: '', api_pass: '', board: '', type: 'pppoe', status: 'online' })}>
             <Plus size={16} /> Add Router
           </button>
         </div>
@@ -438,7 +438,7 @@ function RouterManagement({ flash }: any) {
             <div key={r.id} className="flex items-center justify-between px-4 py-3">
               <div>
                 <div className="font-medium text-slate-800">{r.name}</div>
-                <div className="text-xs text-slate-400">{r.host}:{r.port} · {(r.type || '').toUpperCase()} · {r.board || 'no board'}</div>
+                <div className="text-xs text-slate-400">{r.host}:{r.port} · SSH:{r.ssh_port ?? 22} · {(r.type || '').toUpperCase()} · {r.board || 'no board'}</div>
               </div>
               <div className="flex items-center gap-3 text-slate-400">
                 <StatusBadge status={r.status} />
@@ -491,9 +491,10 @@ function RouterModal({ router, onClose, onSaved }: any) {
         </div>
         <div className="p-5 space-y-3">
           <Labeled label="Name"><input className="input" value={form.name || ''} onChange={(e) => set({ name: e.target.value })} /></Labeled>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-3 gap-3">
             <Labeled label="Host / IP"><input className="input" value={form.host || ''} onChange={(e) => set({ host: e.target.value })} /></Labeled>
             <Labeled label="API Port"><input className="input" type="number" value={form.port || 8728} onChange={(e) => set({ port: Number(e.target.value) })} /></Labeled>
+            <Labeled label="SSH Port"><input className="input" type="number" value={form.ssh_port ?? 22} onChange={(e) => set({ ssh_port: Number(e.target.value) })} /></Labeled>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <Labeled label="API User"><input className="input" value={form.api_user || ''} onChange={(e) => set({ api_user: e.target.value })} /></Labeled>

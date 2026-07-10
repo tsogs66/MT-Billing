@@ -45,6 +45,7 @@ export function initSchema() {
       name TEXT NOT NULL,
       host TEXT,
       port INTEGER DEFAULT 8728,
+      ssh_port INTEGER DEFAULT 22,
       api_user TEXT,
       api_pass TEXT,
       board TEXT,
@@ -256,6 +257,9 @@ export function migrate() {
   ];
   for (const [col, type] of appCols) {
     if (!columnExists('app_settings', col)) db.exec(`ALTER TABLE app_settings ADD COLUMN ${col} ${type}`);
+  }
+  if (!columnExists('routers', 'ssh_port')) {
+    db.exec('ALTER TABLE routers ADD COLUMN ssh_port INTEGER DEFAULT 22');
   }
 
   db.prepare("UPDATE naps SET name = 'OLT Main Server' WHERE kind = 'olt' AND name = 'OLT-1'").run();
