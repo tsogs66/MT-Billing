@@ -4,6 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { exec } from 'child_process';
 import { db, backupsDir, dbPath } from './db.js';
+import { probeRouter } from './mikrotik.js';
 
 export const settingsRouter = express.Router();
 
@@ -191,30 +192,67 @@ settingsRouter.post('/settings/restart-server', (_req, res) => {
 });
 
 // ---------- Router management (CRUD) ----------
-settingsRouter.post('/routers', (req, res) => {
+settingsRouter.post('/routers/test', async (req, res) => {
+  const b = req.body || {};
+  const id = Number(b.id) || 0;
+  const ex = id ? (db.prepare('SELECT * FROM routers WHERE id = ?').get(id) as any) : null;
+  const conn = {
+    host: b.host || ex?.host,
+    port: Number(b.port) || ex?.port || 8728,
+    api_user: b.api_user || ex?.api_user,
+    api_pass: b.api_pass != null && b.api_pass !== '' ? b.api_pass : ex?.api_pass || '',
+  };
+  const result = await probeRouter(conn);
+  res.json({
+    online: result.online,
+    status: result.online ? 'online' : 'offline',
+    board: result.board,
+    identity: result.identity,
+    version: result.version,
+    error: result.error,
+  });
+});
+
+settingsRouter.post('/routers', async (req, res) => {
   const b = req.body || {};
   if (!b.name) return res.status(400).json({ error: 'name is required' });
+  const conn = {
+    host: b.host,
+    port: Number(b.port) || 8728,
+    api_user: b.api_user,
+    api_pass: b.api_pass || '',
+  };
+  const probe = await probeRouter(conn);
+  const status = probe.online ? 'online' : 'offline';
+  const board = probe.board || b.board || null;
   const info = db
     .prepare('INSERT INTO routers (name, host, port, ssh_port, api_user, api_pass, board, type, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-    .run(b.name, b.host || null, Number(b.port) || 8728, Number(b.ssh_port) || 22, b.api_user || null, b.api_pass || null, b.board || null, b.type || 'pppoe', b.status || 'online');
+    .run(b.name, b.host || null, Number(b.port) || 8728, Number(b.ssh_port) || 22, b.api_user || null, b.api_pass || null, board, b.type || 'pppoe', status);
   res.status(201).json(db.prepare('SELECT id, name, host, port, ssh_port, board, type, status FROM routers WHERE id = ?').get(info.lastInsertRowid));
 });
 
-settingsRouter.put('/routers/:id', (req, res) => {
+settingsRouter.put('/routers/:id', async (req, res) => {
   const id = Number(req.params.id);
   const ex = db.prepare('SELECT * FROM routers WHERE id = ?').get(id) as any;
   if (!ex) return res.status(404).json({ error: 'not found' });
   const b = req.body || {};
+  const host = b.host ?? ex.host;
+  const port = Number(b.port) || ex.port;
+  const api_user = b.api_user ?? ex.api_user;
+  const api_pass = b.api_pass != null && b.api_pass !== '' ? b.api_pass : ex.api_pass;
+  const probe = await probeRouter({ host, port, api_user, api_pass });
+  const status = probe.online ? 'online' : 'offline';
+  const board = probe.board || b.board || ex.board;
   db.prepare('UPDATE routers SET name=?, host=?, port=?, ssh_port=?, api_user=?, api_pass=?, board=?, type=?, status=? WHERE id=?').run(
     b.name ?? ex.name,
-    b.host ?? ex.host,
-    Number(b.port) || ex.port,
+    host,
+    port,
     Number(b.ssh_port) || ex.ssh_port || 22,
-    b.api_user ?? ex.api_user,
-    b.api_pass != null && b.api_pass !== '' ? b.api_pass : ex.api_pass,
-    b.board ?? ex.board,
+    api_user,
+    api_pass,
+    board,
     b.type ?? ex.type,
-    b.status ?? ex.status,
+    status,
     id
   );
   res.json(db.prepare('SELECT id, name, host, port, ssh_port, board, type, status FROM routers WHERE id = ?').get(id));

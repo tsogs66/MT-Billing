@@ -62,7 +62,9 @@ function WanFailover() {
       <Card title="Monitored WAN Routes" noPadding>
         <DataTable
           columns={[
+            { key: 'router', label: 'Router' },
             { key: 'gateway', label: 'Gateway' },
+            { key: 'iface', label: 'Interface' },
             { key: 'checkMethod', label: 'Check Method' },
             { key: 'distance', label: 'Distance' },
             { key: 'status', label: 'Status' },
@@ -71,7 +73,9 @@ function WanFailover() {
           rows={routes.map((r) => ({
             key: r.id,
             cells: [
+              <span className="text-slate-600 text-sm">{r.routerName || '—'}</span>,
               <span className="text-sky-600 font-medium">{r.gateway}</span>,
+              <span className="font-mono text-xs text-slate-500">{r.interfaceName || '—'}</span>,
               r.checkMethod,
               r.distance,
               <StatusBadge status={r.enabled ? 'Active' : 'disabled'} />,

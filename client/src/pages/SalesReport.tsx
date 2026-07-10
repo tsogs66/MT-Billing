@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { BarChart, Bar, ResponsiveContainer, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
-import { Wallet, Receipt, TrendingUp, CalendarDays } from 'lucide-react';
+import { Wallet, Receipt, TrendingUp, CalendarDays, Trash2 } from 'lucide-react';
 import Layout from '../components/Layout';
-import { Card, StatTile, TabPills, DataTable } from '../components/ui';
+import { Card, StatTile, TabPills, DataTable, Flash } from '../components/ui';
 import { api, peso } from '../api';
 
 const GROUPS = [
@@ -15,16 +15,61 @@ export default function SalesReport() {
   const [range, setRange] = useState('month');
   const [sales, setSales] = useState<any>(null);
   const [tx, setTx] = useState<any[]>([]);
+  const [flash, setFlash] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
+  const [clearMonth, setClearMonth] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const loadSales = () => api.get(`/sales?group=${range}`).then((r) => setSales(r.data));
+  const loadTx = () => api.get('/sales/transactions').then((r) => setTx(r.data));
 
   useEffect(() => {
-    api.get(`/sales?group=${range}`).then((r) => setSales(r.data));
+    loadSales();
   }, [range]);
   useEffect(() => {
-    api.get('/sales/transactions').then((r) => setTx(r.data));
+    loadTx();
   }, []);
+
+  const refresh = () => {
+    loadSales();
+    loadTx();
+  };
+
+  const clearAll = async () => {
+    if (!confirm('Delete ALL sales transactions? This cannot be undone.')) return;
+    setBusy(true);
+    try {
+      const r = await api.delete('/sales/transactions');
+      setFlash({ type: 'success', msg: `Cleared ${r.data.deleted} transaction(s).` });
+      refresh();
+    } catch (e: any) {
+      setFlash({ type: 'error', msg: e?.response?.data?.error || 'Clear failed' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const clearMonthReports = async () => {
+    if (!clearMonth || !/^\d{4}-\d{2}$/.test(clearMonth)) {
+      setFlash({ type: 'error', msg: 'Enter month as YYYY-MM (e.g. 2026-07)' });
+      return;
+    }
+    if (!confirm(`Delete all transactions for ${clearMonth}?`)) return;
+    setBusy(true);
+    try {
+      const r = await api.delete('/sales/transactions', { params: { month: clearMonth } });
+      setFlash({ type: 'success', msg: `Cleared ${r.data.deleted} transaction(s) for ${clearMonth}.` });
+      refresh();
+    } catch (e: any) {
+      setFlash({ type: 'error', msg: e?.response?.data?.error || 'Clear failed' });
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <Layout title="Sales Report">
+      {flash && <Flash type={flash.type} message={flash.msg} onDismiss={() => setFlash(null)} />}
+
       <div className="grid grid-cols-2 md:grid-cols-4 gap-5 mb-5">
         <StatTile label="Net Revenue" value={peso(sales?.total ?? 0)} icon={Wallet} tone="text-brand-600" accent="from-brand-500/15 to-transparent" delay={0} />
         <StatTile label="Transactions" value={sales?.transactions ?? 0} icon={Receipt} delay={50} />
@@ -52,7 +97,28 @@ export default function SalesReport() {
         </div>
       </Card>
 
-      <div className="mt-5">
+      <div className="mt-5 space-y-5">
+        <Card title="Clear reports" className="max-w-2xl">
+          <p className="text-sm text-slate-500 mb-4">Remove payment transactions from the sales database. Charts and totals update immediately.</p>
+          <div className="flex flex-wrap items-end gap-3">
+            <div>
+              <label className="text-xs text-slate-500 block mb-1">Month (YYYY-MM)</label>
+              <input
+                className="input w-40 font-mono"
+                placeholder="2026-07"
+                value={clearMonth}
+                onChange={(e) => setClearMonth(e.target.value)}
+              />
+            </div>
+            <button type="button" className="btn-secondary" onClick={clearMonthReports} disabled={busy}>
+              Clear selected month
+            </button>
+            <button type="button" className="inline-flex items-center gap-2 text-sm text-rose-600 border border-rose-200 rounded-lg px-4 py-2 hover:bg-rose-50" onClick={clearAll} disabled={busy}>
+              <Trash2 size={15} /> Clear all reports
+            </button>
+          </div>
+        </Card>
+
         <Card title="Recent Transactions">
           <DataTable
             columns={[

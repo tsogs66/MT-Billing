@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Router as RouterIcon, Plus, Pencil, Trash2 } from 'lucide-react';
+import { Router as RouterIcon, Plus, Pencil, Trash2, Wifi } from 'lucide-react';
 import Layout from '../components/Layout';
 import { Card, StatusBadge, EmptyState, Modal, ModalFooter, FormField } from '../components/ui';
 import { api } from '../api';
@@ -24,7 +24,7 @@ export default function Routers() {
   return (
     <Layout title="Routers">
       <div className="flex justify-end mb-4">
-        <button className="btn-primary" onClick={() => setEdit({ name: '', host: '', port: 8728, api_user: '', api_pass: '', board: '', type: 'pppoe', status: 'online' })}>
+        <button className="btn-primary" onClick={() => setEdit({ name: '', host: '', port: 8728, api_user: '', api_pass: '', board: '', type: 'pppoe', status: 'offline' })}>
           <Plus size={16} /> Add Router
         </button>
       </div>
@@ -67,8 +67,23 @@ export default function Routers() {
 function RouterModal({ router, onClose, onSaved }: any) {
   const [form, setForm] = useState({ ...router, api_pass: '' });
   const [busy, setBusy] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<any>(null);
   const isEdit = !!router.id;
   const set = (patch: any) => setForm((f: any) => ({ ...f, ...patch }));
+  const test = async () => {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const r = await api.post('/routers/test', { ...form, id: router.id });
+      setTestResult(r.data);
+      if (r.data.board) set({ board: r.data.board });
+    } catch (e: any) {
+      setTestResult({ online: false, error: e?.response?.data?.error || 'Test failed' });
+    } finally {
+      setTesting(false);
+    }
+  };
   const save = async () => {
     if (!form.name?.trim()) return;
     setBusy(true);
@@ -84,9 +99,31 @@ function RouterModal({ router, onClose, onSaved }: any) {
     <Modal
       title={isEdit ? 'Edit Router' : 'Add Router'}
       onClose={onClose}
-      footer={<ModalFooter onCancel={onClose} onConfirm={save} busy={busy} />}
+      footer={
+        <div className="flex items-center justify-between w-full gap-2">
+          <button type="button" className="btn-secondary" onClick={test} disabled={testing || !form.host}>
+            <Wifi size={16} className={testing ? 'animate-pulse' : ''} />
+            {testing ? 'Testing…' : 'Test connection'}
+          </button>
+          <ModalFooter onCancel={onClose} onConfirm={save} busy={busy} />
+        </div>
+      }
     >
       <div className="space-y-3">
+        {testResult && (
+          <div className={`text-sm rounded-lg px-3 py-2 ${testResult.online ? 'bg-emerald-50 text-emerald-800' : 'bg-rose-50 text-rose-800'}`}>
+            {testResult.online ? (
+              <>
+                <b>Connected</b>
+                {testResult.board && <> · Board: {testResult.board}</>}
+                {testResult.identity && <> · Identity: {testResult.identity}</>}
+                {testResult.version && <> · {testResult.version}</>}
+              </>
+            ) : (
+              <>Not reachable{testResult.error ? `: ${testResult.error}` : ''}</>
+            )}
+          </div>
+        )}
         <FormField label="Name" required>
           <input className="input" value={form.name || ''} onChange={(e) => set({ name: e.target.value })} />
         </FormField>
@@ -114,7 +151,7 @@ function RouterModal({ router, onClose, onSaved }: any) {
             </select>
           </FormField>
           <FormField label="Board">
-            <input className="input" value={form.board || ''} onChange={(e) => set({ board: e.target.value })} />
+            <input className="input" value={form.board || ''} onChange={(e) => set({ board: e.target.value })} placeholder="Auto-filled after Test" readOnly={!!testResult?.board} />
           </FormField>
         </div>
       </div>

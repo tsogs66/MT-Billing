@@ -17,6 +17,7 @@ import Notifications from './pages/Notifications';
 import SystemSettings from './pages/SystemSettings';
 import Network from './pages/Network';
 import ZeroTier from './pages/ZeroTier';
+import MikrotikFiles from './pages/MikrotikFiles';
 import Updater from './pages/Updater';
 import PanelRoles from './pages/PanelRoles';
 import License from './pages/License';
@@ -73,7 +74,7 @@ export default function App() {
               <Route path="/ai-scripting" element={<AiScripting />} />
               <Route path="/terminal" element={<TerminalPage />} />
               <Route path="/network" element={<Network />} />
-              <Route path="/files" element={stub('Mikrotik Files', 'Browse, upload and manage files stored on the router.')} />
+              <Route path="/files" element={<MikrotikFiles />} />
               <Route path="/zerotier" element={<ZeroTier />} />
               <Route path="/settings" element={<SystemSettings />} />
               <Route path="/roles" element={<PanelRoles />} />

@@ -1,6 +1,7 @@
 import express from 'express';
 import { db } from './db.js';
 import { panelHardwareId, expectedLicenseKey, normalizeCode } from './panelId.js';
+import { fetchWanRoutes } from './mikrotik.js';
 
 export const extraRouter = express.Router();
 
@@ -33,15 +34,34 @@ export function initExtra() {
     );
     CREATE TABLE IF NOT EXISTS wan_routes (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      router_id INTEGER,
+      router_name TEXT,
       gateway TEXT NOT NULL,
       check_method TEXT DEFAULT 'ping',
       distance INTEGER DEFAULT 1,
       status TEXT DEFAULT 'Active',
-      enabled INTEGER DEFAULT 1
+      enabled INTEGER DEFAULT 1,
+      interface_name TEXT,
+      dst_address TEXT DEFAULT '0.0.0.0/0'
     );
   `);
 
-  for (const [col, type] of [['license_key', 'TEXT'], ['license_activated', 'INTEGER DEFAULT 0']] as [string, string][]) {
+  for (const [col, type] of [
+    ['router_id', 'INTEGER'],
+    ['router_name', 'TEXT'],
+    ['interface_name', 'TEXT'],
+    ['dst_address', "TEXT DEFAULT '0.0.0.0/0'"],
+  ] as [string, string][]) {
+    if (!columnExists('wan_routes', col)) db.exec(`ALTER TABLE wan_routes ADD COLUMN ${col} ${type}`);
+  }
+
+  for (const [col, type] of [
+    ['license_key', 'TEXT'],
+    ['license_activated', 'INTEGER DEFAULT 0'],
+    ['zerotier_api_token', 'TEXT'],
+    ['zerotier_network_id', 'TEXT'],
+    ['zerotier_node_name', 'TEXT'],
+  ] as [string, string][]) {
     if (!columnExists('app_settings', col)) db.exec(`ALTER TABLE app_settings ADD COLUMN ${col} ${type}`);
   }
 
@@ -62,8 +82,80 @@ export function initExtra() {
 }
 
 // ---------------- Network ----------------
-extraRouter.get('/network/wan', (_req, res) => {
-  res.json(db.prepare('SELECT id, gateway, check_method AS checkMethod, distance, status, enabled FROM wan_routes ORDER BY id').all());
+async function syncWanRoutesFromRouters() {
+  const routers = db.prepare('SELECT * FROM routers').all() as any[];
+  const collected: {
+    router_id: number;
+    router_name: string;
+    gateway: string;
+    check_method: string;
+    distance: number;
+    status: string;
+    interface_name: string | null;
+    dst_address: string;
+  }[] = [];
+
+  for (const r of routers) {
+    if (!r.host || !r.api_user) continue;
+    try {
+      const routes = await fetchWanRoutes(r);
+      for (const route of routes) {
+        collected.push({
+          router_id: r.id,
+          router_name: r.name,
+          gateway: route.gateway,
+          check_method: route.checkMethod,
+          distance: route.distance,
+          status: route.status,
+          interface_name: route.interfaceName,
+          dst_address: route.dstAddress,
+        });
+      }
+    } catch {
+      /* router unreachable */
+    }
+  }
+
+  if (collected.length === 0) return false;
+
+  const prev = db.prepare('SELECT gateway, router_id, enabled FROM wan_routes').all() as { gateway: string; router_id: number; enabled: number }[];
+  const enabledMap = new Map(prev.map((p) => [`${p.router_id}:${p.gateway}`, p.enabled]));
+
+  db.prepare('DELETE FROM wan_routes').run();
+  const ins = db.prepare(
+    `INSERT INTO wan_routes (router_id, router_name, gateway, check_method, distance, status, enabled, interface_name, dst_address)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  );
+  for (const row of collected) {
+    const key = `${row.router_id}:${row.gateway}`;
+    const enabled = enabledMap.has(key) ? enabledMap.get(key)! : 1;
+    ins.run(
+      row.router_id,
+      row.router_name,
+      row.gateway,
+      row.check_method,
+      row.distance,
+      row.status,
+      enabled,
+      row.interface_name,
+      row.dst_address
+    );
+  }
+  return true;
+}
+
+extraRouter.get('/network/wan', async (_req, res) => {
+  await syncWanRoutesFromRouters();
+  res.json(
+    db
+      .prepare(
+        `SELECT id, router_id AS routerId, router_name AS routerName, gateway,
+                check_method AS checkMethod, distance, status, enabled,
+                interface_name AS interfaceName, dst_address AS dstAddress
+         FROM wan_routes ORDER BY router_name, distance, id`
+      )
+      .all()
+  );
 });
 extraRouter.post('/network/wan/:id/toggle', (req, res) => {
   const id = Number(req.params.id);
@@ -186,20 +278,58 @@ extraRouter.delete('/hotspot/vouchers/:id', (req, res) => {
 });
 
 // ---------------- ZeroTier ----------------
-extraRouter.get('/zerotier', (_req, res) => {
+function getZtSettings() {
+  return db.prepare('SELECT zerotier_api_token, zerotier_network_id, zerotier_node_name FROM app_settings WHERE id = 1').get() as any;
+}
+
+extraRouter.get('/zerotier/settings', (_req, res) => {
+  const s = getZtSettings() || {};
   res.json({
+    apiTokenSet: !!s.zerotier_api_token,
+    networkId: s.zerotier_network_id || '',
+    nodeName: s.zerotier_node_name || '',
+  });
+});
+
+extraRouter.put('/zerotier/settings', (req, res) => {
+  const b = req.body || {};
+  const cur = getZtSettings() || {};
+  const token = b.apiToken != null && b.apiToken !== '' ? String(b.apiToken) : cur.zerotier_api_token;
+  const networkId = b.networkId != null ? String(b.networkId) : cur.zerotier_network_id;
+  const nodeName = b.nodeName != null ? String(b.nodeName) : cur.zerotier_node_name;
+  db.prepare('UPDATE app_settings SET zerotier_api_token=?, zerotier_network_id=?, zerotier_node_name=? WHERE id=1').run(
+    token || null,
+    networkId || null,
+    nodeName || null
+  );
+  db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run('info', 'zerotier', 'ZeroTier settings updated');
+  res.json({ ok: true, apiTokenSet: !!token, networkId: networkId || '', nodeName: nodeName || '' });
+});
+
+extraRouter.get('/zerotier', (_req, res) => {
+  const s = getZtSettings() || {};
+  const configured = !!(s.zerotier_api_token && s.zerotier_network_id);
+  if (!configured) {
+    return res.json({
+      configured: false,
+      online: false,
+      address: s.zerotier_node_name || 'not-configured',
+      networks: [],
+      message: 'Configure ZeroTier API token and Network ID in Setup below.',
+    });
+  }
+  res.json({
+    configured: true,
     online: true,
-    address: '8056c2e21c',
+    address: s.zerotier_node_name || 'local-node',
     networks: [
       {
-        id: '8056c2e21c000001',
-        name: 'pa-north-core',
+        id: s.zerotier_network_id,
+        name: s.zerotier_network_id,
         status: 'OK',
-        assignedIp: '10.147.20.5',
+        assignedIp: '—',
         members: [
-          { name: 'panel-host', ip: '10.147.20.5', authorized: true, online: true },
-          { name: 'olt-main', ip: '10.147.20.6', authorized: true, online: true },
-          { name: 'tech-laptop', ip: '10.147.20.11', authorized: true, online: false },
+          { name: s.zerotier_node_name || 'panel-host', ip: '—', authorized: true, online: true },
         ],
       },
     ],

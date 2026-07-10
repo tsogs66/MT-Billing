@@ -7,7 +7,7 @@ import si from 'systeminformation';
 import { db, initSchema, seed, migrate } from './db.js';
 import { signToken, requireAuth, type AuthedRequest } from './auth.js';
 import { panelHardwareId, expectedPasswordResetCode, normalizeCode } from './panelId.js';
-import { tryLiveResource, withRouter } from './mikrotik.js';
+import { tryLiveResource, withRouter, probeRouter, fetchWanRoutes, listRouterFiles } from './mikrotik.js';
 import { getUptime, getUptimeSummary, runUptimeChecks, startUptime } from './uptime.js';
 import { getInterfaceNames, getTrafficSnapshot } from './interfaces.js';
 import { settingsRouter } from './settings.js';
@@ -128,8 +128,26 @@ app.post('/api/auth/forgot-password-reset', (req, res) => {
 app.use('/api', requireAuth);
 
 // ---- Routers ----
-app.get('/api/routers', (_req, res) => {
-  res.json(db.prepare('SELECT id, name, host, port, ssh_port, board, type, status FROM routers').all());
+app.get('/api/routers', async (_req, res) => {
+  const rows = db.prepare('SELECT id, name, host, port, ssh_port, board, type, status, api_user, api_pass FROM routers').all() as any[];
+  const out = await Promise.all(
+    rows.map(async (r) => {
+      const probe = await probeRouter({
+        host: r.host,
+        port: r.port,
+        api_user: r.api_user,
+        api_pass: r.api_pass,
+      });
+      const status = probe.online ? 'online' : 'offline';
+      const board = probe.board || r.board;
+      if (status !== r.status || (probe.board && probe.board !== r.board)) {
+        db.prepare('UPDATE routers SET status = ?, board = ? WHERE id = ?').run(status, board, r.id);
+      }
+      const { api_user: _u, api_pass: _p, ...pub } = r;
+      return { ...pub, status, board };
+    })
+  );
+  res.json(out);
 });
 
 function getRouter(id: number) {
@@ -316,6 +334,31 @@ app.get('/api/sales/transactions', (_req, res) => {
   res.json(
     db.prepare('SELECT id, customer_name AS customer, amount, type, created_at AS date FROM transactions ORDER BY created_at DESC LIMIT 200').all()
   );
+});
+
+app.delete('/api/sales/transactions', (req, res) => {
+  const month = req.query.month ? String(req.query.month) : null;
+  if (month) {
+    if (!/^\d{4}-\d{2}$/.test(month)) {
+      return res.status(400).json({ error: 'month must be YYYY-MM' });
+    }
+    const info = db
+      .prepare("DELETE FROM transactions WHERE strftime('%Y-%m', created_at) = ?")
+      .run(month);
+    db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+      'warning',
+      'sales',
+      `Cleared ${info.changes} transaction(s) for ${month}`
+    );
+    return res.json({ ok: true, deleted: info.changes, month });
+  }
+  const info = db.prepare('DELETE FROM transactions').run();
+  db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+    'warning',
+    'sales',
+    `Cleared all ${info.changes} transaction(s)`
+  );
+  res.json({ ok: true, deleted: info.changes });
 });
 
 // ---- PPPoE ----
@@ -830,15 +873,109 @@ app.get('/api/map', (_req, res) => {
 });
 
 // ---- NAPs (for the Add-User NAP/PLC selector) ----
-app.get('/api/naps', (_req, res) => {
+app.get('/api/naps', (req, res) => {
+  const all = req.query.all === '1';
+  const where = all ? '' : "WHERE n.kind = 'nap'";
   const rows = db
     .prepare(
-      `SELECT n.id, n.name, n.ports, n.parent_id AS parentId,
+      `SELECT n.id, n.name, n.kind, n.ports, n.lat, n.lng, n.parent_id AS parentId,
               (SELECT name FROM naps o WHERE o.id = n.parent_id) AS oltName
-       FROM naps n WHERE n.kind = 'nap' ORDER BY n.id`
+       FROM naps n ${where} ORDER BY n.kind DESC, n.id`
     )
     .all();
   res.json(rows);
+});
+
+app.post('/api/naps', (req, res) => {
+  const b = req.body || {};
+  if (!b.name?.trim()) return res.status(400).json({ error: 'name is required' });
+  const info = db
+    .prepare('INSERT INTO naps (name, kind, lat, lng, ports, parent_id) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(
+      String(b.name).trim(),
+      b.kind || 'nap',
+      b.lat != null ? Number(b.lat) : null,
+      b.lng != null ? Number(b.lng) : null,
+      Number(b.ports) || 8,
+      b.parentId ? Number(b.parentId) : null
+    );
+  res.status(201).json(db.prepare('SELECT id, name, kind, lat, lng, ports, parent_id AS parentId FROM naps WHERE id = ?').get(info.lastInsertRowid));
+});
+
+app.put('/api/naps/:id', (req, res) => {
+  const id = Number(req.params.id);
+  const ex = db.prepare('SELECT * FROM naps WHERE id = ?').get(id) as any;
+  if (!ex) return res.status(404).json({ error: 'not found' });
+  const b = req.body || {};
+  db.prepare('UPDATE naps SET name=?, kind=?, lat=?, lng=?, ports=?, parent_id=? WHERE id=?').run(
+    b.name ?? ex.name,
+    b.kind ?? ex.kind,
+    b.lat != null ? Number(b.lat) : ex.lat,
+    b.lng != null ? Number(b.lng) : ex.lng,
+    b.ports != null ? Number(b.ports) : ex.ports,
+    b.parentId !== undefined ? (b.parentId ? Number(b.parentId) : null) : ex.parent_id,
+    id
+  );
+  res.json(db.prepare('SELECT id, name, kind, lat, lng, ports, parent_id AS parentId FROM naps WHERE id = ?').get(id));
+});
+
+app.delete('/api/naps/:id', (req, res) => {
+  const id = Number(req.params.id);
+  const used = (db.prepare('SELECT COUNT(*) AS c FROM pppoe_users WHERE nap_id = ?').get(id) as any).c;
+  if (used > 0) return res.status(400).json({ error: 'NAP is assigned to clients. Reassign them first.' });
+  const children = (db.prepare('SELECT COUNT(*) AS c FROM naps WHERE parent_id = ?').get(id) as any).c;
+  if (children > 0) return res.status(400).json({ error: 'Remove child NAPs first.' });
+  db.prepare('DELETE FROM naps WHERE id = ?').run(id);
+  res.json({ ok: true });
+});
+
+// ---- MikroTik file manager ----
+app.get('/api/files', async (req, res) => {
+  const routerId = Number(req.query.routerId);
+  const router = getRouter(routerId);
+  if (!router) return res.status(400).json({ error: 'Router not found' });
+  try {
+    const files = await listRouterFiles(router);
+    res.json({ router: router.name, live: true, files });
+  } catch (e: any) {
+    res.status(502).json({ error: e?.message || 'Could not list files from router' });
+  }
+});
+
+app.delete('/api/files', async (req, res) => {
+  const routerId = Number(req.query.routerId);
+  const name = String(req.query.name || '');
+  const router = getRouter(routerId);
+  if (!router || !name) return res.status(400).json({ error: 'routerId and name are required' });
+  try {
+    await withRouter(router, (api) => api.write('/file/remove', [`=numbers=${name}`]));
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(502).json({ error: e?.message || 'Could not delete file' });
+  }
+});
+
+app.post('/api/files/upload', async (req, res) => {
+  const routerId = Number(req.body?.routerId);
+  const name = String(req.body?.name || '').trim();
+  const content = req.body?.content;
+  const router = getRouter(routerId);
+  if (!router || !name) return res.status(400).json({ error: 'routerId and name are required' });
+  if (content == null) return res.status(400).json({ error: 'content is required' });
+  const text = typeof content === 'string' ? content : Buffer.from(content, 'base64').toString('utf8');
+  if (text.length > 64000) return res.status(400).json({ error: 'File too large (max 64KB via API)' });
+  try {
+    await withRouter(router, async (api) => {
+      const existing = (await api.write('/file/print', [`?name=${name}`])) as any[];
+      if (!existing?.length) {
+        await api.write('/file/add', [`=name=${name}`]);
+      }
+      await api.write('/file/set', [`=name=${name}`, `=contents=${text}`]);
+    });
+    res.json({ ok: true, name });
+  } catch (e: any) {
+    res.status(502).json({ error: e?.message || 'Could not upload file' });
+  }
 });
 
 // ---- Geocoding proxy (OpenStreetMap Nominatim) ----
