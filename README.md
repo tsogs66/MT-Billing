@@ -87,28 +87,46 @@ data otherwise).
 | `npm run lint`      | Lint the frontend |
 | `npm --prefix server run build` | Compile the backend to `server/dist` |
 | `npm --prefix server run start` | Run the compiled backend |
-| `scripts/proxmox-install.sh` | Proxmox LXC + Ubuntu guest install helper (see below) |
+| `scripts/proxmox-install.sh` | Wrapper → `ct/mt-billing.sh` Proxmox one-liner |
 
 ## Deploying on Ubuntu (Proxmox)
 
-Use the helper script for a guided install on Proxmox VE:
+### One-liner (recommended)
+
+Run on your **Proxmox VE host** as root — creates an Ubuntu 24.04 LXC (2 CPU, 4 GB RAM, 32 GB disk) and installs everything unattended:
 
 ```bash
-# On the Proxmox host — create an Ubuntu 24.04 LXC (adjust storage/bridge/IP)
-sudo ./scripts/proxmox-install.sh create-lxc --ctid 120 --ip dhcp
-
-# Inside the new container/VM — install Node, build, nginx + systemd
-sudo ./scripts/proxmox-install.sh install
-# Or from an existing clone:
-sudo ./scripts/proxmox-install.sh install --source /path/to/MT-Billing
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/tsogs66/MT-Billing/main/ct/mt-billing.sh)"
 ```
 
-Manual steps (if you prefer):
+Unattended default install (no menu):
+
+```bash
+mode=default bash -c "$(curl -fsSL https://raw.githubusercontent.com/tsogs66/MT-Billing/main/ct/mt-billing.sh)"
+```
+
+Optional environment variables:
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `var_repo_branch` | `main` | Git branch to deploy |
+| `var_admin_user` | `admin` | First-run admin username |
+| `var_admin_pass` | `admin123` | First-run admin password |
+| `var_jwt_secret` | *(random)* | JWT signing secret |
+
+Uses [community-scripts](https://github.com/community-scripts/ProxmoxVE) `build.func` for storage/network prompts and container creation. Guest install script: `install/mt-billing-install.sh`.
+
+### Manual install (inside an existing VM/LXC)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tsogs66/MT-Billing/main/install/mt-billing-install.sh | bash
+```
+
+Or step by step:
 
 1. Create an Ubuntu 22.04/24.04 VM or LXC on Proxmox.
 2. Install Node.js 20+ and `git`.
 3. Clone the repo, run `npm install`, then `npm run build` and
    `npm --prefix server run build`.
-4. Serve `client/dist` with a static server / reverse proxy (nginx) and run the
-   compiled API (`npm --prefix server run start`) behind it, e.g. under
-   `systemd`. Point the frontend/reverse proxy at the API on `PORT`.
+4. Serve `client/dist` with nginx and run the compiled API (`npm --prefix server run start`) via
+   `systemd`. Point the reverse proxy at the API on `PORT`.
