@@ -110,7 +110,40 @@ export function initSchema() {
       email TEXT,
       currency TEXT DEFAULT 'PHP'
     );
+
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
   `);
+}
+
+export const DEFAULT_SETTINGS: Record<string, string> = {
+  panel_name: 'Pa-North',
+  timezone: 'Asia/Manila',
+  date_format: 'YYYY-MM-DD',
+  map_refresh_sec: '30',
+  billing_grace_days: '3',
+  auto_suspend_expired: '1',
+  notification_email: '',
+  session_timeout_hours: '12',
+};
+
+export function getSettings(): Record<string, string> {
+  const rows = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
+  return { ...DEFAULT_SETTINGS, ...Object.fromEntries(rows.map((r) => [r.key, r.value])) };
+}
+
+export function setSetting(key: string, value: string) {
+  db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, value);
+}
+
+export function setSettings(updates: Record<string, string>) {
+  const stmt = db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value');
+  const tx = db.transaction((entries: [string, string][]) => {
+    for (const [k, v] of entries) stmt.run(k, v);
+  });
+  tx(Object.entries(updates));
 }
 
 function count(table: string): number {
@@ -314,5 +347,10 @@ export function seed() {
     ins.run('info', 'pppoe', 'Synced 72 PPPoE secrets from PPPoE MT Router');
     ins.run('warning', 'router', 'IPoE MT Router API latency high (240ms)');
     ins.run('info', 'billing', 'Generated 54 invoices for the current cycle');
+  }
+
+  if (count('settings') === 0) {
+    const ins = db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)');
+    for (const [k, v] of Object.entries(DEFAULT_SETTINGS)) ins.run(k, v);
   }
 }

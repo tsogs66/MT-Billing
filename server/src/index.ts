@@ -3,7 +3,10 @@ import express from 'express';
 import cors from 'cors';
 import bcrypt from 'bcryptjs';
 import si from 'systeminformation';
-import { db, initSchema, seed, migrate } from './db.js';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
+import { db, initSchema, seed, migrate, getSettings, setSettings } from './db.js';
 import { signToken, requireAuth, type AuthedRequest } from './auth.js';
 import { tryLiveResource } from './mikrotik.js';
 import { getUptime, getUptimeSummary, runUptimeChecks, startUptime } from './uptime.js';
@@ -384,6 +387,89 @@ app.get('/api/uptime', (_req, res) => {
 app.post('/api/uptime/check', async (_req, res) => {
   await runUptimeChecks();
   res.json({ summary: getUptimeSummary(), monitors: getUptime() });
+});
+
+// ---- System Settings ----
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const DB_PATH = path.join(__dirname, '..', 'data', 'mt-billing.db');
+const PANEL_VERSION = '1.0.0-beta2';
+
+app.get('/api/settings', (_req, res) => {
+  const dbStat = fs.existsSync(DB_PATH) ? fs.statSync(DB_PATH) : null;
+  const counts = {
+    users: (db.prepare('SELECT COUNT(*) AS c FROM users').get() as { c: number }).c,
+    routers: (db.prepare('SELECT COUNT(*) AS c FROM routers').get() as { c: number }).c,
+    subscribers: (db.prepare('SELECT COUNT(*) AS c FROM pppoe_users').get() as { c: number }).c,
+    transactions: (db.prepare('SELECT COUNT(*) AS c FROM transactions').get() as { c: number }).c,
+    logs: (db.prepare('SELECT COUNT(*) AS c FROM logs').get() as { c: number }).c,
+  };
+  res.json({
+    settings: getSettings(),
+    info: {
+      version: PANEL_VERSION,
+      nodeVersion: process.version,
+      dbSize: dbStat?.size ?? 0,
+      dbModified: dbStat?.mtime.toISOString() ?? null,
+      counts,
+    },
+  });
+});
+
+app.put('/api/settings', (req, res) => {
+  const allowed = [
+    'panel_name', 'timezone', 'date_format', 'map_refresh_sec',
+    'billing_grace_days', 'auto_suspend_expired', 'notification_email', 'session_timeout_hours',
+  ];
+  const updates: Record<string, string> = {};
+  for (const key of allowed) {
+    if (req.body?.[key] != null) updates[key] = String(req.body[key]);
+  }
+  if (updates.map_refresh_sec) {
+    const sec = Math.max(10, Math.min(300, Number(updates.map_refresh_sec) || 30));
+    updates.map_refresh_sec = String(sec);
+  }
+  if (updates.billing_grace_days) {
+    const days = Math.max(0, Math.min(30, Number(updates.billing_grace_days) || 0));
+    updates.billing_grace_days = String(days);
+  }
+  if (updates.session_timeout_hours) {
+    const hrs = Math.max(1, Math.min(72, Number(updates.session_timeout_hours) || 12));
+    updates.session_timeout_hours = String(hrs);
+  }
+  if (Object.keys(updates).length === 0) return res.status(400).json({ error: 'no valid settings provided' });
+  setSettings(updates);
+  db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+    'info', 'settings', `Panel settings updated: ${Object.keys(updates).join(', ')}`
+  );
+  res.json({ settings: getSettings() });
+});
+
+app.put('/api/settings/password', (req: AuthedRequest, res) => {
+  const { currentPassword, newPassword } = req.body || {};
+  if (!currentPassword || !newPassword) return res.status(400).json({ error: 'current and new password required' });
+  if (String(newPassword).length < 6) return res.status(400).json({ error: 'new password must be at least 6 characters' });
+  const row = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user!.id) as
+    | { id: number; password_hash: string }
+    | undefined;
+  if (!row || !bcrypt.compareSync(currentPassword, row.password_hash)) {
+    return res.status(401).json({ error: 'current password is incorrect' });
+  }
+  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(bcrypt.hashSync(newPassword, 10), row.id);
+  db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+    'info', 'settings', `Password changed for user ${req.user!.username}`
+  );
+  res.json({ ok: true });
+});
+
+app.get('/api/settings/backup', (_req, res) => {
+  if (!fs.existsSync(DB_PATH)) return res.status(404).json({ error: 'database not found' });
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  res.setHeader('Content-Type', 'application/octet-stream');
+  res.setHeader('Content-Disposition', `attachment; filename="mt-billing-backup-${stamp}.sqlite"`);
+  db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+    'info', 'settings', 'Database backup downloaded'
+  );
+  fs.createReadStream(DB_PATH).pipe(res);
 });
 
 app.get('/api/health', (_req, res) => res.json({ ok: true }));

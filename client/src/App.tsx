@@ -13,6 +13,7 @@ import Hotspot from './pages/Hotspot';
 import Logs from './pages/Logs';
 import Company from './pages/Company';
 import Uptime from './pages/Uptime';
+import Settings from './pages/Settings';
 import { Loader2 } from 'lucide-react';
 
 function Protected({ children }: { children: React.ReactNode }) {
@@ -60,7 +61,7 @@ export default function App() {
               <Route path="/network" element={stub('Network', 'Interfaces, IP addresses, DHCP, firewall and routing overview.')} />
               <Route path="/files" element={stub('Mikrotik Files', 'Browse, upload and manage files stored on the router.')} />
               <Route path="/zerotier" element={stub('ZeroTier', 'Manage ZeroTier networks and member authorization.')} />
-              <Route path="/settings" element={stub('System Settings', 'Panel configuration, backups, notifications and integrations.')} />
+              <Route path="/settings" element={<Settings />} />
               <Route path="/roles" element={stub('Panel Roles', 'Create roles and assign granular permissions to operators.')} />
               <Route path="/updater" element={stub('Updater', 'Check for panel updates and apply them safely.')} />
               <Route path="/super-router" element={stub('Super Router', 'Central controller for managing multiple MikroTik routers.')} />

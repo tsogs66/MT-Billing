@@ -24,7 +24,8 @@ topology), sales reporting, hotspot vouchers, inventory and more.
   services, sites and games (Google, YouTube, Facebook, Steam, Roblox, Riot,
   Cloudflare/Google DNS, etc.) grouped by category with sparklines and uptime %.
 - **Sales Report** – revenue chart (7d / 30d / 6m / 1y) and recent transactions.
-- **Stock & Inventory**, **Hotspot vouchers**, **Company profile**, **System Logs**,
+- **Stock & Inventory**, **Hotspot vouchers**, **Company profile**, **System Settings**
+  (panel config, password change, SQLite backup), **System Logs**,
   plus placeholders for AI Scripting, Terminal, Network, Mikrotik Files, ZeroTier,
   Panel Roles, Updater, Super Router and License.
 - **MikroTik RouterOS API integration** (`node-routeros`) with graceful fallback
