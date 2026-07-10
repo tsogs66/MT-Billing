@@ -1,20 +1,22 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Settings as SettingsIcon, Sun, Moon, Monitor, Database as DbIcon, Bot, Clock, KeyRound,
-  Router as RouterIcon, Globe2, Download, Trash2, RefreshCw, Plus, Pencil, X,
+  Router as RouterIcon, Globe2, Download, Trash2, RefreshCw, Plus, Pencil,
 } from 'lucide-react';
 import Layout from '../components/Layout';
-import { Card, StatusBadge } from '../components/ui';
+import {
+  StatusBadge, TabBar, Flash, LoadingPage, SettingsSection, Modal, ModalFooter, FormField,
+} from '../components/ui';
 import { api } from '../api';
 
 const TABS = [
-  ['panel', 'Panel Settings'],
-  ['ngrok', 'Ngrok Remote Access'],
-  ['database', 'Database Management'],
-  ['ai', 'AI Settings'],
-  ['time', 'Time Synchronization'],
-  ['account', 'Account Reset'],
-  ['routers', 'Router Management'],
+  { key: 'panel', label: 'Panel Settings', icon: SettingsIcon },
+  { key: 'ngrok', label: 'Ngrok Remote Access', icon: Globe2 },
+  { key: 'database', label: 'Database Management', icon: DbIcon },
+  { key: 'ai', label: 'AI Settings', icon: Bot },
+  { key: 'time', label: 'Time Synchronization', icon: Clock },
+  { key: 'account', label: 'Account Reset', icon: KeyRound },
+  { key: 'routers', label: 'Router Management', icon: RouterIcon },
 ] as const;
 
 export default function SystemSettings() {
@@ -38,23 +40,19 @@ export default function SystemSettings() {
     flash('Settings saved.');
   };
 
-  if (!app) return <Layout title="System Settings"><div className="text-slate-400">Loading…</div></Layout>;
+  if (!app) {
+    return (
+      <Layout title="System Settings">
+        <LoadingPage />
+      </Layout>
+    );
+  }
 
   return (
     <Layout title="System Settings">
-      {banner && <div className="mb-4 text-sm bg-emerald-50 text-emerald-700 border border-emerald-100 rounded-lg px-4 py-2.5">{banner}</div>}
+      <Flash message={banner} onDismiss={() => setBanner('')} />
 
-      <div className="flex items-center gap-1 border-b border-slate-200 mb-5 overflow-x-auto">
-        {TABS.map(([key, label]) => (
-          <button
-            key={key}
-            onClick={() => setTab(key)}
-            className={`px-4 py-2 text-sm border-b-2 whitespace-nowrap ${tab === key ? 'border-brand-500 text-brand-600 font-medium' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
+      <TabBar tabs={[...TABS]} active={tab} onChange={setTab} className="mb-5" />
 
       {tab === 'panel' && <PanelSettings app={app} setA={setA} save={saveApp} />}
       {tab === 'ngrok' && <NgrokSettings app={app} setA={setA} save={saveApp} flash={flash} reload={load} />}
@@ -67,18 +65,6 @@ export default function SystemSettings() {
   );
 }
 
-function Section({ icon, title, children }: { icon: React.ReactNode; title: string; children: React.ReactNode }) {
-  return (
-    <div className="card max-w-4xl">
-      <div className="flex items-center gap-2 px-5 py-4 border-b border-slate-100">
-        {icon}
-        <h3 className="text-brand-600 font-bold text-lg">{title}</h3>
-      </div>
-      <div className="p-6">{children}</div>
-    </div>
-  );
-}
-
 function PanelSettings({ app, setA, save }: any) {
   const themes = [
     ['light', 'Light', Sun],
@@ -86,7 +72,7 @@ function PanelSettings({ app, setA, save }: any) {
     ['system', 'System', Monitor],
   ] as const;
   return (
-    <Section icon={<SettingsIcon size={20} className="text-brand-500" />} title="Panel Settings">
+    <SettingsSection icon={SettingsIcon} title="Panel Settings">
       <div className="space-y-5 max-w-2xl">
         <div>
           <span className="text-sm font-semibold text-slate-700 mb-1 block">Theme</span>
@@ -123,7 +109,7 @@ function PanelSettings({ app, setA, save }: any) {
           <button className="btn-primary" onClick={() => save()}>Save Panel Settings</button>
         </div>
       </div>
-    </Section>
+    </SettingsSection>
   );
 }
 
@@ -139,7 +125,7 @@ function NgrokSettings({ app, setA, save, flash, reload }: any) {
     }
   };
   return (
-    <Section icon={<Globe2 size={20} className="text-brand-500" />} title="Ngrok Remote Access">
+    <SettingsSection icon={Globe2} title="Ngrok Remote Access">
       <div className="space-y-4 max-w-2xl">
         <p className="text-sm text-slate-500">Expose the panel securely over the internet via an ngrok tunnel.</p>
         <div className="flex items-center justify-between rounded-lg border border-slate-100 px-4 py-3">
@@ -172,7 +158,7 @@ function NgrokSettings({ app, setA, save, flash, reload }: any) {
           <button className="btn-primary" onClick={() => save(token ? { ngrok_authtoken: token } : {})}>Save Ngrok Settings</button>
         </div>
       </div>
-    </Section>
+    </SettingsSection>
   );
 }
 
@@ -242,7 +228,7 @@ function DatabaseManagement({ flash }: any) {
   const fmtSize = (n: number) => (n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${(n / 1024).toFixed(0)} KB`);
 
   return (
-    <Section icon={<DbIcon size={20} className="text-brand-500" />} title="Database Management">
+    <SettingsSection icon={DbIcon} title="Database Management">
       <div className="space-y-5">
         <button className="w-full flex items-center justify-center gap-2 bg-sky-600 hover:bg-sky-700 text-white font-medium py-2.5 rounded-lg" onClick={createBackup} disabled={busy}>
           <DbIcon size={16} /> Create New Backup
@@ -282,14 +268,14 @@ function DatabaseManagement({ flash }: any) {
           )}
         </div>
       </div>
-    </Section>
+    </SettingsSection>
   );
 }
 
 function AiSettings({ app, setA, save }: any) {
   const [key, setKey] = useState('');
   return (
-    <Section icon={<Bot size={20} className="text-brand-500" />} title="AI Settings">
+    <SettingsSection icon={Bot} title="AI Settings">
       <div className="space-y-4 max-w-2xl">
         <p className="text-sm text-slate-500">
           Full Claude &amp; Cursor API setup lives under{' '}
@@ -322,7 +308,7 @@ function AiSettings({ app, setA, save }: any) {
           <button className="btn-primary" onClick={() => save(key ? { ai_api_key: key } : {})}>Save AI Settings</button>
         </div>
       </div>
-    </Section>
+    </SettingsSection>
   );
 }
 
@@ -341,7 +327,7 @@ function TimeSync({ app, setA, save, flash }: any) {
   };
   const zones = ['Asia/Manila', 'Asia/Singapore', 'Asia/Tokyo', 'UTC', 'America/Los_Angeles', 'Europe/London'];
   return (
-    <Section icon={<Clock size={20} className="text-brand-500" />} title="Time Synchronization">
+    <SettingsSection icon={Clock} title="Time Synchronization">
       <div className="space-y-4 max-w-2xl">
         <div className="rounded-lg bg-slate-50 border border-slate-100 px-4 py-3">
           <div className="text-xs text-slate-400">Server time</div>
@@ -365,7 +351,7 @@ function TimeSync({ app, setA, save, flash }: any) {
           <button className="btn-primary" onClick={() => save()}>Save Time Settings</button>
         </div>
       </div>
-    </Section>
+    </SettingsSection>
   );
 }
 
@@ -393,7 +379,7 @@ function AccountReset({ flash }: any) {
     }
   };
   return (
-    <Section icon={<KeyRound size={20} className="text-brand-500" />} title="Account Reset">
+    <SettingsSection icon={KeyRound} title="Account Reset">
       <div className="space-y-4 max-w-md">
         <p className="text-sm text-slate-500">Change the password for the current panel account.</p>
         <label className="block">
@@ -406,7 +392,7 @@ function AccountReset({ flash }: any) {
         </label>
         <button className="btn-primary" onClick={submit} disabled={busy}>{busy ? 'Saving…' : 'Reset Password'}</button>
       </div>
-    </Section>
+    </SettingsSection>
   );
 }
 
@@ -426,7 +412,7 @@ function RouterManagement({ flash }: any) {
   };
 
   return (
-    <Section icon={<RouterIcon size={20} className="text-brand-500" />} title="Router Management">
+    <SettingsSection icon={RouterIcon} title="Router Management">
       <div className="space-y-3">
         <div className="flex justify-end">
           <button className="btn-primary" onClick={() => setEdit({ name: '', host: '', port: 8728, ssh_port: 22, api_user: '', api_pass: '', board: '', type: 'pppoe', status: 'online' })}>
@@ -462,7 +448,7 @@ function RouterManagement({ flash }: any) {
           }}
         />
       )}
-    </Section>
+    </SettingsSection>
   );
 }
 
@@ -483,47 +469,46 @@ function RouterModal({ router, onClose, onSaved }: any) {
     }
   };
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-[1000] p-4" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100">
-          <h3 className="font-semibold text-slate-700">{isEdit ? 'Edit Router' : 'Add Router'}</h3>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X size={18} /></button>
+    <Modal
+      title={isEdit ? 'Edit Router' : 'Add Router'}
+      onClose={onClose}
+      footer={<ModalFooter onCancel={onClose} onConfirm={save} busy={busy} />}
+    >
+      <div className="space-y-3">
+        <FormField label="Name" required>
+          <input className="input" value={form.name || ''} onChange={(e) => set({ name: e.target.value })} />
+        </FormField>
+        <div className="grid grid-cols-3 gap-3">
+          <FormField label="Host / IP">
+            <input className="input" value={form.host || ''} onChange={(e) => set({ host: e.target.value })} />
+          </FormField>
+          <FormField label="API Port">
+            <input className="input" type="number" value={form.port || 8728} onChange={(e) => set({ port: Number(e.target.value) })} />
+          </FormField>
+          <FormField label="SSH Port">
+            <input className="input" type="number" value={form.ssh_port ?? 22} onChange={(e) => set({ ssh_port: Number(e.target.value) })} />
+          </FormField>
         </div>
-        <div className="p-5 space-y-3">
-          <Labeled label="Name"><input className="input" value={form.name || ''} onChange={(e) => set({ name: e.target.value })} /></Labeled>
-          <div className="grid grid-cols-3 gap-3">
-            <Labeled label="Host / IP"><input className="input" value={form.host || ''} onChange={(e) => set({ host: e.target.value })} /></Labeled>
-            <Labeled label="API Port"><input className="input" type="number" value={form.port || 8728} onChange={(e) => set({ port: Number(e.target.value) })} /></Labeled>
-            <Labeled label="SSH Port"><input className="input" type="number" value={form.ssh_port ?? 22} onChange={(e) => set({ ssh_port: Number(e.target.value) })} /></Labeled>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <Labeled label="API User"><input className="input" value={form.api_user || ''} onChange={(e) => set({ api_user: e.target.value })} /></Labeled>
-            <Labeled label="API Password"><input className="input" type="password" placeholder={isEdit ? '(leave blank to keep)' : ''} value={form.api_pass || ''} onChange={(e) => set({ api_pass: e.target.value })} /></Labeled>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <Labeled label="Type">
-              <select className="input" value={form.type || 'pppoe'} onChange={(e) => set({ type: e.target.value })}>
-                <option value="pppoe">PPPoE</option>
-                <option value="ipoe">IPoE</option>
-              </select>
-            </Labeled>
-            <Labeled label="Board"><input className="input" value={form.board || ''} onChange={(e) => set({ board: e.target.value })} /></Labeled>
-          </div>
+        <div className="grid grid-cols-2 gap-3">
+          <FormField label="API User">
+            <input className="input" value={form.api_user || ''} onChange={(e) => set({ api_user: e.target.value })} />
+          </FormField>
+          <FormField label="API Password">
+            <input className="input" type="password" placeholder={isEdit ? '(leave blank to keep)' : ''} value={form.api_pass || ''} onChange={(e) => set({ api_pass: e.target.value })} />
+          </FormField>
         </div>
-        <div className="flex justify-end gap-2 px-5 py-3 border-t border-slate-100">
-          <button className="px-4 py-2 text-sm rounded-lg text-slate-600 hover:bg-slate-100" onClick={onClose}>Cancel</button>
-          <button className="btn-primary" onClick={save} disabled={busy}>{busy ? 'Saving…' : 'Save'}</button>
+        <div className="grid grid-cols-2 gap-3">
+          <FormField label="Type">
+            <select className="input" value={form.type || 'pppoe'} onChange={(e) => set({ type: e.target.value })}>
+              <option value="pppoe">PPPoE</option>
+              <option value="ipoe">IPoE</option>
+            </select>
+          </FormField>
+          <FormField label="Board">
+            <input className="input" value={form.board || ''} onChange={(e) => set({ board: e.target.value })} />
+          </FormField>
         </div>
       </div>
-    </div>
-  );
-}
-
-function Labeled({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <label className="block">
-      <span className="text-sm text-slate-600 mb-1 block">{label}</span>
-      {children}
-    </label>
+    </Modal>
   );
 }

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { RefreshCw, Activity, CheckCircle2, AlertTriangle, XCircle, Gauge } from 'lucide-react';
 import Layout from '../components/Layout';
-import { Card } from '../components/ui';
+import { Card, StatTile } from '../components/ui';
 import { api } from '../api';
 
 interface Sample { t: number; up: boolean; ms: number | null }
@@ -51,9 +51,9 @@ function Sparkline({ history }: { history: Sample[] }) {
     .join(' ');
   return (
     <svg width={w} height={h} className="overflow-visible">
-      <path d={path} fill="none" stroke="#0ea5e9" strokeWidth={1.5} />
+      <path d={path} fill="none" stroke="#f97316" strokeWidth={1.5} />
       {pts.map((p, i) => (
-        <circle key={i} cx={i * step} cy={p.up ? h - ((p.ms ?? 0) / max) * (h - 4) - 2 : h - 2} r={1.6} fill={p.up ? '#0ea5e9' : '#ef4444'} />
+        <circle key={i} cx={i * step} cy={p.up ? h - ((p.ms ?? 0) / max) * (h - 4) - 2 : h - 2} r={1.6} fill={p.up ? '#f97316' : '#ef4444'} />
       ))}
     </svg>
   );
@@ -95,39 +95,39 @@ export default function Uptime() {
 
   return (
     <Layout title="Uptime Monitor">
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-5">
-        <Card><Metric icon={<Activity size={16} />} label="Monitored" value={summary?.total ?? '—'} tone="text-slate-700" /></Card>
-        <Card><Metric icon={<CheckCircle2 size={16} />} label="Operational" value={summary?.up ?? '—'} tone="text-emerald-600" /></Card>
-        <Card><Metric icon={<AlertTriangle size={16} />} label="Degraded" value={summary?.degraded ?? '—'} tone="text-amber-600" /></Card>
-        <Card><Metric icon={<XCircle size={16} />} label="Down" value={summary?.down ?? '—'} tone="text-rose-600" /></Card>
-        <Card><Metric icon={<Gauge size={16} />} label="Avg latency" value={summary?.avgMs != null ? `${summary.avgMs} ms` : '—'} tone="text-sky-600" /></Card>
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+        <StatTile label="Monitored" value={summary?.total ?? '—'} icon={Activity} tone="text-slate-700" delay={0} />
+        <StatTile label="Operational" value={summary?.up ?? '—'} icon={CheckCircle2} tone="text-emerald-600" accent="from-emerald-500/15 to-transparent" delay={50} />
+        <StatTile label="Degraded" value={summary?.degraded ?? '—'} icon={AlertTriangle} tone="text-amber-600" accent="from-amber-500/15 to-transparent" delay={100} />
+        <StatTile label="Down" value={summary?.down ?? '—'} icon={XCircle} tone="text-rose-600" accent="from-rose-500/15 to-transparent" delay={150} />
+        <StatTile label="Avg latency" value={summary?.avgMs != null ? `${summary.avgMs} ms` : '—'} icon={Gauge} tone="text-sky-600" accent="from-sky-500/15 to-transparent" delay={200} />
       </div>
 
-      <div className="flex items-center justify-between mb-3">
-        <div className="text-sm text-slate-400">
-          Last check: <span className="text-slate-600">{ago(summary?.lastRun ?? null)}</span> · auto-refreshes every 30s
+      <div className="flex items-center justify-between mb-4">
+        <div className="text-sm text-slate-500">
+          Last check: <span className="font-medium text-slate-700">{ago(summary?.lastRun ?? null)}</span> · auto-refreshes every 30s
         </div>
-        <button className="btn-primary" onClick={refresh} disabled={checking}>
-          <RefreshCw size={16} className={checking ? 'animate-spin' : ''} /> {checking ? 'Checking...' : 'Check now'}
+        <button type="button" className="btn-primary" onClick={refresh} disabled={checking}>
+          <RefreshCw size={16} className={checking ? 'animate-spin' : ''} /> {checking ? 'Checking…' : 'Check now'}
         </button>
       </div>
 
       <div className="space-y-5">
         {Object.entries(grouped).map(([category, list]) => (
-          <Card key={category} title={category}>
+          <Card key={category} title={category} icon={Activity} interactive>
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-8 gap-y-1">
               {list.map((m) => {
                 const st = STATUS[m.status] || STATUS.pending;
                 return (
-                  <div key={m.id} className="flex items-center gap-4 py-2.5 border-b border-slate-50 last:border-0">
-                    <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${st.dot} ${m.status === 'up' ? 'animate-pulse' : ''}`} />
+                  <div key={m.id} className="flex items-center gap-4 py-3 border-b border-slate-50 last:border-0 hover:bg-slate-50/50 rounded-lg px-1 transition-colors">
+                    <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${st.dot} ${m.status === 'up' ? 'animate-pulse-soft' : ''}`} />
                     <div className="min-w-0 flex-1">
-                      <div className="font-medium text-slate-800 truncate">{m.name}</div>
+                      <div className="font-semibold text-slate-800 truncate">{m.name}</div>
                       <div className="text-[11px] text-slate-400 truncate">{m.url.replace(/^https?:\/\//, '')}</div>
                     </div>
                     <div className="hidden sm:block"><Sparkline history={m.history} /></div>
                     <div className="text-right w-16 shrink-0">
-                      <div className="text-sm font-medium text-slate-700">{m.latencyMs != null ? `${m.latencyMs} ms` : '—'}</div>
+                      <div className="text-sm font-semibold text-slate-700">{m.latencyMs != null ? `${m.latencyMs} ms` : '—'}</div>
                       <div className="text-[11px] text-slate-400">{m.uptimePct}% up</div>
                     </div>
                     <span className={`badge ${st.cls} w-24 justify-center shrink-0`}>{st.label}</span>
@@ -139,17 +139,5 @@ export default function Uptime() {
         ))}
       </div>
     </Layout>
-  );
-}
-
-function Metric({ icon, label, value, tone }: { icon: React.ReactNode; label: string; value: React.ReactNode; tone: string }) {
-  return (
-    <div className="flex items-center gap-3">
-      <div className={`w-9 h-9 rounded-lg bg-slate-50 flex items-center justify-center ${tone}`}>{icon}</div>
-      <div>
-        <div className={`text-lg font-bold ${tone}`}>{value}</div>
-        <div className="text-xs text-slate-400">{label}</div>
-      </div>
-    </div>
   );
 }

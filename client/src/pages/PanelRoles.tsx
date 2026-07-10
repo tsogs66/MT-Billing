@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import { ShieldCheck, Plus, Pencil, Trash2, X } from 'lucide-react';
+import { ShieldCheck, Plus, Pencil, Trash2 } from 'lucide-react';
 import Layout from '../components/Layout';
-import { Card } from '../components/ui';
+import { Card, Modal, ModalFooter, FormField } from '../components/ui';
 import { api } from '../api';
 
 const PERMISSIONS = [
@@ -26,7 +26,7 @@ export default function PanelRoles() {
   return (
     <Layout title="Panel Roles">
       <div className="flex justify-end mb-4">
-        <button className="btn-primary" onClick={() => setEdit({ name: '', description: '', permissions: [] })}><Plus size={16} /> Add Role</button>
+        <button type="button" className="btn-primary" onClick={() => setEdit({ name: '', description: '', permissions: [] })}><Plus size={16} /> Add Role</button>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
@@ -38,8 +38,8 @@ export default function PanelRoles() {
                 <div className="flex items-center justify-between">
                   <h3 className="font-semibold text-slate-800">{r.name}</h3>
                   <div className="flex items-center gap-2 text-slate-400">
-                    <button className="hover:text-sky-600" onClick={() => setEdit({ ...r })}><Pencil size={15} /></button>
-                    <button className="hover:text-rose-600" onClick={() => del(r.id)}><Trash2 size={15} /></button>
+                    <button type="button" className="hover:text-sky-600" onClick={() => setEdit({ ...r })}><Pencil size={15} /></button>
+                    <button type="button" className="hover:text-rose-600" onClick={() => del(r.id)}><Trash2 size={15} /></button>
                   </div>
                 </div>
                 <div className="text-xs text-slate-400 mt-1">{r.description}</div>
@@ -87,38 +87,33 @@ function RoleModal({ role, onClose, onSaved }: any) {
     }
   };
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-[1000] p-4" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100">
-          <h3 className="font-semibold text-slate-700">{isEdit ? 'Edit Role' : 'Add Role'}</h3>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X size={18} /></button>
-        </div>
-        <div className="p-5 space-y-3">
-          <label className="block"><span className="text-sm text-slate-600 mb-1 block">Role Name</span>
-            <input className="input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
-          <label className="block"><span className="text-sm text-slate-600 mb-1 block">Description</span>
-            <input className="input" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></label>
-          <div>
-            <div className="text-sm text-slate-600 mb-1">Permissions</div>
-            <label className="flex items-center gap-2 text-sm mb-2">
-              <input type="checkbox" checked={all} onChange={() => setForm((f: any) => ({ ...f, permissions: all ? [] : ['*'] }))} /> Full access (all modules)
-            </label>
-            {!all && (
-              <div className="grid grid-cols-2 gap-1.5 max-h-44 overflow-y-auto">
-                {PERMISSIONS.map((p) => (
-                  <label key={p} className="flex items-center gap-2 text-sm">
-                    <input type="checkbox" checked={form.permissions.includes(p)} onChange={() => toggle(p)} /> {p}
-                  </label>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-        <div className="flex justify-end gap-2 px-5 py-3 border-t border-slate-100">
-          <button className="px-4 py-2 text-sm rounded-lg text-slate-600 hover:bg-slate-100" onClick={onClose}>Cancel</button>
-          <button className="btn-primary" onClick={save} disabled={busy}>{busy ? 'Saving…' : 'Save'}</button>
-        </div>
+    <Modal
+      title={isEdit ? 'Edit Role' : 'Add Role'}
+      onClose={onClose}
+      footer={<ModalFooter onCancel={onClose} onConfirm={save} busy={busy} confirmLabel="Save" />}
+    >
+      <div className="space-y-3">
+        <FormField label="Role Name" required>
+          <input className="input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+        </FormField>
+        <FormField label="Description">
+          <input className="input" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+        </FormField>
+        <FormField label="Permissions">
+          <label className="flex items-center gap-2 text-sm mb-2">
+            <input type="checkbox" checked={all} onChange={() => setForm((f: any) => ({ ...f, permissions: all ? [] : ['*'] }))} /> Full access (all modules)
+          </label>
+          {!all && (
+            <div className="grid grid-cols-2 gap-1.5 max-h-44 overflow-y-auto">
+              {PERMISSIONS.map((p) => (
+                <label key={p} className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" checked={form.permissions.includes(p)} onChange={() => toggle(p)} /> {p}
+                </label>
+              ))}
+            </div>
+          )}
+        </FormField>
       </div>
-    </div>
+    </Modal>
   );
 }

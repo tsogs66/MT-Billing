@@ -5,7 +5,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import Layout from '../components/Layout';
-import { Card, StatusBadge } from '../components/ui';
+import { Card, StatusBadge, FormField, PageHeader } from '../components/ui';
 import { api } from '../api';
 import { useRouterDevice } from '../context/RouterContext';
 
@@ -175,12 +175,16 @@ export default function TerminalPage() {
 
   return (
     <Layout title="Terminal">
+      <PageHeader
+        title="MikroTik Terminal"
+        description="SSH session to the selected router with API and demo fallback."
+        icon={TerminalSquare}
+      />
       <div className="grid grid-cols-1 xl:grid-cols-4 gap-5">
         <div className="xl:col-span-1 space-y-4">
-          <Card title="Router connection">
+          <Card title="Router connection" icon={RouterIcon} interactive>
             <div className="space-y-4">
-              <label className="block">
-                <span className="text-sm font-semibold text-slate-700 mb-1 block">Linked router</span>
+              <FormField label="Linked router" hint="Synced with the global router selector in the top bar.">
                 <select
                   className="input"
                   value={routerId}
@@ -198,13 +202,10 @@ export default function TerminalPage() {
                     <option key={r.id} value={r.id}>{r.name}</option>
                   ))}
                 </select>
-              </label>
-              <p className="text-xs text-slate-400">
-                Synced with the global router selector in the top bar.
-              </p>
+              </FormField>
 
               {info && (
-                <div className="rounded-lg bg-slate-50 border border-slate-100 p-3 text-sm space-y-2">
+                <div className="rounded-xl bg-slate-50 border border-slate-100 p-3 text-sm space-y-2">
                   <div className="flex items-center gap-2">
                     <RouterIcon size={15} className="text-slate-400" />
                     <span className="font-medium text-slate-800">{info.name}</span>
@@ -245,7 +246,8 @@ export default function TerminalPage() {
                   Connect
                 </button>
                 <button
-                  className="flex-1 flex items-center justify-center gap-2 border border-slate-200 rounded-lg text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                  type="button"
+                  className="btn-secondary flex-1"
                   onClick={disconnect}
                   disabled={!connected}
                 >
@@ -262,8 +264,8 @@ export default function TerminalPage() {
             </div>
           </Card>
 
-          <div className="card p-4 text-xs text-slate-500 space-y-2">
-            <div className="font-semibold text-slate-700 flex items-center gap-1.5">
+          <Card className="text-xs text-slate-500" interactive>
+            <div className="font-semibold text-slate-700 flex items-center gap-1.5 mb-2">
               <TerminalSquare size={14} /> Connection order
             </div>
             <ol className="list-decimal list-inside space-y-1">
@@ -271,16 +273,19 @@ export default function TerminalPage() {
               <li>RouterOS API command mode</li>
               <li>Demo terminal (offline dev)</li>
             </ol>
-          </div>
+          </Card>
         </div>
 
         <div className="xl:col-span-3">
-          <div className="card overflow-hidden p-0">
-            <div className="flex items-center justify-between px-4 py-2 border-b border-slate-800 bg-slate-900 text-slate-400 text-xs">
-              <span className="font-mono">{info ? `${info.user}@${info.host}` : 'no router selected'}</span>
-              <span>{connected ? 'live' : 'idle'}</span>
+          <div className="card overflow-hidden p-0 shadow-card-hover">
+            <div className="flex items-center justify-between px-4 py-2.5 border-b border-slate-700/50 bg-gradient-to-r from-slate-900 to-slate-800 text-slate-400 text-xs">
+              <span className="font-mono flex items-center gap-2">
+                <span className={`w-2 h-2 rounded-full ${connected ? 'bg-emerald-500 animate-pulse-soft' : 'bg-slate-500'}`} />
+                {info ? `${info.user}@${info.host}` : 'no router selected'}
+              </span>
+              <span className="uppercase tracking-wider font-semibold">{connected ? 'live' : 'idle'}</span>
             </div>
-            <div ref={termRef} className="h-[min(70vh,520px)] p-1 bg-slate-900" />
+            <div ref={termRef} className="h-[min(70vh,520px)] p-1 bg-slate-950" />
           </div>
         </div>
       </div>

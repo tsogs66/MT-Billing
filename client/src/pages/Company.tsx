@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Building2, UploadCloud } from 'lucide-react';
 import Layout from '../components/Layout';
+import { SettingsSection, FormField, Flash, LoadingPage } from '../components/ui';
 import { api } from '../api';
 
 export default function Company() {
@@ -35,24 +36,19 @@ export default function Company() {
     setTimeout(() => setSaved(false), 2500);
   };
 
-  if (!company) return <Layout title="Company"><div className="text-slate-400">Loading…</div></Layout>;
+  if (!company) return <Layout title="Company"><LoadingPage label="Loading company profile…" /></Layout>;
 
   return (
     <Layout title="Company">
-      <div className="card max-w-4xl">
-        <div className="flex items-center gap-2 px-5 py-4 border-b border-slate-100">
-          <Building2 size={20} className="text-brand-500" />
-          <h3 className="text-brand-600 font-bold text-lg">Company Branding &amp; Information</h3>
-        </div>
+      <Flash message={error} type="error" onDismiss={() => setError('')} />
+      {saved && <Flash message="Company profile saved successfully." type="success" onDismiss={() => setSaved(false)} />}
 
-        <div className="p-6 space-y-6">
-          {error && <div className="text-sm text-rose-600 bg-rose-50 rounded-lg px-3 py-2">{error}</div>}
-
-          {/* Logo */}
+      <SettingsSection icon={Building2} title="Company Branding & Information">
+        <div className="space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-[220px_1fr] gap-6 items-start">
             <div>
-              <div className="text-sm font-semibold text-slate-700 mb-2">Company Logo</div>
-              <div className="border border-slate-200 rounded-xl h-32 flex items-center justify-center bg-white overflow-hidden">
+              <div className="text-sm font-medium text-slate-700 mb-2">Company Logo</div>
+              <div className="border border-slate-200 rounded-2xl h-32 flex items-center justify-center bg-gradient-to-br from-slate-50 to-white overflow-hidden shadow-inner">
                 {company.logo ? (
                   <img src={company.logo} alt="Company logo" className="max-h-28 max-w-[90%] object-contain" />
                 ) : (
@@ -62,12 +58,12 @@ export default function Company() {
             </div>
 
             <div>
-              <div className="text-sm font-semibold text-slate-700 mb-2">Upload Logo</div>
-              <div className="flex items-center gap-3">
+              <div className="text-sm font-medium text-slate-700 mb-2">Upload Logo</div>
+              <div className="flex items-center gap-3 flex-wrap">
                 <button type="button" onClick={() => fileRef.current?.click()} className="btn-primary">
                   <UploadCloud size={16} /> Choose file
                 </button>
-                <span className="text-sm text-brand-600">{fileName}</span>
+                <span className="text-sm text-brand-600 font-medium">{fileName}</span>
                 <input ref={fileRef} type="file" accept="image/png,image/svg+xml,image/jpeg" className="hidden" onChange={onLogo} />
               </div>
               <p className="text-xs text-slate-400 mt-2">Recommended: PNG or SVG with transparent background. Max 2MB.</p>
@@ -77,32 +73,27 @@ export default function Company() {
           <div className="border-t border-slate-100" />
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-            <label className="block">
-              <span className="text-sm font-semibold text-slate-700 mb-1 block">Company Name</span>
+            <FormField label="Company Name">
               <input className="input" value={company.name || ''} onChange={(e) => setCompany({ ...company, name: e.target.value })} />
-            </label>
-            <label className="block">
-              <span className="text-sm font-semibold text-slate-700 mb-1 block">Contact Number</span>
+            </FormField>
+            <FormField label="Contact Number">
               <input className="input" value={company.phone || ''} onChange={(e) => setCompany({ ...company, phone: e.target.value })} />
-            </label>
+            </FormField>
           </div>
 
-          <label className="block">
-            <span className="text-sm font-semibold text-slate-700 mb-1 block">Email Address</span>
+          <FormField label="Email Address">
             <input className="input" type="email" value={company.email || ''} onChange={(e) => setCompany({ ...company, email: e.target.value })} />
-          </label>
+          </FormField>
 
-          <label className="block">
-            <span className="text-sm font-semibold text-slate-700 mb-1 block">Address</span>
+          <FormField label="Address">
             <textarea className="input min-h-[96px]" value={company.address || ''} onChange={(e) => setCompany({ ...company, address: e.target.value })} />
-          </label>
+          </FormField>
 
           <div className="flex items-center gap-3 pt-1">
-            <button className="btn-primary" onClick={save}>Save Changes</button>
-            {saved && <span className="text-sm text-emerald-600">Saved!</span>}
+            <button type="button" className="btn-primary" onClick={save}>Save Changes</button>
           </div>
         </div>
-      </div>
+      </SettingsSection>
     </Layout>
   );
 }

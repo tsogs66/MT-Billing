@@ -1,6 +1,10 @@
 import type { ReactNode } from 'react';
 import type { LucideIcon } from 'lucide-react';
-import { Construction, Sparkles } from 'lucide-react';
+import {
+  Construction, Sparkles, X, Loader2, CheckCircle2, AlertCircle, Inbox, Search,
+} from 'lucide-react';
+
+/* ─── Card ─── */
 
 export function Card({
   title,
@@ -9,6 +13,7 @@ export function Card({
   className = '',
   interactive = false,
   icon: Icon,
+  noPadding = false,
 }: {
   title?: string;
   right?: ReactNode;
@@ -16,6 +21,7 @@ export function Card({
   className?: string;
   interactive?: boolean;
   icon?: LucideIcon;
+  noPadding?: boolean;
 }) {
   return (
     <div className={`${interactive ? 'card-interactive' : 'card'} ${className}`}>
@@ -34,10 +40,12 @@ export function Card({
           {right}
         </div>
       )}
-      <div className="p-5">{children}</div>
+      <div className={noPadding ? '' : 'p-5'}>{children}</div>
     </div>
   );
 }
+
+/* ─── Progress ─── */
 
 export function Progress({ value, color = 'bg-gradient-to-r from-brand-400 to-brand-500' }: { value: number; color?: string }) {
   const pct = Math.min(100, Math.max(0, value));
@@ -53,12 +61,15 @@ export function Progress({ value, color = 'bg-gradient-to-r from-brand-400 to-br
   );
 }
 
+/* ─── Status badge ─── */
+
 const STATUS_STYLES: Record<string, string> = {
   Active: 'bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200/60',
   active: 'bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200/60',
   running: 'bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200/60',
   online: 'bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200/60',
   live: 'bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200/60',
+  unused: 'bg-sky-100 text-sky-700 ring-1 ring-sky-200/60',
   inactive: 'bg-slate-100 text-slate-500 ring-1 ring-slate-200/60',
   expired: 'bg-rose-100 text-rose-600 ring-1 ring-rose-200/60',
   'non-payment': 'bg-amber-100 text-amber-700 ring-1 ring-amber-200/60',
@@ -74,6 +85,8 @@ const STATUS_STYLES: Record<string, string> = {
 export function StatusBadge({ status }: { status: string }) {
   return <span className={`badge ${STATUS_STYLES[status] || 'bg-slate-100 text-slate-600 ring-1 ring-slate-200/60'}`}>{status}</span>;
 }
+
+/* ─── Stat / StatTile ─── */
 
 export function Stat({ label, value, sub, icon: Icon }: { label: string; value: ReactNode; sub?: ReactNode; icon?: LucideIcon }) {
   return (
@@ -110,10 +123,7 @@ export function StatTile({
   delay?: number;
 }) {
   return (
-    <div
-      className="stat-tile animate-fade-in-up"
-      style={{ animationDelay: `${delay}ms`, opacity: 0 }}
-    >
+    <div className="stat-tile animate-fade-in-up" style={{ animationDelay: `${delay}ms`, opacity: 0 }}>
       <div className={`absolute top-0 right-0 w-24 h-24 bg-gradient-to-bl ${accent} rounded-bl-full pointer-events-none`} />
       <div className="relative flex items-center justify-between">
         <div>
@@ -133,12 +143,30 @@ export function StatTile({
   );
 }
 
+/* ─── Section / Page ─── */
+
 export function SectionTitle({ children, icon: Icon }: { children: ReactNode; icon?: LucideIcon }) {
   return (
     <h2 className="section-title">
       {Icon && <Icon size={14} className="text-brand-500" />}
       {children}
     </h2>
+  );
+}
+
+export function PageHeader({ title, description, icon: Icon }: { title: string; description?: string; icon?: LucideIcon }) {
+  return (
+    <div className="mb-6 animate-fade-in-up">
+      <div className="flex items-center gap-3 mb-1">
+        {Icon && (
+          <span className="flex items-center justify-center w-10 h-10 rounded-xl bg-brand-50 text-brand-500">
+            <Icon size={20} />
+          </span>
+        )}
+        <h2 className="text-xl font-bold text-slate-900 tracking-tight">{title}</h2>
+      </div>
+      {description && <p className="text-sm text-slate-500 max-w-3xl ml-[52px]">{description}</p>}
+    </div>
   );
 }
 
@@ -158,6 +186,17 @@ export function PageStub({ title, description }: { title: string; description: s
   );
 }
 
+export function LoadingPage({ label = 'Loading…' }: { label?: string }) {
+  return (
+    <div className="flex items-center justify-center gap-3 py-20 text-slate-400 animate-fade-in">
+      <Loader2 className="animate-spin text-brand-500" size={22} />
+      <span className="text-sm font-medium">{label}</span>
+    </div>
+  );
+}
+
+/* ─── Tabs ─── */
+
 export function TabPills({
   tabs,
   active,
@@ -176,9 +215,7 @@ export function TabPills({
           onClick={() => onChange(t.key)}
           className={[
             'text-xs font-semibold px-3 py-1.5 rounded-lg transition-all duration-200',
-            active === t.key
-              ? 'bg-white text-brand-600 shadow-sm'
-              : 'text-slate-500 hover:text-slate-700',
+            active === t.key ? 'bg-white text-brand-600 shadow-sm' : 'text-slate-500 hover:text-slate-700',
           ].join(' ')}
         >
           {t.label}
@@ -187,3 +224,345 @@ export function TabPills({
     </div>
   );
 }
+
+export function TabBar({
+  tabs,
+  active,
+  onChange,
+  className = '',
+}: {
+  tabs: { key: string; label: string; icon?: LucideIcon }[];
+  active: string;
+  onChange: (key: string) => void;
+  className?: string;
+}) {
+  return (
+    <div className={`flex items-center gap-1 border-b border-slate-200/80 overflow-x-auto scrollbar-thin ${className}`}>
+      {tabs.map((t) => {
+        const Icon = t.icon;
+        const isActive = active === t.key;
+        return (
+          <button
+            key={t.key}
+            type="button"
+            onClick={() => onChange(t.key)}
+            className={[
+              'relative flex items-center gap-2 px-4 py-3 text-sm font-medium whitespace-nowrap transition-colors',
+              isActive ? 'text-brand-600' : 'text-slate-500 hover:text-slate-700',
+            ].join(' ')}
+          >
+            {Icon && <Icon size={16} className={isActive ? 'text-brand-500' : 'text-slate-400'} />}
+            {t.label}
+            {isActive && (
+              <span className="absolute bottom-0 left-2 right-2 h-0.5 bg-gradient-to-r from-brand-400 to-brand-600 rounded-full" />
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ─── Flash / Toast ─── */
+
+export function Flash({ message, type = 'success', onDismiss }: { message: string; type?: 'success' | 'error' | 'info'; onDismiss?: () => void }) {
+  if (!message) return null;
+  const styles = {
+    success: 'bg-emerald-50 text-emerald-800 border-emerald-200/80',
+    error: 'bg-rose-50 text-rose-800 border-rose-200/80',
+    info: 'bg-sky-50 text-sky-800 border-sky-200/80',
+  };
+  const icons = { success: CheckCircle2, error: AlertCircle, info: Sparkles };
+  const Icon = icons[type];
+  return (
+    <div className={`mb-4 flex items-center gap-2.5 text-sm border rounded-xl px-4 py-3 animate-fade-in-up ${styles[type]}`}>
+      <Icon size={18} className="shrink-0" />
+      <span className="flex-1">{message}</span>
+      {onDismiss && (
+        <button type="button" onClick={onDismiss} className="opacity-60 hover:opacity-100">
+          <X size={16} />
+        </button>
+      )}
+    </div>
+  );
+}
+
+export function Toast({ message }: { message: string }) {
+  if (!message) return null;
+  return (
+    <div className="fixed bottom-6 right-6 z-[2000] max-w-sm animate-fade-in-up">
+      <div className="flex items-center gap-2.5 bg-slate-900 text-white text-sm font-medium px-4 py-3 rounded-xl shadow-card-hover border border-slate-700/50">
+        <CheckCircle2 size={18} className="text-emerald-400 shrink-0" />
+        {message}
+      </div>
+    </div>
+  );
+}
+
+/* ─── Modal ─── */
+
+export function Modal({
+  title,
+  subtitle,
+  children,
+  footer,
+  onClose,
+  wide,
+  maxWidth = 'md',
+}: {
+  title: string;
+  subtitle?: string;
+  children: ReactNode;
+  footer?: ReactNode;
+  onClose: () => void;
+  wide?: boolean;
+  maxWidth?: 'sm' | 'md' | 'lg' | 'xl';
+}) {
+  const widths = { sm: 'max-w-sm', md: 'max-w-md', lg: 'max-w-lg', xl: 'max-w-xl' };
+  return (
+    <div
+      className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-[1000] p-4 animate-fade-in"
+      onClick={onClose}
+    >
+      <div
+        className={`bg-white rounded-2xl shadow-2xl w-full ${wide ? 'max-w-2xl' : widths[maxWidth]} max-h-[92vh] flex flex-col animate-scale-in border border-slate-200/80`}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between px-5 py-4 border-b border-slate-100">
+          <div>
+            <h3 className="font-bold text-slate-900 text-lg tracking-tight">{title}</h3>
+            {subtitle && <p className="text-sm text-slate-400 mt-0.5">{subtitle}</p>}
+          </div>
+          <button type="button" onClick={onClose} className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors">
+            <X size={18} />
+          </button>
+        </div>
+        <div className="p-5 overflow-y-auto flex-1">{children}</div>
+        {footer && <div className="flex justify-end gap-2 px-5 py-3 border-t border-slate-100 bg-slate-50/80 rounded-b-2xl">{footer}</div>}
+      </div>
+    </div>
+  );
+}
+
+export function ModalFooter({ onCancel, onConfirm, confirmLabel = 'Save', busy, cancelLabel = 'Cancel' }: {
+  onCancel: () => void;
+  onConfirm?: () => void;
+  confirmLabel?: string;
+  busy?: boolean;
+  cancelLabel?: string;
+}) {
+  return (
+    <>
+      <button type="button" className="btn-secondary" onClick={onCancel} disabled={busy}>{cancelLabel}</button>
+      {onConfirm && (
+        <button type="button" className="btn-primary" onClick={onConfirm} disabled={busy}>
+          {busy ? <><Loader2 size={16} className="animate-spin" /> Saving…</> : confirmLabel}
+        </button>
+      )}
+    </>
+  );
+}
+
+/* ─── Table ─── */
+
+export function DataTable({
+  columns,
+  rows,
+  emptyMessage = 'No records found.',
+  stickyHeader,
+}: {
+  columns: { key: string; label: string; align?: 'left' | 'right' | 'center'; className?: string }[];
+  rows: { key: string | number; cells: ReactNode[] }[];
+  emptyMessage?: string;
+  stickyHeader?: boolean;
+}) {
+  return (
+    <div className="overflow-x-auto rounded-xl border border-slate-100/80">
+      <table className="data-table w-full text-sm">
+        <thead className={stickyHeader ? 'sticky top-0 z-10' : ''}>
+          <tr>
+            {columns.map((c) => (
+              <th
+                key={c.key}
+                className={[
+                  c.align === 'right' ? 'text-right' : c.align === 'center' ? 'text-center' : 'text-left',
+                  c.className,
+                ].filter(Boolean).join(' ')}
+              >
+                {c.label}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.key}>
+              {r.cells.map((cell, j) => (
+                <td
+                  key={j}
+                  className={columns[j]?.align === 'right' ? 'text-right' : columns[j]?.align === 'center' ? 'text-center' : ''}
+                >
+                  {cell}
+                </td>
+              ))}
+            </tr>
+          ))}
+          {rows.length === 0 && (
+            <tr>
+              <td colSpan={columns.length}>
+                <EmptyState message={emptyMessage} />
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+export function EmptyState({ message, icon: Icon = Inbox }: { message: string; icon?: LucideIcon }) {
+  return (
+    <div className="flex flex-col items-center justify-center py-12 text-slate-400">
+      <span className="flex items-center justify-center w-12 h-12 rounded-2xl bg-slate-100 mb-3">
+        <Icon size={22} className="text-slate-300" />
+      </span>
+      <p className="text-sm">{message}</p>
+    </div>
+  );
+}
+
+/* ─── Form helpers ─── */
+
+export function FormField({ label, hint, children, required }: { label: string; hint?: string; children: ReactNode; required?: boolean }) {
+  return (
+    <label className="block">
+      <span className="text-sm font-medium text-slate-700 mb-1.5 block">
+        {label}
+        {required && <span className="text-rose-500 ml-0.5">*</span>}
+      </span>
+      {children}
+      {hint && <span className="text-xs text-slate-400 mt-1 block">{hint}</span>}
+    </label>
+  );
+}
+
+export function SearchInput({ value, onChange, placeholder, className = '' }: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  className?: string;
+}) {
+  return (
+    <div className={`relative ${className}`}>
+      <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="input pl-9 py-2"
+      />
+    </div>
+  );
+}
+
+export function Toggle({ on, onChange, label }: { on: boolean; onChange: () => void; label?: string }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      aria-label={label}
+      onClick={onChange}
+      className={`relative w-11 h-6 rounded-full transition-all duration-300 shrink-0 ${on ? 'bg-gradient-to-r from-brand-500 to-brand-600 shadow-glow-sm' : 'bg-slate-300'}`}
+    >
+      <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow-sm transition-transform duration-300 ${on ? 'translate-x-5' : ''}`} />
+    </button>
+  );
+}
+
+export function IconAction({
+  icon: Icon,
+  title,
+  onClick,
+  tone = 'default',
+}: {
+  icon: LucideIcon;
+  title: string;
+  onClick: () => void;
+  tone?: 'default' | 'sky' | 'emerald' | 'rose' | 'brand';
+}) {
+  const tones = {
+    default: 'hover:text-slate-700 hover:bg-slate-100',
+    sky: 'hover:text-sky-600 hover:bg-sky-50',
+    emerald: 'hover:text-emerald-600 hover:bg-emerald-50',
+    rose: 'hover:text-rose-600 hover:bg-rose-50',
+    brand: 'hover:text-brand-600 hover:bg-brand-50',
+  };
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={onClick}
+      className={`p-1.5 rounded-lg text-slate-400 transition-colors ${tones[tone]}`}
+    >
+      <Icon size={16} />
+    </button>
+  );
+}
+
+export function Toolbar({ left, right }: { left?: ReactNode; right?: ReactNode }) {
+  return (
+    <div className="flex items-center justify-between px-5 py-3 gap-3 flex-wrap border-b border-slate-100/80 bg-slate-50/40">
+      <div className="text-sm text-slate-500">{left}</div>
+      <div className="flex items-center gap-2 flex-wrap">{right}</div>
+    </div>
+  );
+}
+
+export function SettingsSection({
+  icon: Icon,
+  title,
+  children,
+  className = '',
+}: {
+  icon?: LucideIcon;
+  title: string;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <Card className={`max-w-4xl ${className}`} noPadding>
+      <div className="flex items-center gap-3 px-5 py-4 border-b border-slate-100 bg-gradient-to-r from-brand-50/50 to-transparent">
+        {Icon && (
+          <span className="flex items-center justify-center w-9 h-9 rounded-xl bg-brand-100 text-brand-600">
+            <Icon size={18} />
+          </span>
+        )}
+        <h3 className="font-bold text-slate-800 text-lg tracking-tight">{title}</h3>
+      </div>
+      <div className="p-6">{children}</div>
+    </Card>
+  );
+}
+
+export function LogPanel({
+  title,
+  onRefresh,
+  children,
+}: {
+  title: string;
+  onRefresh: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <Card title={title} noPadding interactive right={
+      <button type="button" className="btn-secondary text-xs py-1.5 px-3" onClick={onRefresh}>
+        Refresh
+      </button>
+    }>
+      <div className="p-4">{children}</div>
+    </Card>
+  );
+}
+
+export const logBoxClass = 'bg-slate-950 border border-slate-800 rounded-xl p-4 h-[60vh] overflow-auto font-mono text-[12px] leading-relaxed text-slate-300';

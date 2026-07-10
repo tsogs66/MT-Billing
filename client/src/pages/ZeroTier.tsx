@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Globe } from 'lucide-react';
 import Layout from '../components/Layout';
-import { Card, StatusBadge } from '../components/ui';
+import { Card, StatusBadge, DataTable, LoadingPage, PageHeader } from '../components/ui';
 import { api } from '../api';
 
 export default function ZeroTier() {
@@ -9,15 +9,17 @@ export default function ZeroTier() {
   useEffect(() => {
     api.get('/zerotier').then((r) => setData(r.data));
   }, []);
-  if (!data) return <Layout title="ZeroTier"><div className="text-slate-400">Loading…</div></Layout>;
+  if (!data) return <Layout title="ZeroTier"><LoadingPage /></Layout>;
 
   return (
     <Layout title="ZeroTier">
-      <Card className="max-w-4xl mb-5">
+      <PageHeader title="ZeroTier Networks" description="Local ZeroTier controller status and member management." icon={Globe} />
+
+      <Card className="max-w-4xl mb-5" interactive>
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-lg bg-brand-50 text-brand-600 flex items-center justify-center"><Globe size={20} /></div>
+          <div className="w-11 h-11 rounded-xl bg-brand-50 text-brand-600 flex items-center justify-center"><Globe size={20} /></div>
           <div>
-            <div className="font-semibold text-slate-800">Node {data.address}</div>
+            <div className="font-bold text-slate-800">Node {data.address}</div>
             <div className="text-xs text-slate-400">Local ZeroTier controller status</div>
           </div>
           <div className="ml-auto"><StatusBadge status={data.online ? 'online' : 'offline'} /></div>
@@ -25,28 +27,30 @@ export default function ZeroTier() {
       </Card>
 
       {data.networks.map((n: any) => (
-        <Card key={n.id} title={n.name} className="max-w-4xl mb-5" right={<span className="text-xs text-slate-400 font-mono">{n.id}</span>}>
-          <div className="text-sm text-slate-500 mb-3">Assigned IP: <span className="font-medium text-slate-700">{n.assignedIp}</span> · Status: <StatusBadge status={n.status === 'OK' ? 'Active' : 'offline'} /></div>
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-slate-400 text-left border-b border-slate-100">
-                <th className="py-2 font-medium">Member</th>
-                <th className="py-2 font-medium">Managed IP</th>
-                <th className="py-2 font-medium">Authorized</th>
-                <th className="py-2 font-medium">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {n.members.map((m: any) => (
-                <tr key={m.name} className="border-b border-slate-50">
-                  <td className="py-2 font-medium text-slate-800">{m.name}</td>
-                  <td className="py-2 font-mono text-slate-600">{m.ip}</td>
-                  <td className="py-2"><StatusBadge status={m.authorized ? 'Active' : 'inactive'} /></td>
-                  <td className="py-2"><StatusBadge status={m.online ? 'online' : 'offline'} /></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <Card key={n.id} title={n.name} className="max-w-4xl mb-5" interactive noPadding right={<span className="text-xs text-slate-400 font-mono">{n.id}</span>}>
+          <div className="px-5 py-3 text-sm text-slate-500 border-b border-slate-100">
+            Assigned IP: <span className="font-semibold text-slate-700">{n.assignedIp}</span> · Status: <StatusBadge status={n.status === 'OK' ? 'Active' : 'offline'} />
+          </div>
+          <div className="p-4">
+            <DataTable
+              columns={[
+                { key: 'name', label: 'Member' },
+                { key: 'ip', label: 'Managed IP' },
+                { key: 'auth', label: 'Authorized' },
+                { key: 'status', label: 'Status' },
+              ]}
+              rows={n.members.map((m: any) => ({
+                key: m.name,
+                cells: [
+                  <span className="font-semibold text-slate-800">{m.name}</span>,
+                  <span className="font-mono text-slate-600">{m.ip}</span>,
+                  <StatusBadge status={m.authorized ? 'Active' : 'inactive'} />,
+                  <StatusBadge status={m.online ? 'online' : 'offline'} />,
+                ],
+              }))}
+              emptyMessage="No members in this network."
+            />
+          </div>
         </Card>
       ))}
     </Layout>

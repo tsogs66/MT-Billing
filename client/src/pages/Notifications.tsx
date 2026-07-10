@@ -1,16 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Mail, MessageSquare, Send, PlayCircle, Bell, Clock, PowerOff } from 'lucide-react';
 import Layout from '../components/Layout';
-import { Card, StatusBadge } from '../components/ui';
+import { Card, StatusBadge, Toggle, TabBar, Flash, DataTable, FormField } from '../components/ui';
 import { api } from '../api';
-
-function Toggle({ on, onChange }: { on: boolean; onChange: () => void }) {
-  return (
-    <button onClick={onChange} className={`relative w-9 h-5 rounded-full transition-colors ${on ? 'bg-brand-500' : 'bg-slate-300'}`}>
-      <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${on ? 'translate-x-4' : ''}`} />
-    </button>
-  );
-}
 
 const TYPE_LABEL: Record<string, string> = {
   manual: 'Manual',
@@ -63,6 +55,14 @@ const TEMPLATES = [
   },
 ];
 
+const TABS = [
+  { key: 'send', label: 'Send' },
+  { key: 'automation', label: 'Reminders & Auto-disable' },
+  { key: 'smtp', label: 'Email (SMTP)' },
+  { key: 'sms', label: 'Bulk SMS' },
+  { key: 'log', label: 'Log' },
+];
+
 export default function Notifications() {
   const [settings, setSettings] = useState<any>(null);
   const [logs, setLogs] = useState<any[]>([]);
@@ -74,6 +74,7 @@ export default function Notifications() {
   const [subject, setSubject] = useState('Notice from Pa-North');
   const [message, setMessage] = useState('');
   const [banner, setBanner] = useState('');
+  const [bannerType, setBannerType] = useState<'success' | 'error' | 'info'>('success');
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState('send');
   const [smtpPass, setSmtpPass] = useState('');
@@ -111,18 +112,19 @@ export default function Notifications() {
     setSettings(r.data);
   };
 
-  const flash = (msg: string) => {
+  const flash = (msg: string, type: 'success' | 'error' | 'info' = 'success') => {
     setBanner(msg);
+    setBannerType(type);
     setTimeout(() => setBanner(''), 5000);
   };
 
   const send = async () => {
     if (!message.trim()) {
-      flash('Please enter a message.');
+      flash('Please enter a message.', 'error');
       return;
     }
     if (target === 'selected' && selected.length === 0) {
-      flash('Please select at least one client.');
+      flash('Please select at least one client.', 'error');
       return;
     }
     setBusy(true);
@@ -169,41 +171,23 @@ export default function Notifications() {
     }
   };
 
-  const TABS: [string, string][] = [
-    ['send', 'Send'],
-    ['automation', 'Reminders & Auto-disable'],
-    ['smtp', 'Email (SMTP)'],
-    ['sms', 'Bulk SMS'],
-    ['log', 'Log'],
-  ];
-
   if (!settings) return <Layout title="Notifications"><div className="text-slate-400">Loading…</div></Layout>;
 
   return (
     <Layout title="Notifications">
-      {banner && <div className="mb-4 text-sm bg-emerald-50 text-emerald-700 border border-emerald-100 rounded-lg px-4 py-2.5">{banner}</div>}
+      <Flash message={banner} type={bannerType} onDismiss={() => setBanner('')} />
 
-      <div className="flex items-center gap-1 border-b border-slate-200 mb-5 overflow-x-auto">
-        {TABS.map(([key, label]) => (
-          <button
-            key={key}
-            onClick={() => setTab(key)}
-            className={`px-4 py-2 text-sm border-b-2 whitespace-nowrap ${tab === key ? 'border-brand-500 text-brand-600 font-medium' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
+      <TabBar tabs={TABS} active={tab} onChange={setTab} className="mb-5" />
 
       {tab === 'send' && (
         <Card title="Send Notification">
           <div className="space-y-3">
-            <div>
-              <span className="text-sm text-slate-600 mb-1 block">Channel</span>
+            <FormField label="Channel" hint="Uses each client's saved email and/or SMS contact number.">
               <div className="flex gap-2">
                 {([['email', 'Email', Mail], ['sms', 'SMS', MessageSquare], ['both', 'Both', Send]] as const).map(([key, label, Icon]) => (
                   <button
                     key={key}
+                    type="button"
                     onClick={() => setChannel(key)}
                     className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm border ${channel === key ? 'bg-brand-500 text-white border-brand-500' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}
                   >
@@ -211,15 +195,14 @@ export default function Notifications() {
                   </button>
                 ))}
               </div>
-              <p className="text-xs text-slate-400 mt-1">Uses each client's saved email and/or SMS contact number.</p>
-            </div>
+            </FormField>
 
-            <div>
-              <span className="text-sm text-slate-600 mb-1 block">Recipients</span>
+            <FormField label="Recipients">
               <div className="flex gap-2 mb-2">
                 {(['all', 'selected'] as const).map((t) => (
                   <button
                     key={t}
+                    type="button"
                     onClick={() => setTarget(t)}
                     className={`px-3 py-1.5 rounded-lg text-sm border ${target === t ? 'bg-brand-500 text-white border-brand-500' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}
                   >
@@ -247,10 +230,9 @@ export default function Notifications() {
                   </div>
                 </div>
               )}
-            </div>
+            </FormField>
 
-            <div>
-              <span className="text-sm text-slate-600 mb-1 block">Message template</span>
+            <FormField label="Message template">
               <select className="input" defaultValue="" onChange={(e) => applyTemplate(e.target.value)}>
                 <option value="">— Choose a preformatted template —</option>
                 {TEMPLATES.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
@@ -258,19 +240,17 @@ export default function Notifications() {
               <p className="text-xs text-slate-400 mt-1">
                 Tokens are personalized per subscriber: <code>{'{name}'}</code>, <code>{'{account}'}</code>, <code>{'{plan}'}</code>, <code>{'{amount}'}</code>, <code>{'{due}'}</code>.
               </p>
-            </div>
+            </FormField>
 
             {channel !== 'sms' && (
-              <label className="block">
-                <span className="text-sm text-slate-600 mb-1 block">Subject (email)</span>
+              <FormField label="Subject (email)">
                 <input className="input" value={subject} onChange={(e) => setSubject(e.target.value)} />
-              </label>
+              </FormField>
             )}
-            <label className="block">
-              <span className="text-sm text-slate-600 mb-1 block">Message</span>
+            <FormField label="Message">
               <textarea className="input min-h-[110px]" value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Type your announcement or reminder…" />
-            </label>
-            <button className="btn-primary" onClick={send} disabled={busy}>
+            </FormField>
+            <button type="button" className="btn-primary" onClick={send} disabled={busy}>
               <Send size={16} /> {busy ? 'Sending…' : target === 'all' ? 'Send to all clients' : `Send to ${selected.length} selected`}
             </button>
           </div>
@@ -281,7 +261,7 @@ export default function Notifications() {
         <Card title="Reminder & Auto-disable Settings">
           <div className="space-y-4">
             <Row icon={<Bell size={16} className="text-brand-500" />} label="Expiry reminders" desc="Notify clients before their plan expires">
-              <Toggle on={!!settings.reminder_enabled} onChange={() => saveSettings({ reminder_enabled: settings.reminder_enabled ? 0 : 1 })} />
+              <Toggle label="Expiry reminders" on={!!settings.reminder_enabled} onChange={() => saveSettings({ reminder_enabled: settings.reminder_enabled ? 0 : 1 })} />
             </Row>
             <div className="flex items-center justify-between text-sm pl-7">
               <span className="text-slate-500">Send reminder this many days before expiration</span>
@@ -295,14 +275,14 @@ export default function Notifications() {
             </div>
 
             <div className="flex items-center gap-4 pl-7 text-sm">
-              <label className="flex items-center gap-2"><Toggle on={!!settings.email_enabled} onChange={() => saveSettings({ email_enabled: settings.email_enabled ? 0 : 1 })} /> Email</label>
-              <label className="flex items-center gap-2"><Toggle on={!!settings.sms_enabled} onChange={() => saveSettings({ sms_enabled: settings.sms_enabled ? 0 : 1 })} /> SMS</label>
+              <label className="flex items-center gap-2"><Toggle label="Email reminders" on={!!settings.email_enabled} onChange={() => saveSettings({ email_enabled: settings.email_enabled ? 0 : 1 })} /> Email</label>
+              <label className="flex items-center gap-2"><Toggle label="SMS reminders" on={!!settings.sms_enabled} onChange={() => saveSettings({ sms_enabled: settings.sms_enabled ? 0 : 1 })} /> SMS</label>
             </div>
 
             <div className="border-t border-slate-100 pt-3" />
 
             <Row icon={<PowerOff size={16} className="text-rose-500" />} label="Auto-disable on non-payment" desc="Disconnect overdue clients automatically">
-              <Toggle on={!!settings.autodisable_enabled} onChange={() => saveSettings({ autodisable_enabled: settings.autodisable_enabled ? 0 : 1 })} />
+              <Toggle label="Auto-disable on non-payment" on={!!settings.autodisable_enabled} onChange={() => saveSettings({ autodisable_enabled: settings.autodisable_enabled ? 0 : 1 })} />
             </Row>
             <div className="flex items-center justify-between text-sm pl-7">
               <span className="text-slate-500">Disable after this many hours of non-payment</span>
@@ -317,7 +297,7 @@ export default function Notifications() {
 
             <div className="border-t border-slate-100 pt-3 flex items-center justify-between">
               <div className="text-xs text-slate-400 flex items-center gap-1.5"><Clock size={14} /> Runs automatically every 5 minutes.</div>
-              <button className="inline-flex items-center gap-2 text-sm border border-slate-200 rounded-lg px-3 py-1.5 hover:bg-slate-50 text-slate-600" onClick={runNow} disabled={busy}>
+              <button type="button" className="inline-flex items-center gap-2 text-sm border border-slate-200 rounded-lg px-3 py-1.5 hover:bg-slate-50 text-slate-600" onClick={runNow} disabled={busy}>
                 <PlayCircle size={15} /> Run checks now
               </button>
             </div>
@@ -330,30 +310,36 @@ export default function Notifications() {
           <div className="max-w-xl space-y-3">
             <p className="text-sm text-slate-500">Configure an SMTP server to actually deliver email notifications and receipts. Leave empty to keep messages in simulated mode.</p>
             <label className="flex items-center gap-2 text-sm">
-              <Toggle on={!!settings.email_enabled} onChange={() => saveSettings({ email_enabled: settings.email_enabled ? 0 : 1 })} /> Email notifications enabled
+              <Toggle label="Email notifications enabled" on={!!settings.email_enabled} onChange={() => saveSettings({ email_enabled: settings.email_enabled ? 0 : 1 })} /> Email notifications enabled
             </label>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <label className="block"><span className="text-sm text-slate-600 mb-1 block">SMTP Host</span>
-                <input className="input" placeholder="smtp.gmail.com" value={settings.smtp_host || ''} onChange={(e) => setS({ smtp_host: e.target.value })} /></label>
-              <label className="block"><span className="text-sm text-slate-600 mb-1 block">Port</span>
-                <input className="input" type="number" value={settings.smtp_port || 587} onChange={(e) => setS({ smtp_port: Number(e.target.value) })} /></label>
+              <FormField label="SMTP Host">
+                <input className="input" placeholder="smtp.gmail.com" value={settings.smtp_host || ''} onChange={(e) => setS({ smtp_host: e.target.value })} />
+              </FormField>
+              <FormField label="Port">
+                <input className="input" type="number" value={settings.smtp_port || 587} onChange={(e) => setS({ smtp_port: Number(e.target.value) })} />
+              </FormField>
             </div>
             <label className="flex items-center gap-2 text-sm">
-              <Toggle on={!!settings.smtp_secure} onChange={() => setS({ smtp_secure: settings.smtp_secure ? 0 : 1 })} /> Use SSL/TLS (port 465)
+              <Toggle label="Use SSL/TLS" on={!!settings.smtp_secure} onChange={() => setS({ smtp_secure: settings.smtp_secure ? 0 : 1 })} /> Use SSL/TLS (port 465)
             </label>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <label className="block"><span className="text-sm text-slate-600 mb-1 block">SMTP Username</span>
-                <input className="input" value={settings.smtp_user || ''} onChange={(e) => setS({ smtp_user: e.target.value })} /></label>
-              <label className="block"><span className="text-sm text-slate-600 mb-1 block">SMTP Password {settings.smtp_pass_set && <span className="text-emerald-600 text-xs">(saved)</span>}</span>
-                <input className="input" type="password" placeholder={settings.smtp_pass_set ? '••••••• (leave blank to keep)' : ''} value={smtpPass} onChange={(e) => setSmtpPass(e.target.value)} /></label>
+              <FormField label="SMTP Username">
+                <input className="input" value={settings.smtp_user || ''} onChange={(e) => setS({ smtp_user: e.target.value })} />
+              </FormField>
+              <FormField label={settings.smtp_pass_set ? 'SMTP Password (saved)' : 'SMTP Password'}>
+                <input className="input" type="password" placeholder={settings.smtp_pass_set ? '••••••• (leave blank to keep)' : ''} value={smtpPass} onChange={(e) => setSmtpPass(e.target.value)} />
+              </FormField>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <label className="block"><span className="text-sm text-slate-600 mb-1 block">From Address</span>
-                <input className="input" placeholder="billing@pa-north.net" value={settings.smtp_from || ''} onChange={(e) => setS({ smtp_from: e.target.value })} /></label>
-              <label className="block"><span className="text-sm text-slate-600 mb-1 block">Default From (fallback)</span>
-                <input className="input" value={settings.email_from || ''} onChange={(e) => setS({ email_from: e.target.value })} /></label>
+              <FormField label="From Address">
+                <input className="input" placeholder="billing@pa-north.net" value={settings.smtp_from || ''} onChange={(e) => setS({ smtp_from: e.target.value })} />
+              </FormField>
+              <FormField label="Default From (fallback)">
+                <input className="input" value={settings.email_from || ''} onChange={(e) => setS({ email_from: e.target.value })} />
+              </FormField>
             </div>
-            <button className="btn-primary" onClick={saveGateway} disabled={busy}>{busy ? 'Saving…' : 'Save SMTP Settings'}</button>
+            <button type="button" className="btn-primary" onClick={saveGateway} disabled={busy}>{busy ? 'Saving…' : 'Save SMTP Settings'}</button>
           </div>
         </Card>
       )}
@@ -365,66 +351,70 @@ export default function Notifications() {
               Connect your <a className="text-brand-600 underline" href="https://www.bulksms.com.ph/sms_api.php" target="_blank" rel="noreferrer">bulksms.com.ph</a> (iSMS) account to send real SMS. Requests use the <code>un</code>, <code>pwd</code>, <code>dstno</code>, <code>msg</code>, <code>type</code>, <code>agreedterm</code> and <code>sendid</code> parameters.
             </p>
             <label className="flex items-center gap-2 text-sm">
-              <Toggle on={!!settings.sms_enabled} onChange={() => saveSettings({ sms_enabled: settings.sms_enabled ? 0 : 1 })} /> SMS notifications enabled
+              <Toggle label="SMS notifications enabled" on={!!settings.sms_enabled} onChange={() => saveSettings({ sms_enabled: settings.sms_enabled ? 0 : 1 })} /> SMS notifications enabled
             </label>
-            <label className="block"><span className="text-sm text-slate-600 mb-1 block">API Endpoint</span>
-              <input className="input" value={settings.sms_api_url || ''} onChange={(e) => setS({ sms_api_url: e.target.value })} /></label>
+            <FormField label="API Endpoint">
+              <input className="input" value={settings.sms_api_url || ''} onChange={(e) => setS({ sms_api_url: e.target.value })} />
+            </FormField>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <label className="block"><span className="text-sm text-slate-600 mb-1 block">API Username (un)</span>
-                <input className="input" value={settings.sms_api_user || ''} onChange={(e) => setS({ sms_api_user: e.target.value })} /></label>
-              <label className="block"><span className="text-sm text-slate-600 mb-1 block">API Password (pwd) {settings.sms_api_pass_set && <span className="text-emerald-600 text-xs">(saved)</span>}</span>
-                <input className="input" type="password" placeholder={settings.sms_api_pass_set ? '••••••• (leave blank to keep)' : ''} value={smsPass} onChange={(e) => setSmsPass(e.target.value)} /></label>
+              <FormField label="API Username (un)">
+                <input className="input" value={settings.sms_api_user || ''} onChange={(e) => setS({ sms_api_user: e.target.value })} />
+              </FormField>
+              <FormField label={settings.sms_api_pass_set ? 'API Password (pwd) (saved)' : 'API Password (pwd)'}>
+                <input className="input" type="password" placeholder={settings.sms_api_pass_set ? '••••••• (leave blank to keep)' : ''} value={smsPass} onChange={(e) => setSmsPass(e.target.value)} />
+              </FormField>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <label className="block"><span className="text-sm text-slate-600 mb-1 block">Sender ID (sendid)</span>
-                <input className="input" maxLength={11} value={settings.sms_sender || ''} onChange={(e) => setS({ sms_sender: e.target.value })} /></label>
-              <label className="block"><span className="text-sm text-slate-600 mb-1 block">Message Type</span>
+              <FormField label="Sender ID (sendid)">
+                <input className="input" maxLength={11} value={settings.sms_sender || ''} onChange={(e) => setS({ sms_sender: e.target.value })} />
+              </FormField>
+              <FormField label="Message Type">
                 <select className="input" value={settings.sms_type || 1} onChange={(e) => setS({ sms_type: Number(e.target.value) })}>
                   <option value={1}>ASCII (English) — up to 153 chars</option>
                   <option value={2}>Unicode — up to 63 chars</option>
-                </select></label>
+                </select>
+              </FormField>
             </div>
-            <button className="btn-primary" onClick={saveGateway} disabled={busy}>{busy ? 'Saving…' : 'Save Bulk SMS Settings'}</button>
+            <button type="button" className="btn-primary" onClick={saveGateway} disabled={busy}>{busy ? 'Saving…' : 'Save Bulk SMS Settings'}</button>
           </div>
         </Card>
       )}
 
       {tab === 'log' && (
-      <div>
-        <Card title="Notification Log">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-slate-400 text-left border-b border-slate-100">
-                  <th className="py-2 font-medium">Time</th>
-                  <th className="py-2 font-medium">Channel</th>
-                  <th className="py-2 font-medium">Type</th>
-                  <th className="py-2 font-medium">Recipient</th>
-                  <th className="py-2 font-medium">Message</th>
-                  <th className="py-2 font-medium">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {logs.map((l) => (
-                  <tr key={l.id} className="border-b border-slate-50">
-                    <td className="py-2 text-slate-400 whitespace-nowrap">{new Date(l.date).toLocaleString()}</td>
-                    <td className="py-2">
-                      <span className="inline-flex items-center gap-1 text-slate-600">
-                        {l.channel === 'email' ? <Mail size={14} /> : <MessageSquare size={14} />} {l.channel}
-                      </span>
-                    </td>
-                    <td className="py-2 text-slate-500">{TYPE_LABEL[l.type] || l.type}</td>
-                    <td className="py-2 text-slate-600">{l.customer}<div className="text-[11px] text-slate-400">{l.recipient || '—'}</div></td>
-                    <td className="py-2 text-slate-500 max-w-[280px] truncate" title={l.message}>{l.message}</td>
-                    <td className="py-2"><StatusBadge status={l.status} /><div className="text-[11px] text-slate-400">{l.detail}</div></td>
-                  </tr>
-                ))}
-                {logs.length === 0 && <tr><td colSpan={6} className="py-8 text-center text-slate-400">No notifications yet.</td></tr>}
-              </tbody>
-            </table>
+        <Card title="Notification Log" noPadding>
+          <div className="p-5">
+            <DataTable
+              columns={[
+                { key: 'time', label: 'Time' },
+                { key: 'channel', label: 'Channel' },
+                { key: 'type', label: 'Type' },
+                { key: 'recipient', label: 'Recipient' },
+                { key: 'message', label: 'Message', className: 'max-w-[280px]' },
+                { key: 'status', label: 'Status' },
+              ]}
+              rows={logs.map((l) => ({
+                key: l.id,
+                cells: [
+                  <span className="text-slate-400 whitespace-nowrap">{new Date(l.date).toLocaleString()}</span>,
+                  <span className="inline-flex items-center gap-1 text-slate-600">
+                    {l.channel === 'email' ? <Mail size={14} /> : <MessageSquare size={14} />} {l.channel}
+                  </span>,
+                  <span className="text-slate-500">{TYPE_LABEL[l.type] || l.type}</span>,
+                  <span className="text-slate-600">
+                    {l.customer}
+                    <div className="text-[11px] text-slate-400">{l.recipient || '—'}</div>
+                  </span>,
+                  <span className="text-slate-500 truncate block max-w-[280px]" title={l.message}>{l.message}</span>,
+                  <span>
+                    <StatusBadge status={l.status} />
+                    <div className="text-[11px] text-slate-400">{l.detail}</div>
+                  </span>,
+                ],
+              }))}
+              emptyMessage="No notifications yet."
+            />
           </div>
         </Card>
-      </div>
       )}
     </Layout>
   );

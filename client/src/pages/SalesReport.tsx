@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { BarChart, Bar, ResponsiveContainer, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
+import { Wallet, Receipt, TrendingUp, CalendarDays } from 'lucide-react';
 import Layout from '../components/Layout';
-import { Card, Stat } from '../components/ui';
+import { Card, StatTile, TabPills, DataTable } from '../components/ui';
 import { api, peso } from '../api';
 
 const GROUPS = [
@@ -25,29 +26,27 @@ export default function SalesReport() {
   return (
     <Layout title="Sales Report">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-5 mb-5">
-        <Card><Stat label="Net Revenue" value={peso(sales?.total ?? 0)} /></Card>
-        <Card><Stat label="Transactions" value={sales?.transactions ?? 0} /></Card>
-        <Card><Stat label="Average / day" value={peso(sales?.avgPerDay ?? 0)} /></Card>
-        <Card><Stat label="Best day" value={peso(sales?.best ?? 0)} /></Card>
+        <StatTile label="Net Revenue" value={peso(sales?.total ?? 0)} icon={Wallet} tone="text-brand-600" accent="from-brand-500/15 to-transparent" delay={0} />
+        <StatTile label="Transactions" value={sales?.transactions ?? 0} icon={Receipt} delay={50} />
+        <StatTile label="Average / day" value={peso(sales?.avgPerDay ?? 0)} icon={TrendingUp} accent="from-sky-500/15 to-transparent" delay={100} />
+        <StatTile label="Best day" value={peso(sales?.best ?? 0)} icon={CalendarDays} accent="from-emerald-500/15 to-transparent" tone="text-emerald-600" delay={150} />
       </div>
 
-      <Card title="Revenue" right={
-        <div className="flex gap-1">
-          {GROUPS.map((r) => (
-            <button key={r.key} onClick={() => setRange(r.key)} className={`text-xs px-2.5 py-1 rounded-md ${range === r.key ? 'bg-brand-500 text-white' : 'text-slate-500 hover:bg-slate-100'}`}>
-              {r.label}
-            </button>
-          ))}
-        </div>
-      }>
+      <Card title="Revenue" interactive right={<TabPills tabs={GROUPS} active={range} onChange={setRange} />}>
         <div className="h-64">
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={sales?.series ?? []}>
+            <BarChart data={sales?.series ?? []} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+              <defs>
+                <linearGradient id="salesBar" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#fb923c" stopOpacity={1} />
+                  <stop offset="100%" stopColor="#f97316" stopOpacity={0.75} />
+                </linearGradient>
+              </defs>
               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
               <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#94a3b8' }} tickFormatter={(v) => (String(v).includes('-') ? String(v).slice(5) : String(v))} />
               <YAxis tick={{ fontSize: 11, fill: '#94a3b8' }} tickFormatter={(v) => (v >= 1000 ? `${v / 1000}k` : v)} width={40} />
-              <Tooltip formatter={(v: number) => peso(v)} />
-              <Bar dataKey="value" fill="#f97316" radius={[4, 4, 0, 0]} />
+              <Tooltip formatter={(v: number) => peso(v)} labelStyle={{ color: '#334155' }} contentStyle={{ borderRadius: '12px', border: '1px solid #e2e8f0' }} />
+              <Bar dataKey="value" fill="url(#salesBar)" radius={[6, 6, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -55,28 +54,24 @@ export default function SalesReport() {
 
       <div className="mt-5">
         <Card title="Recent Transactions">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-slate-400 text-left border-b border-slate-100">
-                  <th className="py-2 font-medium">Date</th>
-                  <th className="py-2 font-medium">Customer</th>
-                  <th className="py-2 font-medium">Type</th>
-                  <th className="py-2 font-medium text-right">Amount</th>
-                </tr>
-              </thead>
-              <tbody>
-                {tx.slice(0, 50).map((t) => (
-                  <tr key={t.id} className="border-b border-slate-50">
-                    <td className="py-2 text-slate-500">{new Date(t.date).toLocaleString()}</td>
-                    <td className="py-2 text-slate-700">{t.customer}</td>
-                    <td className="py-2 text-slate-500 capitalize">{t.type}</td>
-                    <td className="py-2 text-right font-medium text-emerald-600">{peso(t.amount)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <DataTable
+            columns={[
+              { key: 'date', label: 'Date' },
+              { key: 'customer', label: 'Customer' },
+              { key: 'type', label: 'Type' },
+              { key: 'amount', label: 'Amount', align: 'right' },
+            ]}
+            rows={tx.slice(0, 50).map((t) => ({
+              key: t.id,
+              cells: [
+                <span className="text-slate-500">{new Date(t.date).toLocaleString()}</span>,
+                <span className="text-slate-700">{t.customer}</span>,
+                <span className="text-slate-500 capitalize">{t.type}</span>,
+                <span className="font-medium text-emerald-600">{peso(t.amount)}</span>,
+              ],
+            }))}
+            emptyMessage="No transactions yet."
+          />
         </Card>
       </div>
     </Layout>

@@ -4,13 +4,13 @@ import {
   ExternalLink, History, Zap,
 } from 'lucide-react';
 import Layout from '../components/Layout';
-import { Card, StatusBadge } from '../components/ui';
+import { Card, Flash, LoadingPage, PageHeader, StatusBadge, TabBar } from '../components/ui';
 import { api } from '../api';
 
 const TABS = [
-  ['setup', 'Setup'],
-  ['generate', 'Generate Script'],
-  ['history', 'History'],
+  { key: 'setup', label: 'Setup', icon: Settings2 },
+  { key: 'generate', label: 'Generate Script', icon: Sparkles },
+  { key: 'history', label: 'History', icon: History },
 ] as const;
 
 type AiConfig = {
@@ -27,7 +27,7 @@ type AiConfig = {
 };
 
 export default function AiScripting() {
-  const [tab, setTab] = useState<(typeof TABS)[number][0]>('setup');
+  const [tab, setTab] = useState<(typeof TABS)[number]['key']>('setup');
   const [cfg, setCfg] = useState<AiConfig | null>(null);
   const [banner, setBanner] = useState('');
   const [error, setError] = useState('');
@@ -54,38 +54,23 @@ export default function AiScripting() {
   if (!cfg) {
     return (
       <Layout title="AI Scripting">
-        <div className="text-slate-400 flex items-center gap-2">
-          <Loader2 className="animate-spin" size={18} /> Loading…
-        </div>
+        <LoadingPage label="Loading AI configuration…" />
       </Layout>
     );
   }
 
   return (
     <Layout title="AI Scripting">
-      <p className="text-sm text-slate-500 mb-4 max-w-3xl">
-        Generate MikroTik RouterOS scripts with Claude (Anthropic) for instant results, or launch Cursor Cloud Agents for complex repo-based automation.
-      </p>
+      <PageHeader
+        title="AI Scripting"
+        icon={Bot}
+        description="Generate MikroTik RouterOS scripts with Claude (Anthropic) for instant results, or launch Cursor Cloud Agents for complex repo-based automation."
+      />
 
-      {banner && <div className="mb-4 text-sm bg-emerald-50 text-emerald-700 border border-emerald-100 rounded-lg px-4 py-2.5">{banner}</div>}
-      {error && <div className="mb-4 text-sm bg-rose-50 text-rose-700 border border-rose-100 rounded-lg px-4 py-2.5">{error}</div>}
+      <Flash message={banner} type="success" />
+      <Flash message={error} type="error" />
 
-      <div className="flex items-center gap-1 border-b border-slate-200 mb-5 overflow-x-auto">
-        {TABS.map(([key, label]) => (
-          <button
-            key={key}
-            onClick={() => setTab(key)}
-            className={`px-4 py-2 text-sm border-b-2 whitespace-nowrap flex items-center gap-1.5 ${
-              tab === key ? 'border-brand-500 text-brand-600 font-medium' : 'border-transparent text-slate-500 hover:text-slate-700'
-            }`}
-          >
-            {key === 'setup' && <Settings2 size={15} />}
-            {key === 'generate' && <Sparkles size={15} />}
-            {key === 'history' && <History size={15} />}
-            {label}
-          </button>
-        ))}
-      </div>
+      <TabBar tabs={[...TABS]} active={tab} onChange={(k) => setTab(k as (typeof TABS)[number]['key'])} className="mb-5" />
 
       {tab === 'setup' && <SetupTab cfg={cfg} setCfg={setCfg} flash={flash} onSaved={load} />}
       {tab === 'generate' && <GenerateTab cfg={cfg} flash={flash} />}
@@ -154,23 +139,25 @@ function SetupTab({
 
   return (
     <div className="space-y-5 max-w-4xl">
-      <div className="card p-5 flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <div className="font-semibold text-slate-800 flex items-center gap-2">
-            <Bot size={18} className="text-brand-500" /> AI Scripting assistant
+      <Card interactive>
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <div className="font-semibold text-slate-800 flex items-center gap-2">
+              <Bot size={18} className="text-brand-500" /> AI Scripting assistant
+            </div>
+            <p className="text-sm text-slate-500 mt-1">Enable script generation from the Generate tab.</p>
           </div>
-          <p className="text-sm text-slate-500 mt-1">Enable script generation from the Generate tab.</p>
+          <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
+            <input
+              type="checkbox"
+              className="w-4 h-4"
+              checked={cfg.ai_enabled}
+              onChange={(e) => patch({ ai_enabled: e.target.checked })}
+            />
+            Enabled
+          </label>
         </div>
-        <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
-          <input
-            type="checkbox"
-            className="w-4 h-4"
-            checked={cfg.ai_enabled}
-            onChange={(e) => patch({ ai_enabled: e.target.checked })}
-          />
-          Enabled
-        </label>
-      </div>
+      </Card>
 
       <Card title="Claude API (Anthropic)">
         <div className="space-y-4">
@@ -274,8 +261,7 @@ function SetupTab({
         </div>
       </Card>
 
-      <div className="card p-5">
-        <div className="text-sm font-semibold text-slate-700 mb-3">Default provider for generation</div>
+      <Card title="Default provider for generation">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {[
             ['anthropic', 'Claude (Anthropic)', 'Instant RouterOS scripts via Messages API'],
@@ -294,7 +280,7 @@ function SetupTab({
             </button>
           ))}
         </div>
-      </div>
+      </Card>
 
       <div className="flex justify-end">
         <button className="btn-primary" onClick={save} disabled={saving}>

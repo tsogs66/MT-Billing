@@ -1,67 +1,40 @@
 import { useEffect, useState } from 'react';
-import { Code2, RefreshCw } from 'lucide-react';
+import { Code2, Globe, Mail, Monitor, Router } from 'lucide-react';
 import Layout from '../components/Layout';
+import { DataTable, LogPanel, PageHeader, StatusBadge, TabBar, TabPills, logBoxClass } from '../components/ui';
 import { api } from '../api';
 import { useRouterDevice } from '../context/RouterContext';
 
 const TABS = [
-  ['router', 'Router Logs'],
-  ['panel', 'Panel Logs'],
-  ['nginx', 'Nginx Logs'],
-  ['email', 'Email Logs'],
+  { key: 'router', label: 'Router Logs', icon: Router },
+  { key: 'panel', label: 'Panel Logs', icon: Monitor },
+  { key: 'nginx', label: 'Nginx Logs', icon: Globe },
+  { key: 'email', label: 'Email Logs', icon: Mail },
 ] as const;
 
-function SubTabs({ tabs, active, onChange }: { tabs: [string, string][]; active: string; onChange: (k: string) => void }) {
-  return (
-    <div className="flex items-center gap-4 mb-4">
-      {tabs.map(([key, label]) => (
-        <button
-          key={key}
-          onClick={() => onChange(key)}
-          className={`text-sm border-b-2 pb-1 ${active === key ? 'border-brand-500 text-brand-600 font-medium' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
-        >
-          {label}
-        </button>
-      ))}
-    </div>
-  );
-}
+const PANEL_SUBTABS = [
+  { key: 'ui', label: 'Panel UI' },
+  { key: 'api', label: 'Panel API' },
+];
 
-function Panel({ title, onRefresh, children }: { title: string; onRefresh: () => void; children: React.ReactNode }) {
-  return (
-    <div className="card">
-      <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100">
-        <h3 className="font-semibold text-slate-700">{title}</h3>
-        <button className="inline-flex items-center gap-2 text-sm border border-slate-200 rounded-lg px-3 py-1.5 hover:bg-slate-50 text-slate-600" onClick={onRefresh}>
-          <RefreshCw size={14} /> Refresh
-        </button>
-      </div>
-      <div className="p-4">{children}</div>
-    </div>
-  );
-}
-
-const mono = 'font-mono text-[12px] leading-relaxed';
-const box = 'bg-slate-50 border border-slate-100 rounded-lg p-3 h-[60vh] overflow-auto';
+const EMAIL_SUBTABS = [
+  { key: 'payment', label: 'Payment' },
+  { key: 'reminder', label: 'Reminder' },
+  { key: 'announcement', label: 'Announcements' },
+];
 
 export default function Logs() {
   const [tab, setTab] = useState('router');
   return (
     <Layout title="Log Viewer">
       <div className="max-w-5xl mx-auto">
-        <h2 className="flex items-center gap-2 text-xl font-bold text-slate-800 mb-3"><Code2 size={20} /> Log Viewer</h2>
+        <PageHeader
+          title="Log Viewer"
+          description="Browse router, panel, web server, and email delivery logs."
+          icon={Code2}
+        />
 
-        <div className="flex items-center gap-5 border-b border-slate-200 mb-4">
-          {TABS.map(([key, label]) => (
-            <button
-              key={key}
-              onClick={() => setTab(key)}
-              className={`text-sm border-b-2 pb-2 ${tab === key ? 'border-brand-500 text-brand-600 font-medium' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+        <TabBar tabs={[...TABS]} active={tab} onChange={setTab} className="mb-5" />
 
         {tab === 'router' && <RouterLogs />}
         {tab === 'panel' && <PanelLogs />}
@@ -83,23 +56,31 @@ function RouterLogs() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current]);
 
+  const rows = data.entries.map((e, i) => ({
+    key: i,
+    cells: [
+      <span key="time" className="whitespace-nowrap text-slate-500">
+        {new Date(e.time).toLocaleString('en-GB', { year: 'numeric', month: '2-digit', day: '2-digit' })}
+        <br />
+        {new Date(e.time).toLocaleTimeString('en-GB')}
+      </span>,
+      <span key="topic" className="text-sky-600 whitespace-nowrap">{e.topic}</span>,
+      <span key="message" className="text-slate-700">{e.message}</span>,
+    ],
+  }));
+
   return (
-    <Panel title={`Router Logs (${data.router || current?.name || ''})`} onRefresh={load}>
-      <div className={box}>
-        <table className="w-full text-[12px]">
-          <tbody>
-            {data.entries.map((e, i) => (
-              <tr key={i} className="border-b border-slate-100">
-                <td className="py-1.5 pr-3 text-slate-400 whitespace-nowrap align-top w-28">{new Date(e.time).toLocaleString('en-GB', { year: 'numeric', month: '2-digit', day: '2-digit' })}<br />{new Date(e.time).toLocaleTimeString('en-GB')}</td>
-                <td className="py-1.5 pr-4 text-sky-600 whitespace-nowrap align-top">{e.topic}</td>
-                <td className="py-1.5 text-slate-700 align-top">{e.message}</td>
-              </tr>
-            ))}
-            {data.entries.length === 0 && <tr><td className="py-6 text-center text-slate-400">No router log entries found.</td></tr>}
-          </tbody>
-        </table>
-      </div>
-    </Panel>
+    <LogPanel title={`Router Logs (${data.router || current?.name || ''})`} onRefresh={load}>
+      <DataTable
+        columns={[
+          { key: 'time', label: 'Time', className: 'w-28' },
+          { key: 'topic', label: 'Topic' },
+          { key: 'message', label: 'Message' },
+        ]}
+        rows={rows}
+        emptyMessage="No router log entries found."
+      />
+    </LogPanel>
   );
 }
 
@@ -112,12 +93,16 @@ function PanelLogs() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sub]);
 
+  const title = sub === 'ui' ? 'Panel UI (mikrotik-manager)' : 'Panel API (mikrotik-api-backend)';
+
   return (
     <div>
-      <SubTabs tabs={[['ui', 'Panel UI (mikrotik-manager)'], ['api', 'Panel API (mikrotik-api-backend)']]} active={sub} onChange={setSub} />
-      <Panel title={sub === 'ui' ? 'Panel UI (mikrotik-manager)' : 'Panel API (mikrotik-api-backend)'} onRefresh={load}>
-        <pre className={`${box} ${mono} whitespace-pre-wrap text-slate-700`}>{text}</pre>
-      </Panel>
+      <div className="mb-4">
+        <TabPills tabs={PANEL_SUBTABS} active={sub} onChange={setSub} />
+      </div>
+      <LogPanel title={title} onRefresh={load}>
+        <pre className={`${logBoxClass} whitespace-pre-wrap`}>{text}</pre>
+      </LogPanel>
     </div>
   );
 }
@@ -129,9 +114,9 @@ function NginxLogs() {
     load();
   }, []);
   return (
-    <Panel title="Nginx Access Logs" onRefresh={load}>
-      <pre className={`${box} ${mono} whitespace-pre-wrap text-slate-700`}>{text}</pre>
-    </Panel>
+    <LogPanel title="Nginx Access Logs" onRefresh={load}>
+      <pre className={`${logBoxClass} whitespace-pre-wrap`}>{text}</pre>
+    </LogPanel>
   );
 }
 
@@ -146,32 +131,36 @@ function EmailLogs() {
 
   const title = sub === 'payment' ? 'Payment Emails' : sub === 'reminder' ? 'Reminder Emails' : 'Announcements';
 
+  const tableRows = rows.map((r) => ({
+    key: r.id,
+    cells: [
+      <span key="date" className="whitespace-nowrap text-slate-500">{new Date(r.date).toLocaleString()}</span>,
+      <StatusBadge key="status" status={r.status} />,
+      <div key="details" className="font-mono text-[12px] space-y-1">
+        <div className="text-slate-600">To: {r.recipient || '—'} ({r.customer})</div>
+        <div className="text-slate-800 font-semibold">{r.subject}</div>
+        <div className="text-slate-600 whitespace-pre-wrap">{r.message}</div>
+        {r.detail && <div className="text-slate-400">{r.detail}</div>}
+      </div>,
+    ],
+  }));
+
   return (
     <div>
-      <SubTabs
-        tabs={[['payment', 'Payment Emails'], ['reminder', 'Reminder Emails'], ['announcement', 'Announcements']]}
-        active={sub}
-        onChange={setSub}
-      />
-      <Panel title={title} onRefresh={load}>
-        <div className={box}>
-          {rows.length === 0 ? (
-            <div className={`${mono} text-slate-400`}>No email log entries found.</div>
-          ) : (
-            <div className="space-y-2">
-              {rows.map((r) => (
-                <div key={r.id} className={`${mono} border-b border-slate-100 pb-2`}>
-                  <div className="text-slate-400">{new Date(r.date).toLocaleString()} · <span className={r.status === 'sent' ? 'text-emerald-600' : 'text-rose-600'}>{r.status}</span></div>
-                  <div className="text-slate-700">To: {r.recipient || '—'} ({r.customer})</div>
-                  <div className="text-slate-800 font-semibold">{r.subject}</div>
-                  <div className="text-slate-600 whitespace-pre-wrap">{r.message}</div>
-                  {r.detail && <div className="text-slate-400">{r.detail}</div>}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </Panel>
+      <div className="mb-4">
+        <TabPills tabs={EMAIL_SUBTABS} active={sub} onChange={setSub} />
+      </div>
+      <LogPanel title={title} onRefresh={load}>
+        <DataTable
+          columns={[
+            { key: 'date', label: 'Date', className: 'w-36' },
+            { key: 'status', label: 'Status' },
+            { key: 'details', label: 'Details' },
+          ]}
+          rows={tableRows}
+          emptyMessage="No email log entries found."
+        />
+      </LogPanel>
     </div>
   );
 }
