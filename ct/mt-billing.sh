@@ -36,7 +36,7 @@ resolve_script_path() {
 SCRIPT_PATH="$(resolve_script_path)"
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
 
-set -u
+# Do not enable `set -u` — community-scripts build.func references optional env vars (e.g. SSH_CLIENT).
 
 # Embed guest install script so build.func never curls GitHub for install/*.sh
 extract_install_script() {
