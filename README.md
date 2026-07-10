@@ -91,19 +91,31 @@ data otherwise).
 
 ## Deploying on Ubuntu (Proxmox)
 
-### One-liner (recommended)
+### One-liner (public repo only)
 
-Run on your **Proxmox VE host** as root — creates an Ubuntu 24.04 LXC (2 CPU, 4 GB RAM, 32 GB disk) and installs everything unattended:
+GitHub raw URLs return **404 on private repositories**. Make the repo public first, or use the **local install** below.
 
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/tsogs66/MT-Billing/main/ct/mt-billing.sh)"
 ```
 
-Unattended default install (no menu):
+Unattended:
 
 ```bash
 mode=default bash -c "$(curl -fsSL https://raw.githubusercontent.com/tsogs66/MT-Billing/main/ct/mt-billing.sh)"
 ```
+
+### Local install (private repo — use this if curl returns 404)
+
+On the **Proxmox host** as root:
+
+```bash
+git clone https://github.com/tsogs66/MT-Billing.git
+cd MT-Billing
+mode=default bash ct/mt-billing.sh
+```
+
+The guest install script is **embedded** inside `ct/mt-billing.sh`, so no second download is needed during container setup.
 
 Optional environment variables:
 
