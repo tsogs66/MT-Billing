@@ -27,10 +27,12 @@ export default function Network() {
 
 function WanFailover() {
   const [routes, setRoutes] = useState<any[]>([]);
+  const [live, setLive] = useState(false);
   const [error, setError] = useState('');
   const load = () =>
     api.get('/network/wan').then((r) => {
-      setRoutes(r.data);
+      setRoutes(r.data.routes || []);
+      setLive(!!r.data.live);
       setError('');
     }).catch((e) => setError(e?.response?.data?.error || 'Could not load WAN routes'));
   useEffect(() => {
@@ -60,6 +62,12 @@ function WanFailover() {
   return (
     <div className="space-y-5 max-w-4xl">
       {error && <div className="text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">{error}</div>}
+      {!live && routes.length === 0 && (
+        <div className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+          No live WAN routes available. Add a reachable MikroTik router with API credentials — routes with check-gateway appear here when the router is online.
+        </div>
+      )}
+      {routes.length > 0 && (
       <Card interactive>
         <div className="flex items-center justify-between">
           <div>
@@ -74,6 +82,7 @@ function WanFailover() {
           </button>
         </div>
       </Card>
+      )}
 
       <Card title="Monitored WAN Routes" noPadding>
         <DataTable
@@ -100,7 +109,7 @@ function WanFailover() {
               </div>,
             ],
           }))}
-          emptyMessage="No monitored WAN routes."
+          emptyMessage={live ? 'No monitored WAN routes on connected routers.' : 'WAN routes appear when a MikroTik router is reachable.'}
         />
       </Card>
     </div>

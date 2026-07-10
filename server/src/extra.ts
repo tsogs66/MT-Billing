@@ -42,7 +42,16 @@ export function initExtra() {
       status TEXT DEFAULT 'Active',
       enabled INTEGER DEFAULT 1,
       interface_name TEXT,
-      dst_address TEXT DEFAULT '0.0.0.0/0'
+      dst_address TEXT DEFAULT '0.0.0.0/0',
+      route_id TEXT
+    );
+    CREATE TABLE IF NOT EXISTS map_connectors (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      kind TEXT NOT NULL,
+      from_id INTEGER NOT NULL,
+      to_id INTEGER NOT NULL,
+      points TEXT NOT NULL,
+      UNIQUE(kind, from_id, to_id)
     );
   `);
 
@@ -56,6 +65,9 @@ export function initExtra() {
     if (!columnExists('wan_routes', col)) db.exec(`ALTER TABLE wan_routes ADD COLUMN ${col} ${type}`);
   }
 
+  // Drop stale sample WAN routes that were never synced from a live router.
+  db.prepare('DELETE FROM wan_routes WHERE route_id IS NULL OR route_id = ""').run();
+
   for (const [col, type] of [
     ['license_key', 'TEXT'],
     ['license_activated', 'INTEGER DEFAULT 0'],
@@ -64,13 +76,6 @@ export function initExtra() {
     ['zerotier_node_name', 'TEXT'],
   ] as [string, string][]) {
     if (!columnExists('app_settings', col)) db.exec(`ALTER TABLE app_settings ADD COLUMN ${col} ${type}`);
-  }
-
-  if ((db.prepare('SELECT COUNT(*) AS c FROM wan_routes').get() as any).c === 0) {
-    const ins = db.prepare('INSERT INTO wan_routes (gateway, check_method, distance, status, enabled) VALUES (?, ?, ?, ?, 1)');
-    ins.run('8.8.8.8', 'ping', 1, 'Active');
-    ins.run('50.50.60.1', 'ping', 1, 'Active');
-    ins.run('192.168.59.1', 'ping', 1, 'Active');
   }
 
   if ((db.prepare('SELECT COUNT(*) AS c FROM roles').get() as any).c === 0) {
@@ -121,7 +126,10 @@ async function syncWanRoutesFromRouters() {
     }
   }
 
-  if (collected.length === 0) return false;
+  if (collected.length === 0) {
+    db.prepare('DELETE FROM wan_routes').run();
+    return false;
+  }
 
   db.prepare('DELETE FROM wan_routes').run();
   const ins = db.prepare(
@@ -150,17 +158,18 @@ function getRouterConn(routerId: number) {
 }
 
 extraRouter.get('/network/wan', async (_req, res) => {
-  await syncWanRoutesFromRouters();
-  res.json(
-    db
-      .prepare(
-        `SELECT id, router_id AS routerId, router_name AS routerName, gateway,
-                check_method AS checkMethod, distance, status, enabled,
-                interface_name AS interfaceName, dst_address AS dstAddress
-         FROM wan_routes ORDER BY router_name, distance, id`
-      )
-      .all()
-  );
+  const live = await syncWanRoutesFromRouters();
+  const routes = live
+    ? (db
+        .prepare(
+          `SELECT id, router_id AS routerId, router_name AS routerName, gateway,
+                  check_method AS checkMethod, distance, status, enabled,
+                  interface_name AS interfaceName, dst_address AS dstAddress
+           FROM wan_routes WHERE route_id IS NOT NULL ORDER BY router_name, distance, id`
+        )
+        .all() as any[])
+    : [];
+  res.json({ routes, live });
 });
 extraRouter.post('/network/wan/:id/toggle', async (req, res) => {
   const id = Number(req.params.id);

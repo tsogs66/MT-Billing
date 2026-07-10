@@ -915,10 +915,14 @@ app.get('/api/map', (req, res) => {
   const napCount = (db.prepare("SELECT COUNT(*) AS c FROM naps WHERE kind = 'nap'").get() as any).c;
   const onlineOnu = clients.filter((c) => c.online && c.status === 'Active').length;
   const offlineOnu = clients.filter((c) => c.status === 'Active' && !c.online).length;
+  const connectors = (db.prepare('SELECT id, kind, from_id AS fromId, to_id AS toId, points FROM map_connectors').all() as any[]).map(
+    (c) => ({ ...c, points: JSON.parse(c.points || '[]') })
+  );
   res.json({
     naps,
     clients,
     servers,
+    connectors,
     stats: { servers: servers.length, olts, naps: napCount, totalClients, withoutLocation, onlineOnu, offlineOnu },
   });
 });
@@ -977,6 +981,43 @@ app.delete('/api/naps/:id', (req, res) => {
   const children = (db.prepare('SELECT COUNT(*) AS c FROM naps WHERE parent_id = ?').get(id) as any).c;
   if (children > 0) return res.status(400).json({ error: 'Remove child NAPs first.' });
   db.prepare('DELETE FROM naps WHERE id = ?').run(id);
+  db.prepare('DELETE FROM map_connectors WHERE (kind = ? AND (from_id = ? OR to_id = ?)) OR (kind = ? AND (from_id = ? OR to_id = ?))').run(
+    'olt-nap', id, id, 'nap-client', id, id
+  );
+  res.json({ ok: true });
+});
+
+// ---- Map cable connectors (editable street paths) ----
+app.get('/api/map/connectors', (_req, res) => {
+  const rows = db.prepare('SELECT id, kind, from_id AS fromId, to_id AS toId, points FROM map_connectors').all() as any[];
+  res.json(rows.map((r) => ({ ...r, points: JSON.parse(r.points || '[]') })));
+});
+
+app.post('/api/map/connectors', (req, res) => {
+  const b = req.body || {};
+  const kind = String(b.kind || '');
+  const fromId = Number(b.fromId);
+  const toId = Number(b.toId);
+  const points = b.points;
+  if (!kind || !fromId || !toId || !Array.isArray(points) || points.length < 2) {
+    return res.status(400).json({ error: 'kind, fromId, toId, and points (min 2) are required' });
+  }
+  const json = JSON.stringify(points);
+  const ex = db.prepare('SELECT id FROM map_connectors WHERE kind = ? AND from_id = ? AND to_id = ?').get(kind, fromId, toId) as any;
+  if (ex) {
+    db.prepare('UPDATE map_connectors SET points = ? WHERE id = ?').run(json, ex.id);
+    return res.json({ ok: true, id: ex.id });
+  }
+  const info = db.prepare('INSERT INTO map_connectors (kind, from_id, to_id, points) VALUES (?, ?, ?, ?)').run(kind, fromId, toId, json);
+  res.status(201).json({ ok: true, id: info.lastInsertRowid });
+});
+
+app.delete('/api/map/connectors', (req, res) => {
+  const kind = String(req.query.kind || '');
+  const fromId = Number(req.query.fromId);
+  const toId = Number(req.query.toId);
+  if (!kind || !fromId || !toId) return res.status(400).json({ error: 'kind, fromId, toId required' });
+  db.prepare('DELETE FROM map_connectors WHERE kind = ? AND from_id = ? AND to_id = ?').run(kind, fromId, toId);
   res.json({ ok: true });
 });
 

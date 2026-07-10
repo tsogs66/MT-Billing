@@ -127,6 +127,32 @@ body {
 .onu-dot.disabled {
   opacity: 1;
 }
+.map-node-active {
+  box-shadow: 0 0 0 4px rgba(249, 115, 22, 0.45), 0 2px 8px rgba(0,0,0,.25);
+  transform: scale(1.08);
+}
+.onu-dot.selected {
+  transform: scale(1.5);
+  box-shadow: 0 0 0 4px rgba(249, 115, 22, 0.5);
+}
+
+.map-client-panel {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  z-index: 600;
+  width: min(340px, calc(100% - 24px));
+  max-height: 70%;
+  overflow-y: auto;
+}
+
+.map-draw-banner {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 600;
+}
 @keyframes onu-pulse {
   0% {
     box-shadow: 0 0 0 0 var(--onu-glow), 0 0 2px rgba(0, 0, 0, 0.45);
