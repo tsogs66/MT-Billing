@@ -9,16 +9,34 @@
 # Unattended:
 #   mode=default bash -c "$(curl -fsSL https://raw.githubusercontent.com/tsogs66/MT-Billing/main/ct/mt-billing.sh)"
 #
-# Private repo or local copy (recommended until repo is public):
+# Private repo or local copy:
 #   git clone https://github.com/tsogs66/MT-Billing.git && cd MT-Billing && sudo bash ct/mt-billing.sh
 
-set -euo pipefail
+set -eo pipefail
 
-SCRIPT_PATH="${BASH_SOURCE[0]}"
-while [[ -L "$SCRIPT_PATH" ]]; do
-  SCRIPT_PATH="$(readlink -f "$SCRIPT_PATH")"
-done
+MT_BILLING_RAW_URL="${MT_BILLING_RAW_URL:-https://raw.githubusercontent.com/tsogs66/MT-Billing/main/ct/mt-billing.sh}"
+
+# bash -c "$(curl ...)" has no real file path — save to a temp copy for embedded-install extraction.
+resolve_script_path() {
+  local src="${BASH_SOURCE[0]:-}"
+  if [[ -n "$src" && -f "$src" ]]; then
+    while [[ -L "$src" ]]; do
+      src="$(readlink -f "$src")"
+    done
+    printf '%s' "$src"
+    return
+  fi
+  local tmp
+  tmp="$(mktemp /tmp/mt-billing-ct.XXXXXX.sh)"
+  curl -fsSL "$MT_BILLING_RAW_URL" -o "$tmp"
+  chmod 755 "$tmp"
+  printf '%s' "$tmp"
+}
+
+SCRIPT_PATH="$(resolve_script_path)"
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+
+set -u
 
 # Embed guest install script so build.func never curls GitHub for install/*.sh
 extract_install_script() {
