@@ -1,0 +1,12 @@
+node_modules/
+dist/
+build/
+*.log
+.DS_Store
+.env
+server/data/*.db
+!server/data/mt-billing.db
+server/data/*.db-*
+coverage/
+*.tsbuildinfo
+activator/dist/
