@@ -29,8 +29,13 @@ export function RouterProvider({ children }: { children: ReactNode }) {
     const token = localStorage.getItem('mt_token');
     if (!token) return;
     api.get('/routers').then((r) => {
-      setRouters(r.data);
-      setCurrent((prev) => prev || r.data[0] || null);
+      const list: RouterDevice[] = r.data || [];
+      setRouters(list);
+      setCurrent((prev) => {
+        if (list.length === 0) return null;
+        const still = prev ? list.find((x) => x.id === prev.id) : undefined;
+        return still || list[0];
+      });
     });
   };
 

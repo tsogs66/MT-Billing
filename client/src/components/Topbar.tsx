@@ -47,17 +47,22 @@ export default function Topbar({ title }: { title: string }) {
         <div className="relative" ref={routerRef}>
           <button
             type="button"
-            onClick={() => setRouterOpen((v) => !v)}
-            className="flex items-center gap-2 text-sm border border-slate-200/80 bg-white/80 rounded-xl px-3 py-2 hover:border-brand-300 hover:shadow-sm transition-all duration-200"
+            onClick={() => routers.length > 0 && setRouterOpen((v) => !v)}
+            disabled={routers.length === 0}
+            className={`flex items-center gap-2 text-sm border rounded-xl px-3 py-2 transition-all duration-200 ${
+              routers.length === 0
+                ? 'border-slate-100 bg-slate-50 text-slate-400 cursor-not-allowed'
+                : 'border-slate-200/80 bg-white/80 hover:border-brand-300 hover:shadow-sm'
+            }`}
           >
             <span className="hidden sm:flex items-center justify-center w-7 h-7 rounded-lg bg-brand-50 text-brand-500">
               <RouterIcon size={15} />
             </span>
             <div className="text-left hidden sm:block">
               <div className="text-[10px] text-slate-400 leading-none">Active router</div>
-              <div className="font-semibold text-slate-700 leading-tight">{current?.name || 'None'}</div>
+              <div className="font-semibold text-slate-700 leading-tight">{current?.name ?? 'None'}</div>
             </div>
-            <span className="sm:hidden font-medium text-slate-700 max-w-[80px] truncate">{current?.name || 'Router'}</span>
+            <span className="sm:hidden font-medium text-slate-700 max-w-[80px] truncate">{current?.name ?? 'None'}</span>
             <ChevronDown size={14} className={`text-slate-400 transition-transform ${routerOpen ? 'rotate-180' : ''}`} />
           </button>
 

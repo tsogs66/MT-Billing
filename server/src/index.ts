@@ -856,13 +856,13 @@ function seeded(id: number, salt: number, mod: number) {
   return ((id * 2654435761 + salt * 40503) >>> 0) % mod;
 }
 
-app.get('/api/map', (_req, res) => {
+app.get('/api/map', (req, res) => {
+  const routerId = req.query.routerId ? Number(req.query.routerId) : null;
   const naps = db.prepare('SELECT id, name, kind, lat, lng, ports, parent_id AS parentId FROM naps').all();
-  const clients = db
-    .prepare(
-      `SELECT u.id, u.username, u.customer_name AS customer, u.status, u.online, u.lat, u.lng,
-              u.nap_id AS napId, u.service, u.account_number AS account, u.profile AS plan,
-              u.subscription_due AS due, u.plc_port AS plcPort,
+  const clientSql = `
+      SELECT u.id, u.username, u.customer_name AS customer, u.status, u.online, u.lat, u.lng,
+              u.nap_id AS napId, u.router_id AS routerId, u.service, u.account_number AS account,
+              u.profile AS plan, u.subscription_due AS due, u.plc_port AS plcPort, u.address,
               n.name AS napName, n.parent_id AS oltId,
               o.name AS oltName,
               r.name AS serverName
@@ -870,9 +870,27 @@ app.get('/api/map', (_req, res) => {
        LEFT JOIN naps n ON n.id = u.nap_id
        LEFT JOIN naps o ON o.id = n.parent_id
        LEFT JOIN routers r ON r.id = u.router_id
-       WHERE u.lat IS NOT NULL AND u.lng IS NOT NULL`
-    )
-    .all() as any[];
+       WHERE u.lat IS NOT NULL AND u.lng IS NOT NULL
+       ${routerId ? 'AND u.router_id = ?' : ''}`;
+  const clients = (routerId
+    ? db.prepare(clientSql).all(routerId)
+    : db.prepare(clientSql).all()) as any[];
+
+  const oltPos = db.prepare("SELECT lat, lng FROM naps WHERE kind = 'olt' ORDER BY id LIMIT 1").get() as
+    | { lat: number; lng: number }
+    | undefined;
+  const baseLat = oltPos?.lat ?? 15.1785;
+  const baseLng = oltPos?.lng ?? 120.5945;
+  const servers = (db.prepare('SELECT id, name, host, status FROM routers ORDER BY id').all() as any[]).map(
+    (s, i) => ({
+      id: s.id,
+      name: s.name,
+      host: s.host,
+      status: s.status,
+      lat: baseLat - 0.0015 - i * 0.0006,
+      lng: baseLng - 0.0025 - i * 0.0004,
+    })
+  );
   clients.forEach((c) => {
     c.online = !!c.online;
     const napName = c.napName || '-';
@@ -893,15 +911,15 @@ app.get('/api/map', (_req, res) => {
   });
   const totalClients = (db.prepare('SELECT COUNT(*) AS c FROM pppoe_users').get() as any).c;
   const withoutLocation = (db.prepare('SELECT COUNT(*) AS c FROM pppoe_users WHERE lat IS NULL').get() as any).c;
-  const servers = (db.prepare('SELECT COUNT(*) AS c FROM routers').get() as any).c;
   const olts = (db.prepare("SELECT COUNT(*) AS c FROM naps WHERE kind = 'olt'").get() as any).c;
   const napCount = (db.prepare("SELECT COUNT(*) AS c FROM naps WHERE kind = 'nap'").get() as any).c;
-  const onlineOnu = clients.filter((c) => c.online).length;
-  const offlineOnu = clients.length - onlineOnu;
+  const onlineOnu = clients.filter((c) => c.online && c.status === 'Active').length;
+  const offlineOnu = clients.filter((c) => c.status === 'Active' && !c.online).length;
   res.json({
     naps,
     clients,
-    stats: { servers, olts, naps: napCount, totalClients, withoutLocation, onlineOnu, offlineOnu },
+    servers,
+    stats: { servers: servers.length, olts, naps: napCount, totalClients, withoutLocation, onlineOnu, offlineOnu },
   });
 });
 
