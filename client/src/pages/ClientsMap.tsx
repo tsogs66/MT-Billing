@@ -42,9 +42,17 @@ function clientState(c: Client): ClientState {
 
 const CLIENT_COLORS: Record<ClientState, { fill: string; glow: string }> = {
   online: { fill: '#22c55e', glow: 'rgba(34,197,94,0.55)' },
-  offline: { fill: '#f97316', glow: 'rgba(249,115,22,0.45)' },
-  disabled: { fill: '#ef4444', glow: 'rgba(239,68,68,0.35)' },
+  offline: { fill: '#ef4444', glow: 'rgba(255,255,255,0.9)' },
+  disabled: { fill: '#b91c1c', glow: 'rgba(239,68,68,0.35)' },
 };
+
+function cableClass(path: [number, number][], link: 'backbone' | 'online' | 'offline' | 'disabled'): string {
+  const street = path.length > 2 ? 'flow-line-cable ' : '';
+  if (link === 'backbone') return `${street}flow-line-backbone`;
+  if (link === 'online') return `${street}flow-line-active`;
+  if (link === 'offline') return `${street}flow-line-cable-offline`;
+  return `${street}flow-line-cable-disabled`;
+}
 
 function findConnector(connectors: Connector[], kind: string, fromId: number, toId: number) {
   return connectors.find((c) => c.kind === kind && c.fromId === fromId && c.toId === toId);
@@ -294,9 +302,9 @@ export default function ClientsMap() {
 
       <div className="text-xs text-slate-500 mb-3 flex items-center gap-3 flex-wrap">
         <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block animate-pulse" /> Online</span>
-        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-orange-500 inline-block" /> Offline</span>
-        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-rose-500 inline-block" /> Disabled</span>
-        <span className="text-slate-400">· Hover for quick info · Click client for full details · Lines: Server → OLT → NAP → Client</span>
+        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-rose-500 ring-2 ring-white animate-pulse inline-block" /> Offline</span>
+        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-rose-800 inline-block" /> Disabled</span>
+        <span className="text-slate-400">· Animated cables follow saved street paths · Hover/click client for details</span>
       </div>
 
       {topoOpen && (
@@ -389,7 +397,7 @@ export default function ClientsMap() {
             const path = resolvePath(connectors, 'server-olt', srv.id, olt.id, defaultPath([srv.lat, srv.lng], [olt.lat, olt.lng]));
             return (
               <Polyline key={`s-olt-${srv.id}`} positions={path} pathOptions={{
-                color: '#0d9488', weight: hi ? 4 : 2.5, opacity: 0.75 * lineDim(hi), className: lineClass(true, true),
+                color: '#0d9488', weight: hi ? 4 : 2.5, opacity: 0.85 * lineDim(hi), className: cableClass(path, 'backbone'),
               }} />
             );
           })}
@@ -399,7 +407,7 @@ export default function ClientsMap() {
             const path = resolvePath(connectors, 'olt-nap', olt.id, n.id, defaultPath([olt.lat, olt.lng], [n.lat, n.lng]));
             return (
               <Polyline key={`olt-nap-${n.id}`} positions={path} pathOptions={{
-                color: '#2563eb', weight: hi ? 3.5 : 2, opacity: 0.8 * lineDim(hi), className: lineClass(true, true),
+                color: '#2563eb', weight: hi ? 3.5 : 2, opacity: 0.9 * lineDim(hi), className: cableClass(path, 'backbone'),
               }} />
             );
           })}
@@ -408,14 +416,16 @@ export default function ClientsMap() {
             const nap = c.napId ? napsById[c.napId] : null;
             if (!nap) return null;
             const state = clientState(c);
-            const active = state === 'online';
             const hi = highlightChain?.clientId === c.id;
-            const lineColor = state === 'online' ? '#22c55e' : state === 'offline' ? '#f97316' : '#f87171';
+            const lineColor = state === 'online' ? '#22c55e' : state === 'offline' ? '#ef4444' : '#b91c1c';
             const path = resolvePath(connectors, 'nap-client', nap.id, c.id, defaultPath([nap.lat, nap.lng], [c.lat, c.lng]));
+            const linkKind = state === 'online' ? 'online' : state === 'offline' ? 'offline' : 'disabled';
             return (
               <Polyline key={`cl-${c.id}`} positions={path} pathOptions={{
-                color: lineColor, weight: hi ? 3 : 1.5, opacity: (active ? 0.9 : 0.35) * lineDim(hi),
-                dashArray: active ? undefined : '4 6', className: active ? lineClass(true) : '',
+                color: lineColor,
+                weight: hi ? 3.5 : path.length > 2 ? 2.5 : 2,
+                opacity: (state === 'online' ? 0.92 : 0.55) * lineDim(hi),
+                className: cableClass(path, linkKind),
               }} />
             );
           })}
@@ -424,7 +434,7 @@ export default function ClientsMap() {
             const ends = resolveEndpoints(routeKind, Number(routeFrom), Number(routeTo), servers, olt, napsById, clients);
             if (!ends) return null;
             return (
-              <Polyline positions={[ends[0], ...drawPoints, ends[1]]} pathOptions={{ color: '#f59e0b', weight: 3, dashArray: '6 4' }} />
+              <Polyline positions={[ends[0], ...drawPoints, ends[1]]} pathOptions={{ color: '#f59e0b', weight: 3, className: 'flow-line-cable' }} />
             );
           })()}
 
