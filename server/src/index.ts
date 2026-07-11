@@ -75,6 +75,18 @@ app.get('/api/auth/panel-id', (_req, res) => {
   });
 });
 
+// Public: company branding for sidebar / login (name + logo only)
+app.get('/api/company/branding', (_req, res) => {
+  const c = db.prepare('SELECT name, logo, address FROM company WHERE id = 1').get() as
+    | { name?: string; logo?: string | null; address?: string | null }
+    | undefined;
+  res.json({
+    name: c?.name || 'MT-Billing',
+    logo: c?.logo || null,
+    address: c?.address || null,
+  });
+});
+
 // Public: reset panel login to default credentials using vendor activation code
 app.post('/api/auth/forgot-password-reset', (req, res) => {
   const hwid = panelHardwareId();

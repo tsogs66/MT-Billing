@@ -3,8 +3,10 @@ import { Building2, UploadCloud } from 'lucide-react';
 import Layout from '../components/Layout';
 import { SettingsSection, FormField, Flash, LoadingPage } from '../components/ui';
 import { api } from '../api';
+import { useCompany } from '../context/CompanyContext';
 
 export default function Company() {
+  const { refresh } = useCompany();
   const [company, setCompany] = useState<any>(null);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState('');
@@ -32,6 +34,7 @@ export default function Company() {
   const save = async () => {
     const r = await api.put('/company', company);
     setCompany(r.data);
+    await refresh();
     setSaved(true);
     setTimeout(() => setSaved(false), 2500);
   };
