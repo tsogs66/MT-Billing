@@ -3,6 +3,7 @@ import { Copy, Link2, Plus, Trash2, RefreshCw } from 'lucide-react';
 import Layout from '../components/Layout';
 import { Card, Toolbar, StatusBadge, IconAction } from '../components/ui';
 import { api, peso } from '../api';
+import { copyTextOrPrompt } from '../lib/clipboard';
 
 export default function PayPortal() {
   const [links, setLinks] = useState<any[]>([]);
@@ -26,37 +27,38 @@ export default function PayPortal() {
     load();
   }, []);
 
+  const resolvePayUrl = (data: { url?: string; path?: string; token?: string }) => {
+    if (typeof data.url === 'string' && /^https?:\/\//i.test(data.url)) return data.url;
+    const path = data.path || (data.token ? `/pay/${data.token}` : '');
+    if (!path) return '';
+    return `${window.location.origin}${path.startsWith('/') ? path : `/${path}`}`;
+  };
+
   const create = async () => {
     if (!userId) return;
     setBusy(true);
     try {
       const baseUrl = window.location.origin;
       const r = await api.post('/payment-links', { userId: Number(userId), months, baseUrl });
-      const full = r.data.url?.startsWith('http') ? r.data.url : `${baseUrl}${r.data.path || r.data.url}`;
-      try {
-        await navigator.clipboard.writeText(full);
-        show(`Pay link created and copied: ${full}`);
-      } catch {
-        show(`Pay link created: ${full}`);
-      }
+      const full = resolvePayUrl(r.data);
+      const ok = full ? await copyTextOrPrompt(full, 'Pay link — copy:') : false;
+      show(ok ? `Pay link created and copied: ${full}` : full ? `Pay link created: ${full}` : 'Pay link created');
       load();
     } catch (e: any) {
-      show(e?.response?.data?.error || 'Failed');
+      show(e?.response?.data?.error || e?.response?.data?.message || 'Failed');
     } finally {
       setBusy(false);
     }
   };
 
   const copy = async (link: any) => {
-    const full = link.token
-      ? `${window.location.origin}/pay/${link.token}`
-      : '';
-    try {
-      await navigator.clipboard.writeText(full);
-      show('Copied to clipboard');
-    } catch {
-      show(full);
+    const full = resolvePayUrl(link);
+    if (!full) {
+      show('No link to copy');
+      return;
     }
+    const ok = await copyTextOrPrompt(full, 'Pay link — copy:');
+    show(ok ? 'Copied to clipboard' : 'Copy from the dialog, then share with the subscriber');
   };
 
   const remove = async (id: number) => {

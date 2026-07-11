@@ -3,13 +3,19 @@ export async function copyText(text: string): Promise<boolean> {
   const value = String(text ?? '');
   if (!value) return false;
 
-  try {
-    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(value);
-      return true;
+  // navigator.clipboard is unreliable / blocked on plain HTTP (typical Proxmox LXC panels).
+  const secure =
+    typeof window === 'undefined' || window.isSecureContext !== false;
+
+  if (secure) {
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value);
+        return true;
+      }
+    } catch {
+      /* fall through to legacy path */
     }
-  } catch {
-    /* fall through to legacy path */
   }
 
   try {
@@ -37,4 +43,17 @@ export async function copyText(text: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/** Copy text; if clipboard APIs fail, open a prompt so the user can copy manually. */
+export async function copyTextOrPrompt(text: string, promptLabel = 'Copy this link:'): Promise<boolean> {
+  const value = String(text ?? '');
+  if (!value) return false;
+  if (await copyText(value)) return true;
+  try {
+    window.prompt(promptLabel, value);
+  } catch {
+    /* ignore */
+  }
+  return false;
 }

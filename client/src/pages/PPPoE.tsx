@@ -9,6 +9,7 @@ import { api, peso } from '../api';
 import LocationEditor, { DEFAULT_PIN } from '../components/LocationEditor';
 import { useRouterDevice } from '../context/RouterContext';
 import { TrafficPair } from '../lib/traffic';
+import { copyTextOrPrompt } from '../lib/clipboard';
 
 interface PUser {
   id: number;
@@ -164,15 +165,19 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
   const copyPayLink = async (u: PUser) => {
     try {
       const r = await api.post(`/payment-links/for-user/${u.id}`, { baseUrl: window.location.origin });
-      const full = r.data.url?.startsWith('http') ? r.data.url : `${window.location.origin}${r.data.path || r.data.url}`;
-      try {
-        await navigator.clipboard.writeText(full);
-        showToast(`Pay link copied for ${u.username}`);
-      } catch {
-        showToast(full);
+      const path = r.data.path || (r.data.token ? `/pay/${r.data.token}` : r.data.url);
+      const full =
+        typeof r.data.url === 'string' && /^https?:\/\//i.test(r.data.url)
+          ? r.data.url
+          : `${window.location.origin}${String(path || '').startsWith('/') ? path : `/${path || ''}`}`;
+      if (!full || full.endsWith('/pay/') || full.endsWith('/undefined')) {
+        showToast('Pay link was created but URL is empty.');
+        return;
       }
+      const ok = await copyTextOrPrompt(full, `Pay link for ${u.username} — copy:`);
+      showToast(ok ? `Pay link copied for ${u.username}` : `Pay link ready — copy from the dialog`);
     } catch (e: any) {
-      showToast(e?.response?.data?.error || 'Could not create pay link');
+      showToast(e?.response?.data?.error || e?.response?.data?.message || 'Could not create pay link');
     }
   };
 
