@@ -7,8 +7,10 @@ import { api } from '../api';
 
 type Phase = 'idle' | 'updating' | 'success' | 'failed';
 
-const POLL_MS = 2500;
-const TIMEOUT_MS = 15 * 60 * 1000;
+const POLL_MS = 2000;
+const TIMEOUT_MS = 12 * 60 * 1000;
+const STALE_RUNNING_MS = 90_000;
+const SESSION_KEY = 'mt_updater_phase';
 
 export default function Updater() {
   const [info, setInfo] = useState<any>(null);
@@ -22,11 +24,21 @@ export default function Updater() {
   const startedAtRef = useRef<number>(0);
   const targetShaRef = useRef<string | null>(null);
   const fromShaRef = useRef<string | null>(null);
+  const seenOfflineRef = useRef(false);
+  const healthyTicksRef = useRef(0);
 
   const stopPoll = () => {
     if (pollRef.current != null) {
       window.clearInterval(pollRef.current);
       pollRef.current = null;
+    }
+  };
+
+  const clearSession = () => {
+    try {
+      sessionStorage.removeItem(SESSION_KEY);
+    } catch {
+      /* ignore */
     }
   };
 
@@ -38,10 +50,34 @@ export default function Updater() {
 
   useEffect(() => {
     load();
+    // Recover if a previous tab refresh left a stale overlay intent
+    try {
+      const raw = sessionStorage.getItem(SESSION_KEY);
+      if (raw) {
+        const saved = JSON.parse(raw);
+        if (saved?.phase === 'updating' && saved?.startedAt) {
+          const age = Date.now() - Number(saved.startedAt);
+          if (age < TIMEOUT_MS) {
+            fromShaRef.current = saved.fromSha || null;
+            targetShaRef.current = saved.targetSha || null;
+            startedAtRef.current = Number(saved.startedAt);
+            setPhase('updating');
+            setBusy(true);
+            setStatusText('Resuming update watch…');
+            // startPolling defined below — call after mount via timeout
+            setTimeout(() => startPolling(true), 0);
+          } else {
+            clearSession();
+          }
+        }
+      }
+    } catch {
+      clearSession();
+    }
     return () => stopPoll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Freeze navigation / body scroll while updating
   useEffect(() => {
     if (phase !== 'updating') return;
     const prev = document.body.style.overflow;
@@ -61,6 +97,7 @@ export default function Updater() {
 
   const finishSuccess = (detail: string, from?: string | null, to?: string | null) => {
     stopPoll();
+    clearSession();
     setPhase('success');
     setBusy(false);
     setResult({
@@ -74,6 +111,7 @@ export default function Updater() {
 
   const finishFailed = (detail: string) => {
     stopPoll();
+    clearSession();
     setPhase('failed');
     setBusy(false);
     setResult({
@@ -85,67 +123,114 @@ export default function Updater() {
     load();
   };
 
-  const startPolling = () => {
+  const dismissOverlay = () => {
     stopPoll();
-    startedAtRef.current = Date.now();
-    setStatusText('Update started. Waiting for the panel to restart…');
+    clearSession();
+    setPhase('idle');
+    setBusy(false);
+    setStatusText('');
+    setMsg('Updater overlay closed. Refresh if the panel was already updated.');
+    load();
+  };
+
+  const startPolling = (resuming = false) => {
+    stopPoll();
+    if (!resuming) {
+      startedAtRef.current = Date.now();
+      seenOfflineRef.current = false;
+      healthyTicksRef.current = 0;
+    }
+    setStatusText(resuming ? 'Checking whether the update finished…' : 'Update started. Waiting for the panel to restart…');
+
+    try {
+      sessionStorage.setItem(
+        SESSION_KEY,
+        JSON.stringify({
+          phase: 'updating',
+          startedAt: startedAtRef.current,
+          fromSha: fromShaRef.current,
+          targetSha: targetShaRef.current,
+        })
+      );
+    } catch {
+      /* ignore */
+    }
 
     const tick = async () => {
       if (Date.now() - startedAtRef.current > TIMEOUT_MS) {
-        finishFailed('Update timed out after 15 minutes. Check the LXC logs or run install/mt-billing-update.sh manually.');
+        finishFailed('Update timed out. Close this screen and run: sudo bash /opt/mt-billing/install/mt-billing-update.sh');
         return;
       }
 
       try {
-        // Lightweight reachability probe (no auth)
-        await fetch('/api/health', { cache: 'no-store' }).then((r) => {
-          if (!r.ok) throw new Error('health');
-        });
+        const health = await fetch('/api/health', { cache: 'no-store' });
+        if (!health.ok) throw new Error('health');
       } catch {
+        seenOfflineRef.current = true;
+        healthyTicksRef.current = 0;
         setStatusText('Panel offline while updating — rebuilding and restarting services…');
         return;
       }
+
+      healthyTicksRef.current += 1;
 
       try {
         const r = await api.get('/updater');
         const data = r.data;
         setInfo(data);
         const job = data.job;
-        const jobStarted = job?.startedAt || job?.at;
-        const jobIsOurs =
-          !jobStarted ||
-          Date.parse(jobStarted) >= startedAtRef.current - 5000 ||
-          (fromShaRef.current && job?.from && String(job.from).toLowerCase() === String(fromShaRef.current).toLowerCase());
-
-        if (job?.status === 'running' && jobIsOurs) {
-          setStatusText(job.message || 'Update in progress…');
-          return;
-        }
-
-        if (job?.status === 'failed' && jobIsOurs) {
-          finishFailed(job.message || 'Update failed. See server logs for details.');
-          return;
-        }
-
         const current = data.currentSha ? String(data.currentSha).toLowerCase() : '';
         const target = targetShaRef.current ? String(targetShaRef.current).toLowerCase() : '';
-        const reachedTarget = target && current && current === target;
-        const jobUpdated = job?.status === 'updated' && jobIsOurs;
-        const upToDate = data.updateAvailable === false && current;
+        const reachedTarget = !!(target && current && current === target);
+        const upToDate = data.updateAvailable === false && !!current;
+        const elapsed = Date.now() - startedAtRef.current;
+        const jobStatus = String(job?.status || '');
 
-        if (jobUpdated || reachedTarget || (upToDate && Date.now() - startedAtRef.current > 8000)) {
-          const to = job?.to || data.currentSha || targetShaRef.current;
-          const from = job?.from || fromShaRef.current;
+        // Success: SHA matches, or job says updated/current, or panel is healthy + up to date
+        // after we saw downtime (or after enough time for a no-restart local update).
+        if (jobStatus === 'updated' || jobStatus === 'current') {
           finishSuccess(
-            job?.message ||
-              `Panel is now on ${short(to)}. You can continue using the panel.`,
-            from,
-            to
+            job?.message || `Panel is now on ${short(job?.to || data.currentSha)}.`,
+            job?.from,
+            job?.to || data.currentSha
           );
           return;
         }
 
-        setStatusText(job?.message || 'Panel is back — verifying version…');
+        if (reachedTarget || (upToDate && (seenOfflineRef.current || elapsed > 20_000) && healthyTicksRef.current >= 2)) {
+          finishSuccess(
+            `Panel is now on ${short(data.currentSha)}. You can continue using the panel.`,
+            fromShaRef.current,
+            data.currentSha
+          );
+          return;
+        }
+
+        if (jobStatus === 'failed') {
+          finishFailed(job?.message || 'Update failed. See server logs for details.');
+          return;
+        }
+
+        // Stale "running" while API is healthy and code already matches → treat as done
+        if (jobStatus === 'running' && (reachedTarget || upToDate) && elapsed > STALE_RUNNING_MS) {
+          finishSuccess(
+            'Update finished (cleared a stuck “running” status). Panel is up to date.',
+            job?.from || fromShaRef.current,
+            data.currentSha
+          );
+          return;
+        }
+
+        if (jobStatus === 'running') {
+          setStatusText(job?.message || 'Update in progress…');
+          return;
+        }
+
+        setStatusText(
+          seenOfflineRef.current
+            ? 'Panel is back — verifying version…'
+            : 'Waiting for rebuild to finish…'
+        );
       } catch {
         setStatusText('Waiting for API to come back online…');
       }
@@ -184,14 +269,17 @@ export default function Updater() {
     targetShaRef.current = info?.latestSha || null;
     setPhase('updating');
     setStatusText('Starting update…');
+    seenOfflineRef.current = false;
+    healthyTicksRef.current = 0;
 
     try {
       const r = await api.post('/updater/apply');
       if (r.data.fromSha) fromShaRef.current = r.data.fromSha;
       if (r.data.targetSha) targetShaRef.current = r.data.targetSha;
       setStatusText(r.data.message || 'Update started…');
-      startPolling();
+      startPolling(false);
     } catch (e: any) {
+      clearSession();
       setPhase('idle');
       setBusy(false);
       setErr(e?.response?.data?.message || e?.response?.data?.error || 'Update failed');
@@ -300,13 +388,16 @@ export default function Updater() {
               <h2 className="text-lg font-bold text-slate-900">Updating panel</h2>
               <p className="text-sm text-slate-500 mt-2 leading-relaxed">{statusText}</p>
               <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 mt-4">
-                Do not close this tab or navigate away until the update finishes.
+                Do not close this tab until the update finishes. If this screen is stuck, use Close below.
               </p>
               {(fromShaRef.current || targetShaRef.current) && (
                 <p className="text-xs text-slate-400 mt-3 font-mono">
                   {short(fromShaRef.current)} → {short(targetShaRef.current)}
                 </p>
               )}
+              <button type="button" className="btn-secondary mt-5" onClick={dismissOverlay}>
+                Close overlay
+              </button>
             </div>
           </div>,
           document.body

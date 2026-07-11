@@ -95,11 +95,11 @@ EOF
 }
 
 # Keep live panel data across hard resets (DB may be tracked in older checkouts).
+# Do NOT preserve .last-update.json — restore would overwrite "updated" with stale "running".
 PRESERVE_PATHS=(
   "server/data/mt-billing.db"
   "server/data/mt-billing.db-wal"
   "server/data/mt-billing.db-shm"
-  "server/data/.last-update.json"
   "server/.env"
 )
 

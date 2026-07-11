@@ -51,7 +51,7 @@ function jobStatePath(installDir?: string): string {
   return path.join(root, 'server/data/.last-update.json');
 }
 
-export function readUpdateJob(installDir?: string): UpdateJob | null {
+function readUpdateJobRaw(installDir?: string): UpdateJob | null {
   try {
     const p = jobStatePath(installDir);
     if (!fs.existsSync(p)) return null;
@@ -71,11 +71,36 @@ export function readUpdateJob(installDir?: string): UpdateJob | null {
   }
 }
 
+export function readUpdateJob(installDir?: string): UpdateJob | null {
+  const job = readUpdateJobRaw(installDir);
+  if (!job) return null;
+
+  // Stale "running" left behind when preserve/restore or a crashed update
+  // rewrote the job file — clear it once the API is serving again.
+  if (job.status === 'running') {
+    const started = Date.parse(job.startedAt || job.at || '');
+    const ageMs = Number.isFinite(started) ? Date.now() - started : 0;
+    if (ageMs > 3 * 60 * 1000) {
+      return writeUpdateJob(
+        {
+          status: 'failed',
+          from: job.from,
+          to: job.to,
+          message: 'Update marked failed — previous run did not finish cleanly (stale running state).',
+          startedAt: job.startedAt,
+        },
+        installDir
+      );
+    }
+  }
+  return job;
+}
+
 export function writeUpdateJob(job: Partial<UpdateJob> & { status: UpdateJobStatus }, installDir?: string): UpdateJob {
   const root = installDir || resolveInstallDir();
   const dir = path.join(root, 'server/data');
   fs.mkdirSync(dir, { recursive: true });
-  const prev = readUpdateJob(root);
+  const prev = readUpdateJobRaw(root);
   const now = new Date().toISOString();
   const next: UpdateJob = {
     status: job.status,
