@@ -26,6 +26,7 @@ import {
   addVlan,
   removeVlan,
 } from './mikrotik.js';
+import { getUpdaterStatus, applyUpdate, UPDATE_REPO } from './updater.js';
 
 export const extraRouter = express.Router();
 
@@ -743,26 +744,52 @@ extraRouter.get('/zerotier', (_req, res) => {
   });
 });
 
-// ---------------- Updater ----------------
-extraRouter.get('/updater', (_req, res) => {
-  res.json({
-    current: '1.0 Beta 2',
-    latest: '1.0 Beta 3',
-    updateAvailable: true,
-    changelog: [
-      'Added uptime monitoring and live interface traffic graphs',
-      'Email/SMS reminders with auto-disable on non-payment',
-      'Clients map ONU status, payments, and system settings',
-    ],
-    lastChecked: new Date().toISOString(),
-  });
+// ---------------- Updater (GitHub: tsogs66/MT-Billing) ----------------
+extraRouter.get('/updater', async (_req, res) => {
+  try {
+    const status = await getUpdaterStatus();
+    res.json(status);
+  } catch (e: any) {
+    res.status(500).json({
+      current: 'unknown',
+      latest: 'unknown',
+      updateAvailable: false,
+      changelog: [],
+      lastChecked: new Date().toISOString(),
+      repo: UPDATE_REPO.url,
+      branch: UPDATE_REPO.branch,
+      error: e?.message || 'Updater failed',
+    });
+  }
 });
-extraRouter.post('/updater/check', (_req, res) => {
-  res.json({ updateAvailable: true, latest: '1.0 Beta 3', lastChecked: new Date().toISOString() });
+
+extraRouter.post('/updater/check', async (_req, res) => {
+  try {
+    const status = await getUpdaterStatus();
+    res.json({
+      updateAvailable: status.updateAvailable,
+      latest: status.latest,
+      lastChecked: status.lastChecked,
+      repo: status.repo,
+      branch: status.branch,
+      currentSha: status.currentSha,
+      latestSha: status.latestSha,
+      changelog: status.changelog,
+      error: status.error,
+    });
+  } catch (e: any) {
+    res.status(502).json({ error: e?.message || 'Could not check GitHub for updates', repo: UPDATE_REPO.url });
+  }
 });
-extraRouter.post('/updater/apply', (_req, res) => {
-  db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run('info', 'updater', 'Update to 1.0 Beta 3 started');
-  res.json({ ok: true, message: 'Update queued. The panel will restart after applying.' });
+
+extraRouter.post('/updater/apply', async (_req, res) => {
+  try {
+    const result = await applyUpdate();
+    if (!result.ok) return res.status(400).json(result);
+    res.json(result);
+  } catch (e: any) {
+    res.status(500).json({ ok: false, message: e?.message || 'Update failed', repo: UPDATE_REPO.url });
+  }
 });
 
 // ---------------- Panel Roles ----------------
