@@ -1,9 +1,7 @@
 #!/usr/bin/env node
 /*
  * MT-Billing Password Reset Activator (vendor tool).
- *
- * Generates the reset code for a customer's Panel ID (shown on the login
- * "Forgot password" screen). Compile to .exe with pkg like the license activator.
+ * Prefer the unified activator/activator.cjs which also generates license keys.
  *
  * Algorithm must match server/src/panelId.ts (expectedPasswordResetCode).
  */
@@ -15,7 +13,9 @@ const readline = require('readline');
 const PASSWORD_RESET_SECRET = 'MT-BILLING-PASSWORD-RESET-2026';
 
 function normalizeCode(k) {
-  return String(k || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return String(k || '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
 }
 
 function resetCodeFor(hwid) {
@@ -34,8 +34,7 @@ function printResult(panelId) {
   console.log('   Reset Code : ' + code);
   console.log('  ========================================');
   console.log('');
-  console.log('  Customer enters this code on the login page');
-  console.log('  to restore default admin credentials.');
+  console.log('  Tip: use activator/activator.cjs for license + recovery together.');
   console.log('');
 }
 

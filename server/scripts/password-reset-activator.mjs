@@ -1,15 +1,9 @@
 #!/usr/bin/env node
-// MT-Billing Password Reset Activator (vendor tool).
-//
-// Customer copies Panel ID from the login "Forgot password" screen, sends it to you,
-// and you run this tool to generate the matching reset code:
+// MT-Billing Password Reset Activator (CLI) — must match server/src/panelId.ts
 //
 //   node server/scripts/password-reset-activator.mjs <PANEL-ID>
 //
-// Example:
-//   node server/scripts/password-reset-activator.mjs 1A2B-3C4D-5E6F-7890
-//
-// Algorithm must match server/src/panelId.ts (expectedPasswordResetCode).
+// Prefer the unified vendor tool: activator/activator.cjs (license + password reset).
 
 import crypto from 'crypto';
 

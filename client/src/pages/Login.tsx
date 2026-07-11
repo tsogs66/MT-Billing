@@ -209,7 +209,7 @@ function ForgotPasswordForm({ onBack, onSuccess }: { onBack: () => void; onSucce
           Reset panel login
         </h2>
         <p className="text-slate-500 text-sm mt-1 leading-relaxed">
-          Send your <strong>Panel ID</strong> to your vendor. They run the password-reset activator tool to give you a code. Enter it below to restore the default username and password.
+          Send your <strong>Panel ID</strong> to your vendor. They run the MT-Billing activator (same tool used for license keys) to give you a reset code. Enter it below to restore the default username and password.
         </p>
       </div>
 

@@ -5,8 +5,9 @@ import { fetchWanRoutes, setRouteEnabled } from './mikrotik.js';
 
 export const extraRouter = express.Router();
 
-// Shared license signing secret (vendor-side). The standalone activator script
-// uses the same value + algorithm to generate keys from a hardware ID.
+// Shared license / password-reset signing secrets live in panelId.ts.
+// Vendor tools: activator/activator.cjs (unified) and server/scripts/*-activator.mjs
+// must use the same normalizeCode + HMAC algorithms.
 
 function columnExists(table: string, col: string): boolean {
   const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];

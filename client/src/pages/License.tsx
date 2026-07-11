@@ -78,7 +78,7 @@ export default function License() {
           ) : (
             <FormField label="License Key">
               <div className="flex items-center gap-2">
-                <input className="input font-mono" value={key} onChange={(e) => setKey(e.target.value)} placeholder="XXXX-XXXX-XXXX-XXXX" />
+                <input className="input font-mono" value={key} onChange={(e) => setKey(e.target.value)} placeholder="XXXXX-XXXXX-XXXXX-XXXXX" />
                 <button type="button" className="btn-primary shrink-0" onClick={activate} disabled={busy || !key.trim()}>
                   {busy ? 'Activating…' : 'Activate'}
                 </button>

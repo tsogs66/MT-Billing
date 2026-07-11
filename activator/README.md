@@ -1,14 +1,24 @@
-# MT-Billing License Activator (vendor tool)
+# MT-Billing Activator (vendor tool)
 
-Generates the license key that matches a customer's **Hardware ID** (shown in the
-panel at **System Settings → License**). Keep this tool private — it contains the
-signing secret used to produce valid keys.
+One tool for **license activation** and **account recovery (forgot password)**.
 
-There are two ways to use it on Windows.
+The panel generates a stable **Hardware ID** (also shown as **Panel ID** on the login
+Forgot-password screen) from the machine running the server. You paste that ID into
+this activator; it returns:
 
-## Option A — Standalone `.exe` (no Node needed on the customer/vendor PC)
+| Output | Customer uses it on |
+|--------|---------------------|
+| **License Key** | System → License → Activate |
+| **Password Reset Code** (`RST-…`) | Login → Forgot password |
 
-Build the `.exe` once (on any machine with Node 18+ and internet):
+Keep this tool private — it embeds the signing secrets.
+
+Algorithms match `server/src/panelId.ts` (`normalizeCode`, `expectedLicenseKey`,
+`expectedPasswordResetCode`).
+
+---
+
+## Option A — Standalone `.exe`
 
 ```bash
 cd activator
@@ -16,57 +26,46 @@ npm install
 npm run build:win
 ```
 
-This produces **`activator/dist/mt-billing-activator.exe`** — a single file you can
-copy to any Windows machine.
+Produces **`activator/dist/mt-billing-activator.exe`**.
 
-Usage:
+```bat
+mt-billing-activator.exe 1A2B-3C4D-5E6F-7890
+mt-billing-activator.exe --license 1A2B-3C4D-5E6F-7890
+mt-billing-activator.exe --reset 1A2B-3C4D-5E6F-7890
+```
 
-- **Double-click** `mt-billing-activator.exe` → a console opens, asks for the
-  Hardware ID, prints the License Key, and waits for Enter.
-- Or from Command Prompt / PowerShell:
-  ```bat
-  mt-billing-activator.exe 1A2B-3C4D-5E6F-7890
-  ```
+Double-click for interactive mode (prompts for the ID, prints both codes).
 
-To also build Linux/macOS binaries: `npm run build:all` (outputs to `dist/`).
+## Option B — `activator.html` (offline in a browser)
 
-> Build uses [`@yao-pkg/pkg`](https://github.com/yao-pkg/pkg) (the maintained
-> `pkg` fork). `pkg` can cross-compile a Windows `.exe` from Linux or macOS too.
-
-## Option B — `activator.html` (zero install, runs by double-click)
-
-If you can't build an `.exe`, just use **`activator.html`**:
-
-1. Copy `activator.html` to the Windows machine.
-2. Double-click it — it opens in the default browser and runs **fully offline**.
-3. Paste the Hardware ID, click **Generate License Key**, copy the key.
-
-Same algorithm and output as the `.exe`.
-
-## Workflow
-
-1. Customer opens **System Settings → License** and copies their **Hardware ID**.
-2. You run the activator (`.exe` or `.html`) with that Hardware ID to get a **License Key**.
-3. Customer pastes the key into the License page and clicks **Activate**.
-
-The key is bound to that exact Hardware ID (HMAC-SHA256), so it only activates the
-machine it was generated for.
+1. Copy `activator.html` to the vendor PC.
+2. Double-click → paste Hardware / Panel ID → **Generate**.
+3. Copy the license key and/or reset code.
 
 ---
 
-## Password Reset Activator
+## Workflows
 
-If a customer forgets the panel login password, they use **Forgot password?** on the
-login screen. That shows their **Panel ID** (same value as Hardware ID on the License page).
+### License activation
 
-Generate a reset code with:
+1. Customer opens **System → License** and copies **Hardware ID**.
+2. Vendor runs the activator → **License Key**.
+3. Customer pastes the key and clicks **Activate**.
+
+### Account recovery (forgot password)
+
+1. Customer opens **Forgot password?** on the login page and copies **Panel ID**
+   (same value as Hardware ID on that machine).
+2. Vendor runs the activator → **Password Reset Code**.
+3. Customer pastes `RST-XXXX-XXXX-XXXX-XXXX` and resets to default credentials
+   (`admin` / `admin123`, or `ADMIN_USER` / `ADMIN_PASS` from `server/.env`).
+
+---
+
+## CLI helpers (Node)
 
 ```bash
+node server/scripts/license-activator.mjs <HARDWARE-ID>
 node server/scripts/password-reset-activator.mjs <PANEL-ID>
+node activator/activator.cjs <HARDWARE-OR-PANEL-ID>
 ```
-
-Or use **`activator/password-reset.cjs`** (build to `.exe` the same way as the license activator).
-
-The customer enters the code (format `RST-XXXX-XXXX-XXXX-XXXX`) on the login page to
-restore the default admin username and password (`admin` / `admin123`, or values from
-`ADMIN_USER` / `ADMIN_PASS` in `server/.env`).
