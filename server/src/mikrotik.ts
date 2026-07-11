@@ -1142,7 +1142,12 @@ export async function removeDhcpServer(conn: RouterConn, id: string): Promise<vo
   await withRouter(conn, (api) => api.write('/ip/dhcp-server/remove', [`=numbers=${id}`]));
 }
 
-/** Live rx/tx bits-per-second for PPP active sessions via their dynamic interfaces. */
+/** Live bits/s for PPP active sessions via their dynamic <pppoe-user> interfaces.
+ *
+ * Those interfaces face the subscriber (LAN side of the PPP session), not the WAN:
+ *   - TX (to client)  = subscriber download
+ *   - RX (from client) = subscriber upload
+ */
 export async function fetchPppActiveTraffic(
   conn: RouterConn,
   usernames: string[]
@@ -1173,9 +1178,11 @@ export async function fetchPppActiveTraffic(
               '=once=',
             ])) as Record<string, string>[];
             const r = rows?.[0] || {};
+            const rx = Number(r['rx-bits-per-second']) || 0;
+            const tx = Number(r['tx-bits-per-second']) || 0;
             out[user] = {
-              download: Number(r['rx-bits-per-second']) || 0,
-              upload: Number(r['tx-bits-per-second']) || 0,
+              download: tx, // to subscriber
+              upload: rx, // from subscriber
             };
           } catch {
             /* skip */
@@ -1221,7 +1228,10 @@ export async function fetchLeaseTrafficByIp(
   }, { timeoutSec: 20 });
 }
 
-/** Cumulative byte counters on dynamic PPPoE interfaces. */
+/** Cumulative byte counters on dynamic PPPoE interfaces (subscriber perspective).
+ * Interface is LAN-facing: iface TX → download, iface RX → upload.
+ * Returned as rxBytes=download, txBytes=upload to match usage UI labels.
+ */
 export async function fetchPppInterfaceBytes(
   conn: RouterConn,
   usernames: string[]
@@ -1237,9 +1247,11 @@ export async function fetchPppInterfaceBytes(
       if (!m) continue;
       const key = pppNameKey(m[1]);
       if (!want.has(key)) continue;
+      const ifaceRx = Number(iface['rx-byte'] || iface['rx-bytes'] || 0) || 0;
+      const ifaceTx = Number(iface['tx-byte'] || iface['tx-bytes'] || 0) || 0;
       byUser.set(key, {
-        rxBytes: Number(iface['rx-byte'] || iface['rx-bytes'] || 0) || 0,
-        txBytes: Number(iface['tx-byte'] || iface['tx-bytes'] || 0) || 0,
+        rxBytes: ifaceTx, // download to subscriber
+        txBytes: ifaceRx, // upload from subscriber
       });
     }
     const out: Record<string, { rxBytes: number; txBytes: number }> = {};
