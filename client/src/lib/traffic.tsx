@@ -12,3 +12,22 @@ export function formatBps(bps: number): string {
 export function formatTrafficPair(downloadBps?: number | null, uploadBps?: number | null): string {
   return `${formatBps(Number(downloadBps) || 0)} ↓ / ${formatBps(Number(uploadBps) || 0)} ↑`;
 }
+
+/** Live traffic cell: green ↓ download, blue ↑ upload. */
+export function TrafficPair({
+  downloadBps,
+  uploadBps,
+}: {
+  downloadBps?: number | null;
+  uploadBps?: number | null;
+}) {
+  return (
+    <span className="text-xs font-medium text-slate-700 whitespace-nowrap">
+      {formatBps(Number(downloadBps) || 0)}{' '}
+      <span className="text-emerald-600 font-semibold" title="Download">↓</span>
+      {' / '}
+      {formatBps(Number(uploadBps) || 0)}{' '}
+      <span className="text-sky-600 font-semibold" title="Upload">↑</span>
+    </span>
+  );
+}

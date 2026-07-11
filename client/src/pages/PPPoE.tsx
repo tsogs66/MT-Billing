@@ -8,7 +8,7 @@ import {
 import { api, peso } from '../api';
 import LocationEditor, { DEFAULT_PIN } from '../components/LocationEditor';
 import { useRouterDevice } from '../context/RouterContext';
-import { formatTrafficPair } from '../lib/traffic';
+import { TrafficPair } from '../lib/traffic';
 
 interface PUser {
   id: number;
@@ -374,7 +374,11 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                   { key: 'account', label: 'Account #' },
                   { key: 'profile', label: 'Profile' },
                   { key: 'status', label: 'Status' },
-                  { key: 'traffic', label: 'Traffic ↓/↑' },
+                  { key: 'traffic', label: (
+                    <span>
+                      Traffic <span className="text-emerald-600">↓</span>/<span className="text-sky-600">↑</span>
+                    </span>
+                  ) },
                   { key: 'due', label: 'Subscription Due' },
                   { key: 'actions', label: 'Actions', align: 'right' },
                 ]}
@@ -406,7 +410,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                     <StatusBadge status={userStatusLabel(u)} />,
                     <span className="text-xs font-medium text-slate-700 whitespace-nowrap">
                       {u.sessionOnline || u.online === 1 || u.online === true
-                        ? formatTrafficPair(u.downloadBps, u.uploadBps)
+                        ? <TrafficPair downloadBps={u.downloadBps} uploadBps={u.uploadBps} />
                         : '—'}
                     </span>,
                     <span className="text-slate-500">{u.subscriptionDue}</span>,
@@ -460,7 +464,11 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                   { key: 'customer', label: 'Customer' },
                   { key: 'profile', label: 'Profile' },
                   { key: 'addr', label: 'Address' },
-                  { key: 'traffic', label: 'Traffic ↓/↑' },
+                  { key: 'traffic', label: (
+                    <span>
+                      Traffic <span className="text-emerald-600">↓</span>/<span className="text-sky-600">↑</span>
+                    </span>
+                  ) },
                   { key: 'uptime', label: 'Uptime' },
                   { key: 'caller', label: 'Caller ID (MAC)' },
                 ]}
@@ -495,9 +503,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                         a.customer,
                         a.profile,
                         <span className="font-mono text-xs">{a.address}</span>,
-                        <span className="text-xs font-medium text-slate-700 whitespace-nowrap">
-                          {formatTrafficPair(down, up)}
-                        </span>,
+                        <TrafficPair downloadBps={down} uploadBps={up} />,
                         a.uptime,
                         <span className="font-mono text-sm text-sky-700">{a.caller}</span>,
                       ],

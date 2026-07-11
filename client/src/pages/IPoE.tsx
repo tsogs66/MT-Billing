@@ -10,7 +10,7 @@ import {
 } from '../components/ui';
 import { api, peso } from '../api';
 import { useRouterDevice } from '../context/RouterContext';
-import { formatTrafficPair } from '../lib/traffic';
+import { TrafficPair } from '../lib/traffic';
 
 const TABS = [
   { key: 'users', label: 'Users', icon: Users },
@@ -173,7 +173,11 @@ export default function IPoE() {
     { key: 'mac', label: 'MAC' },
     { key: 'host', label: 'Host' },
     { key: 'plan', label: 'Billing Plan' },
-    { key: 'speed', label: tab === 'offline' ? 'Speed' : 'Traffic ↓/↑' },
+    { key: 'speed', label: tab === 'offline' ? 'Speed' : (
+      <span>
+        Traffic <span className="text-emerald-600">↓</span>/<span className="text-sky-600">↑</span>
+      </span>
+    ) },
     { key: 'due', label: 'Due' },
     { key: 'payment', label: 'Payment' },
     { key: 'status', label: 'Status' },
@@ -216,7 +220,7 @@ export default function IPoE() {
       </select>,
       <span className="text-xs font-medium text-slate-700 whitespace-nowrap">
         {l.online && (Number(l.downloadBps) > 0 || Number(l.uploadBps) > 0 || tab === 'active' || tab === 'users')
-          ? formatTrafficPair(l.downloadBps, l.uploadBps)
+          ? <TrafficPair downloadBps={l.downloadBps} uploadBps={l.uploadBps} />
           : l.speed}
       </span>,
       <span className="text-xs text-slate-500 whitespace-nowrap">{l.due || '—'}</span>,
