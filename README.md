@@ -94,7 +94,9 @@ data otherwise).
 | `npm --prefix server run build` | Compile the backend to `server/dist` |
 | `npm --prefix server run start` | Run the compiled backend |
 | `scripts/proxmox-install.sh` | Proxmox host helper → `ct/mt-billing.sh` |
-| `scripts/build-sbc-flash-image.sh` | Build RPi/OPi `.img.xz` for Balena Etcher / Rufus |
+| `scripts/build-rpi-img.sh` | Build Raspberry Pi `.img` (+ `.img.xz`) for Etcher/Rufus |
+| `scripts/build-opi-img.sh` | Build Orange Pi `.img` (+ `.img.xz`) for Etcher/Rufus |
+| `scripts/build-sbc-flash-image.sh` | Shared builder (`--board rpi\|opi\|all`) |
 | `scripts/sync-proxmox-embed.sh` | Sync `install/` into embedded Proxmox guest script |
 
 ## Deploying on Ubuntu (Proxmox)
@@ -153,11 +155,11 @@ Or step by step:
 
 ## Deploying on Raspberry Pi / Orange Pi (flash image)
 
-Build one compressed disk image, then flash it with **Balena Etcher** or **Rufus** (DD mode):
+Build one compressed disk image **per board**, then flash with **Balena Etcher** or **Rufus** (DD mode):
 
 ```bash
-sudo bash scripts/build-sbc-flash-image.sh --board rpi   # → dist/flash/mt-billing-rpi-arm64.img.xz
-sudo bash scripts/build-sbc-flash-image.sh --board opi   # → dist/flash/mt-billing-opi-arm64.img.xz
+sudo bash scripts/build-rpi-img.sh   # → dist/flash/mt-billing-rpi-arm64.img
+sudo bash scripts/build-opi-img.sh   # → dist/flash/mt-billing-opi-arm64.img
 ```
 
 Details: [flash/README.md](./flash/README.md) · [SYSTEM_REQUIREMENTS.md](./SYSTEM_REQUIREMENTS.md).

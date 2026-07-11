@@ -61,27 +61,26 @@ Build **one flashable `.img.xz` per board**, then write it with **Balena Etcher*
 
 ### Build the flash file (Linux)
 
+Separate images per board:
+
 ```bash
 git clone https://github.com/tsogs66/MT-Billing.git
 cd MT-Billing
 
-# Raspberry Pi → dist/flash/mt-billing-rpi-arm64.img.xz
-sudo bash scripts/build-sbc-flash-image.sh --board rpi
+# Raspberry Pi only → dist/flash/mt-billing-rpi-arm64.img (+ .img.xz)
+sudo bash scripts/build-rpi-img.sh
 
-# Orange Pi 5 → dist/flash/mt-billing-opi-arm64.img.xz
-sudo bash scripts/build-sbc-flash-image.sh --board opi
-
-# Both
-sudo bash scripts/build-sbc-flash-image.sh --board all
+# Orange Pi 5 only → dist/flash/mt-billing-opi-arm64.img (+ .img.xz)
+sudo bash scripts/build-opi-img.sh
 ```
 
-Other Orange Pi boards: set `OPI_IMAGE_URL` to the matching Armbian `.img.xz` URL, then run `--board opi`.
+Other Orange Pi boards: set `OPI_IMAGE_URL` to the matching Armbian `.img.xz` URL, then run `build-opi-img.sh`.
 
 ### Flash with Balena Etcher or Rufus
 
-1. Download / build `mt-billing-rpi-arm64.img.xz` **or** `mt-billing-opi-arm64.img.xz` (use the file for your board).
-2. **Balena Etcher**: Flash from file → select the `.img.xz` → select SD/USB → Flash.
-3. **Rufus** (Windows): select the `.img.xz` (or extract to `.img`), use **DD image** mode, write to the SD card.
+1. Use **`mt-billing-rpi-arm64.img`** for Raspberry Pi, or **`mt-billing-opi-arm64.img`** for Orange Pi (do not mix).
+2. **Balena Etcher**: Flash from file → select the `.img` or `.img.xz` → select SD/USB → Flash.
+3. **Rufus** (Windows): select the `.img` / `.img.xz`, use **DD image** mode, write to the SD card.
 4. Insert the card, boot the SBC with Ethernet (recommended), wait for first-boot install to finish.
 5. Open `http://<device-ip>/` — login `admin` / `admin123`.
 

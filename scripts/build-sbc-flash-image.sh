@@ -4,24 +4,25 @@
 # Source: https://github.com/tsogs66/MT-Billing
 #
 # =============================================================================
-#  SINGLE ENTRY POINT — build a flashable SD/USB image for Raspberry Pi or
-#  Orange Pi. Flash the resulting .img.xz with Balena Etcher or Rufus.
+#  Build SEPARATE flashable disk images for Raspberry Pi and Orange Pi.
 # =============================================================================
 #
-# Usage (Linux build host, root required for losetup/mount):
+# Dedicated wrappers (recommended):
+#   sudo bash scripts/build-rpi-img.sh
+#       → dist/flash/mt-billing-rpi-arm64.img
+#       → dist/flash/mt-billing-rpi-arm64.img.xz
+#
+#   sudo bash scripts/build-opi-img.sh
+#       → dist/flash/mt-billing-opi-arm64.img
+#       → dist/flash/mt-billing-opi-arm64.img.xz
+#
+# Or via this script:
 #   sudo bash scripts/build-sbc-flash-image.sh --board rpi
 #   sudo bash scripts/build-sbc-flash-image.sh --board opi
 #   sudo bash scripts/build-sbc-flash-image.sh --board all
 #
-# Output:
-#   dist/flash/mt-billing-rpi-arm64.img.xz
-#   dist/flash/mt-billing-opi-arm64.img.xz
-#
-# Flash:
-#   - Balena Etcher: open the .img.xz, select SD card, Flash
-#   - Rufus (Windows): select the .img.xz (or extract .img), write in DD mode
-#
-# After first boot (5–20 min depending on network), open http://<device-ip>/
+# Flash either the .img or .img.xz with Balena Etcher or Rufus (DD mode).
+# After first boot (needs internet), open http://<device-ip>/
 # Default login: admin / admin123
 #
 # System requirements: see SYSTEM_REQUIREMENTS.md
@@ -35,7 +36,8 @@ CACHE_DIR="${CACHE_DIR:-$ROOT/dist/flash-cache}"
 FIRSTBOOT="$ROOT/flash/firstboot-mt-billing.sh"
 BOARD="rpi"
 COMPRESS=1
-KEEP_RAW=0
+# Always keep the uncompressed .img as a separate flashable file per board.
+KEEP_RAW=1
 
 # Default base images (arm64). Override with env if mirrors move.
 # Raspberry Pi OS Lite 64-bit — works on Pi 3 / 4 / 5.
@@ -89,6 +91,7 @@ while [[ $# -gt 0 ]]; do
     --board=*) BOARD="${1#*=}"; shift ;;
     --no-compress) COMPRESS=0; shift ;;
     --keep-raw) KEEP_RAW=1; shift ;;
+    --no-keep-raw) KEEP_RAW=0; shift ;;
     -h|--help) usage 0 ;;
     *) echo "Unknown arg: $1" >&2; usage 1 ;;
   esac
@@ -116,7 +119,9 @@ need losetup
 need mount
 need umount
 need sync
-command -v sfdisk >/dev/null 2>&1 || need fdisk
+need blkid
+need file
+# Optional: growpart, e2fsck, resize2fs improve rootfs expansion when present.
 
 mkdir -p "$OUT_DIR" "$CACHE_DIR"
 
@@ -155,72 +160,148 @@ decompress_to_img() {
 
 inject_firstboot() {
   local img="$1"
-  local loop=""
+  local loop="" boot_loop="" root_loop=""
   local boot_mnt root_mnt
   boot_mnt="$(mktemp -d /tmp/mt-boot.XXXXXX)"
   root_mnt="$(mktemp -d /tmp/mt-root.XXXXXX)"
 
   cleanup_mounts() {
     sync || true
+    umount "$root_mnt/boot/firmware" 2>/dev/null || true
+    umount "$root_mnt/boot" 2>/dev/null || true
     umount "$boot_mnt" 2>/dev/null || true
     umount "$root_mnt" 2>/dev/null || true
-    [[ -n "$loop" ]] && losetup -d "$loop" 2>/dev/null || true
+    [[ -n "${boot_loop:-}" ]] && losetup -d "$boot_loop" 2>/dev/null || true
+    [[ -n "${root_loop:-}" ]] && losetup -d "$root_loop" 2>/dev/null || true
+    [[ -n "${loop:-}" ]] && losetup -d "$loop" 2>/dev/null || true
     rmdir "$boot_mnt" "$root_mnt" 2>/dev/null || true
   }
   trap cleanup_mounts EXIT
 
-  # Grow image by 1 GiB so first-boot packages fit comfortably.
-  dd if=/dev/zero bs=1M count=1024 status=none >>"$img"
-  loop="$(losetup -fP --show "$img")"
-  # Refresh partition table after size change (best-effort grow of last partition).
-  if command -v growpart >/dev/null 2>&1; then
-    growpart "$loop" 2 2>/dev/null || growpart "$loop" 1 2>/dev/null || true
-  fi
+  # Do not pad the image here — partition growth needs growpart/kpartx which
+  # are unavailable in many build containers. First-boot can expand on device.
 
-  # Find boot (vfat) and root (ext4) partitions.
-  local boot_dev="" root_dev=""
-  local p
-  for p in "${loop}p2" "${loop}p1" "${loop}p3"; do
-    [[ -b "$p" ]] || continue
-    local fstype
-    fstype="$(blkid -o value -s TYPE "$p" 2>/dev/null || true)"
-    if [[ "$fstype" == "vfat" && -z "$boot_dev" ]]; then
-      boot_dev="$p"
-    elif [[ "$fstype" == "ext4" && -z "$root_dev" ]]; then
-      root_dev="$p"
-    fi
-  done
-  # Single-partition images (some Armbian): treat p1 as root; boot may be /boot on root.
-  if [[ -z "$root_dev" ]]; then
-    for p in "${loop}p1" "${loop}p2"; do
-      [[ -b "$p" ]] || continue
-      root_dev="$p"
-      break
-    done
+  # Parse DOS/MBR or GPT partition table (works without kernel partition scan).
+  local parts
+  parts="$(
+    python3 - "$img" <<'PY'
+import struct, sys, uuid
+
+path = sys.argv[1]
+with open(path, "rb") as f:
+    mbr = f.read(512)
+    # GPT protective MBR?
+    f.seek(512)
+    sig = f.read(8)
+    entries = []
+    if sig == b"EFI PART":
+        f.seek(512)
+        hdr = f.read(92)
+        (
+            _sig,
+            _rev,
+            _hsize,
+            _crc,
+            _rsv,
+            _current,
+            _backup,
+            _first_usable,
+            _last_usable,
+            _guid,
+            part_lba,
+            part_count,
+            part_entry_size,
+            _part_crc,
+        ) = struct.unpack("<8sIIIIQQQQ16sQIII", hdr)
+        f.seek(part_lba * 512)
+        for i in range(part_count):
+            e = f.read(part_entry_size)
+            if len(e) < 56:
+                break
+            type_guid = e[0:16]
+            if type_guid == b"\x00" * 16:
+                continue
+            first_lba, last_lba = struct.unpack_from("<QQ", e, 32)
+            # EFI system = C12A7328-F81F-11D2-BA4B-00A0C93EC93B
+            efi = uuid.UUID(bytes_le=type_guid) == uuid.UUID("C12A7328-F81F-11D2-BA4B-00A0C93EC93B")
+            # Microsoft basic data often used for FAT boot on some images
+            msb = uuid.UUID(bytes_le=type_guid) == uuid.UUID("EBD0A0A2-B9E5-4433-87C0-68B6B72699C7")
+            linux = uuid.UUID(bytes_le=type_guid) == uuid.UUID("0FC63DAF-8483-4772-8E79-3D69D8477DE4")
+            if efi or msb:
+                ptype = "ef"
+            elif linux:
+                ptype = "83"
+            else:
+                ptype = "83"
+            off = first_lba * 512
+            size = (last_lba - first_lba + 1) * 512
+            print(f"{ptype} {off} {size}")
+    else:
+        # DOS MBR
+        for i in range(4):
+            e = mbr[446 + i * 16 : 446 + (i + 1) * 16]
+            _boot, _bh, _bs, _bc, ptype, _eh, _es, _ec, lba, sects = struct.unpack("<BBBBBBBBII", e)
+            if ptype == 0 or sects == 0:
+                continue
+            print(f"{ptype:02x} {lba * 512} {sects * 512}")
+PY
+  )"
+  [[ -n "$parts" ]] || { echo "Could not parse partition table on $img" >&2; exit 1; }
+
+  local boot_off="" boot_sz="" root_off="" root_sz=""
+  while read -r ptype off sz; do
+    [[ -n "$ptype" ]] || continue
+    case "$ptype" in
+      0c|0b|0e|ef)
+        if [[ -z "$boot_off" ]]; then boot_off="$off"; boot_sz="$sz"; fi
+        ;;
+      83|8e)
+        if [[ -z "$root_off" ]]; then root_off="$off"; root_sz="$sz"; fi
+        ;;
+    esac
+  done <<<"$parts"
+
+  # Fallback: first non-FAT partition is root; first FAT is boot.
+  if [[ -z "$root_off" ]]; then
+    while read -r ptype off sz; do
+      case "$ptype" in
+        0c|0b|0e|ef) continue ;;
+        *) root_off="$off"; root_sz="$sz"; break ;;
+      esac
+    done <<<"$parts"
   fi
-  [[ -n "$root_dev" ]] || { echo "Could not find root partition on $img" >&2; exit 1; }
+  [[ -n "$root_off" ]] || { echo "Could not find root partition on $img" >&2; exit 1; }
+
+  root_loop="$(losetup -f --show --offset "$root_off" ${root_sz:+--sizelimit "$root_sz"} "$img")"
+  if [[ -n "$boot_off" ]]; then
+    boot_loop="$(losetup -f --show --offset "$boot_off" ${boot_sz:+--sizelimit "$boot_sz"} "$img")"
+  fi
 
   if command -v e2fsck >/dev/null 2>&1; then
-    e2fsck -fy "$root_dev" >/dev/null 2>&1 || true
+    e2fsck -fy "$root_loop" >/dev/null 2>&1 || true
   fi
   if command -v resize2fs >/dev/null 2>&1; then
-    resize2fs "$root_dev" >/dev/null 2>&1 || true
+    # Root partition size in the table was not grown; skip resize unless growpart ran.
+    true
   fi
 
-  mount "$root_dev" "$root_mnt"
-  if [[ -n "$boot_dev" ]]; then
-    mkdir -p "$root_mnt/boot" "$root_mnt/boot/firmware"
-    mount "$boot_dev" "$boot_mnt"
-    # Raspberry Pi OS Bookworm uses /boot/firmware; bind into root tree when possible.
-    if [[ -d "$root_mnt/boot/firmware" ]]; then
-      umount "$boot_mnt" 2>/dev/null || true
-      mount "$boot_dev" "$root_mnt/boot/firmware"
+  mount "$root_loop" "$root_mnt"
+  local boot_mounted=0
+  if [[ -n "$boot_loop" ]]; then
+    if [[ -d "$root_mnt/boot/firmware" ]] && mount -t vfat "$boot_loop" "$root_mnt/boot/firmware" 2>/dev/null; then
       boot_mnt="$root_mnt/boot/firmware"
-    else
-      umount "$boot_mnt" 2>/dev/null || true
-      mount "$boot_dev" "$root_mnt/boot"
+      boot_mounted=1
+    elif [[ -d "$root_mnt/boot" ]] && mount -t vfat "$boot_loop" "$root_mnt/boot" 2>/dev/null; then
       boot_mnt="$root_mnt/boot"
+      boot_mounted=1
+    elif mount -t vfat "$boot_loop" "$boot_mnt" 2>/dev/null; then
+      boot_mounted=1
+    else
+      echo "Note: FAT boot partition not mountable here; enabling SSH via first-boot instead."
+      boot_mnt=""
     fi
+  else
+    boot_mnt=""
   fi
 
   echo "Injecting first-boot installer…"
@@ -249,10 +330,9 @@ EOF
   ln -sf /etc/systemd/system/mt-billing-firstboot.service \
     "$root_mnt/etc/systemd/system/multi-user.target.wants/mt-billing-firstboot.service"
 
-  # Raspberry Pi: enable SSH by default for headless setup
-  if [[ -d "$boot_mnt" ]]; then
+  # Raspberry Pi: enable SSH marker on boot partition when FAT is mountable
+  if [[ "$boot_mounted" -eq 1 && -n "${boot_mnt:-}" && -d "$boot_mnt" ]]; then
     touch "$boot_mnt/ssh" 2>/dev/null || true
-    # userconf / cloud-init not required — firstboot installs the panel
   fi
 
   # Marker for support
@@ -302,25 +382,37 @@ build_one() {
   inject_firstboot "$raw"
 
   local final="$raw"
+  local artifacts=("$raw")
   if [[ "$COMPRESS" -eq 1 ]]; then
     echo "Compressing with xz (this may take a few minutes)…"
     xz -T0 -f -k "$raw"
+    artifacts+=("$raw.xz")
     final="$raw.xz"
-    [[ "$KEEP_RAW" -eq 1 ]] || rm -f "$raw"
+    if [[ "$KEEP_RAW" -eq 0 ]]; then
+      rm -f "$raw"
+      artifacts=("$raw.xz")
+    fi
   fi
 
-  # Checksums for GitHub releases
+  # Checksums for each produced artifact (separate .img per board)
   (
     cd "$OUT_DIR"
-    sha256sum "$(basename "$final")" >"$(basename "$final").sha256"
+    for f in "${artifacts[@]}"; do
+      base="$(basename "$f")"
+      [[ -f "$base" ]] || continue
+      sha256sum "$base" >"${base}.sha256"
+    done
   )
 
   echo
-  echo "Flashable image ready:"
-  echo "  $final"
-  echo "  $(du -h "$final" | awk '{print $1}')  sha256: $(awk '{print $1}' "$final.sha256")"
+  echo "======== $out_base ready ========"
+  for f in "${artifacts[@]}"; do
+    [[ -f "$f" ]] || continue
+    echo "  $f"
+    echo "    size: $(du -h "$f" | awk '{print $1}')  sha256: $(awk '{print $1}' "$f.sha256")"
+  done
   echo
-  echo "Flash with Balena Etcher or Rufus (DD mode), then boot the SBC."
+  echo "Flash the .img (or .img.xz) with Balena Etcher or Rufus (DD mode), then boot."
   echo "First boot installs MT-Billing automatically (needs internet)."
 }
 

@@ -38,6 +38,15 @@ detect_board() {
 
 detect_board
 
+# Ensure SSH is available for headless access (RPi/OPi).
+systemctl enable --now ssh 2>/dev/null || systemctl enable --now sshd 2>/dev/null || true
+# Raspberry Pi OS: also drop the boot marker when the firmware partition is mounted.
+for d in /boot/firmware /boot; do
+  if [[ -d "$d" && -w "$d" ]]; then
+    touch "$d/ssh" 2>/dev/null || true
+  fi
+done
+
 echo "[1/7] Installing OS packages…"
 apt-get update -y
 apt-get install -y \
