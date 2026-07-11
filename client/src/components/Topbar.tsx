@@ -27,53 +27,53 @@ export default function Topbar({ title }: { title: string }) {
   }, []);
 
   return (
-    <header className="sticky top-0 z-30 h-16 glass border-b border-slate-200/60 flex items-center justify-between px-4 sm:px-6 lg:px-8">
+    <header className="theme-topbar sticky top-0 z-30 h-16 flex items-center justify-between px-4 sm:px-6 lg:px-8">
       <div className="flex items-center gap-3 min-w-0">
         <button
           type="button"
           onClick={toggleSidebar}
-          className="lg:hidden p-2 rounded-xl text-slate-500 hover:text-slate-800 hover:bg-slate-100/80 transition-colors"
+          className="theme-topbar-icon-btn lg:hidden p-2"
           aria-label="Open menu"
         >
           <Menu size={20} />
         </button>
         <div className="min-w-0">
-          <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight truncate">{title}</h1>
-          <p className="text-[11px] text-slate-400 hidden lg:block truncate max-w-[420px]" title={PRODUCT_TITLE}>
+          <h1 className="theme-topbar-title text-lg sm:text-xl font-bold tracking-tight truncate">{title}</h1>
+          <p className="theme-topbar-subtitle text-[11px] hidden lg:block truncate max-w-[420px]" title={PRODUCT_TITLE}>
             {PRODUCT_TITLE}
           </p>
         </div>
       </div>
 
       <div className="flex items-center gap-2 sm:gap-3">
-        {/* Router selector */}
         <div className="relative" ref={routerRef}>
           <button
             type="button"
             onClick={() => routers.length > 0 && setRouterOpen((v) => !v)}
             disabled={routers.length === 0}
-            className={`flex items-center gap-2 text-sm border rounded-xl px-3 py-2 transition-all duration-200 ${
-              routers.length === 0
-                ? 'border-slate-100 bg-slate-50 text-slate-400 cursor-not-allowed'
-                : 'border-slate-200/80 bg-white/80 hover:border-brand-300 hover:shadow-sm'
-            }`}
+            className="theme-topbar-pill text-sm"
           >
-            <span className="hidden sm:flex items-center justify-center w-7 h-7 rounded-lg bg-brand-50 text-brand-500">
+            <span className="theme-topbar-pill-icon hidden sm:flex">
               <RouterIcon size={15} />
             </span>
             <div className="text-left hidden sm:block">
-              <div className="text-[10px] text-slate-400 leading-none">Active router</div>
-              <div className="font-semibold text-slate-700 leading-tight">{current?.name ?? 'None'}</div>
+              <div className="theme-topbar-pill-label">Active router</div>
+              <div className="theme-topbar-pill-name">{current?.name ?? 'None'}</div>
             </div>
-            <span className="sm:hidden font-medium text-slate-700 max-w-[80px] truncate">{current?.name ?? 'None'}</span>
-            <ChevronDown size={14} className={`text-slate-400 transition-transform ${routerOpen ? 'rotate-180' : ''}`} />
+            <span className="theme-topbar-pill-name sm:hidden max-w-[80px] truncate">{current?.name ?? 'None'}</span>
+            <ChevronDown
+              size={14}
+              className={`theme-topbar-subtitle transition-transform ${routerOpen ? 'rotate-180' : ''}`}
+            />
           </button>
 
           {routerOpen && (
-            <div className="absolute right-0 mt-2 w-64 bg-white border border-slate-200/80 rounded-2xl shadow-card-hover py-2 z-[600] animate-scale-in origin-top-right">
-              <div className="px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">Select router</div>
+            <div className="theme-topbar-menu absolute right-0 mt-2 w-64 py-2 z-[600] animate-scale-in origin-top-right">
+              <div className="theme-topbar-menu-muted px-3 py-2 text-[10px] font-bold uppercase tracking-wider">
+                Select router
+              </div>
               {routers.length === 0 ? (
-                <div className="px-3 py-4 text-sm text-slate-400 text-center">No routers configured</div>
+                <div className="theme-topbar-menu-muted px-3 py-4 text-sm text-center">No routers configured</div>
               ) : (
                 routers.map((r) => (
                   <button
@@ -84,11 +84,11 @@ export default function Topbar({ title }: { title: string }) {
                       setRouterOpen(false);
                     }}
                     className={[
-                      'w-full text-left px-3 py-2.5 text-sm flex items-center gap-3 transition-colors',
-                      r.id === current?.id ? 'bg-brand-50 text-brand-700' : 'hover:bg-slate-50 text-slate-700',
+                      'theme-topbar-menu-item w-full text-left px-3 py-2.5 text-sm flex items-center gap-3 transition-colors',
+                      r.id === current?.id ? 'is-active' : '',
                     ].join(' ')}
                   >
-                    <span className={`flex items-center justify-center w-8 h-8 rounded-lg ${r.id === current?.id ? 'bg-brand-100 text-brand-600' : 'bg-slate-100 text-slate-500'}`}>
+                    <span className="theme-topbar-menu-icon">
                       <RouterIcon size={15} />
                     </span>
                     <span className={r.id === current?.id ? 'font-semibold' : ''}>{r.name}</span>
@@ -99,16 +99,16 @@ export default function Topbar({ title }: { title: string }) {
           )}
         </div>
 
-        <div className="hidden md:flex items-center gap-1">
-          <button type="button" className="btn-ghost p-2" title="Search">
+        <div className="hidden md:flex items-center gap-0.5">
+          <button type="button" className="theme-topbar-icon-btn p-2" title="Search">
             <Search size={18} />
           </button>
-          <button type="button" className="btn-ghost p-2" title="Help">
+          <button type="button" className="theme-topbar-icon-btn p-2" title="Help">
             <HelpCircle size={18} />
           </button>
           <button
             type="button"
-            className="btn-ghost p-2"
+            className="theme-topbar-icon-btn p-2"
             title="Refresh"
             onClick={() => location.reload()}
           >
@@ -116,32 +116,34 @@ export default function Topbar({ title }: { title: string }) {
           </button>
         </div>
 
-        <div className="w-px h-8 bg-slate-200 hidden sm:block" />
+        <div className="theme-topbar-divider hidden sm:block" />
 
-        {/* User menu */}
         <div className="relative" ref={userRef}>
           <button
             type="button"
             onClick={() => setUserOpen((v) => !v)}
-            className="flex items-center gap-2 rounded-xl pl-1 pr-2 py-1 hover:bg-slate-100/80 transition-colors"
+            className="theme-topbar-user-btn"
           >
-            <span className="flex items-center justify-center w-8 h-8 rounded-xl bg-gradient-to-br from-slate-700 to-slate-900 text-white text-xs font-bold">
+            <span className="theme-topbar-avatar">
               {(user?.username?.[0] || 'A').toUpperCase()}
             </span>
-            <span className="text-sm font-medium text-slate-700 hidden sm:block max-w-[100px] truncate">{user?.username}</span>
-            <ChevronDown size={14} className={`text-slate-400 hidden sm:block transition-transform ${userOpen ? 'rotate-180' : ''}`} />
+            <span className="text-sm font-medium hidden sm:block max-w-[100px] truncate">{user?.username}</span>
+            <ChevronDown
+              size={14}
+              className={`theme-topbar-subtitle hidden sm:block transition-transform ${userOpen ? 'rotate-180' : ''}`}
+            />
           </button>
 
           {userOpen && (
-            <div className="absolute right-0 mt-2 w-52 bg-white border border-slate-200/80 rounded-2xl shadow-card-hover py-2 z-[600] animate-scale-in origin-top-right">
-              <div className="px-4 py-3 border-b border-slate-100">
-                <div className="text-sm font-semibold text-slate-800">{user?.username}</div>
-                <div className="text-xs text-slate-400">Administrator</div>
+            <div className="theme-topbar-menu absolute right-0 mt-2 w-52 py-2 z-[600] animate-scale-in origin-top-right">
+              <div className="px-4 py-3 border-b border-[var(--topbar-menu-border)]">
+                <div className="text-sm font-semibold">{user?.username}</div>
+                <div className="theme-topbar-menu-muted text-xs">Administrator</div>
               </div>
               <button
                 type="button"
                 onClick={logout}
-                className="w-full text-left px-4 py-2.5 text-sm text-rose-600 hover:bg-rose-50 flex items-center gap-2 transition-colors"
+                className="w-full text-left px-4 py-2.5 text-sm text-rose-500 hover:bg-rose-500/10 flex items-center gap-2 transition-colors"
               >
                 <LogOut size={16} />
                 Sign out
