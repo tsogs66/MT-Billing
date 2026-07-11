@@ -42,7 +42,16 @@ import {
   fetchLeaseTrafficByIp,
 } from './mikrotik.js';
 import { probeOlt } from './olt.js';
-import { getUptime, getUptimeSummary, runUptimeChecks, startUptime } from './uptime.js';
+import {
+  getUptime,
+  getUptimeSummary,
+  runUptimeChecks,
+  startUptime,
+  getUptimeScopes,
+  getActiveScope,
+  setActiveScope,
+  type UptimeScope,
+} from './uptime.js';
 import { getInterfaceNames, getTrafficSnapshot } from './interfaces.js';
 import { settingsRouter } from './settings.js';
 import { aiRouter } from './ai.js';
@@ -2358,14 +2367,20 @@ app.get('/api/hotspot', (_req, res) => {
   res.json({ plans, active });
 });
 
-// ---- Uptime monitoring (popular services / sites / games) ----
-app.get('/api/uptime', (_req, res) => {
-  res.json({ summary: getUptimeSummary(), monitors: getUptime() });
+// ---- Uptime monitoring (global / Asia regional / PH local) ----
+app.get('/api/uptime/scopes', (_req, res) => {
+  res.json({ scopes: getUptimeScopes(), active: getActiveScope() });
 });
 
-app.post('/api/uptime/check', async (_req, res) => {
-  await runUptimeChecks();
-  res.json({ summary: getUptimeSummary(), monitors: getUptime() });
+app.get('/api/uptime', (req, res) => {
+  const scope = setActiveScope(String(req.query.scope || getActiveScope())) as UptimeScope;
+  res.json({ summary: getUptimeSummary(scope), monitors: getUptime(scope), scopes: getUptimeScopes() });
+});
+
+app.post('/api/uptime/check', async (req, res) => {
+  const scope = setActiveScope(String(req.body?.scope || req.query.scope || getActiveScope())) as UptimeScope;
+  await runUptimeChecks(scope);
+  res.json({ summary: getUptimeSummary(scope), monitors: getUptime(scope), scopes: getUptimeScopes() });
 });
 
 // ---- Live interface traffic (dashboard graphs) ----
