@@ -49,7 +49,7 @@ export default function License() {
 
   return (
     <Layout title="License" allowWrite>
-      <PageHeader title="Panel License" description="Activate MT-Billing with a duration-bound license key from your vendor." icon={KeyRound} />
+      <PageHeader title="Panel License" description="Activate with a duration-bound license key from your vendor." icon={KeyRound} />
       <Flash message={error} type="error" onDismiss={() => setError('')} />
 
       <Card className="max-w-2xl" interactive>

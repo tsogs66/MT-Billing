@@ -9,7 +9,6 @@ import PPPoE from './pages/PPPoE';
 import IPoE from './pages/IPoE';
 import ClientsMap from './pages/ClientsMap';
 import SalesReport from './pages/SalesReport';
-import Routers from './pages/Routers';
 import Inventory from './pages/Inventory';
 import Hotspot from './pages/Hotspot';
 import Logs from './pages/Logs';
@@ -27,6 +26,15 @@ import AiScripting from './pages/AiScripting';
 import TerminalPage from './pages/Terminal';
 import { Loader2 } from 'lucide-react';
 import Logo from './components/Logo';
+import { useEffect } from 'react';
+import { PRODUCT_TITLE } from './branding';
+
+function DocumentTitle() {
+  useEffect(() => {
+    document.title = PRODUCT_TITLE;
+  }, []);
+  return null;
+}
 
 function Protected({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -66,7 +74,9 @@ const stub = (title: string, description: string) => (
 export default function App() {
   const { user } = useAuth();
   return (
-    <Routes>
+    <>
+      <DocumentTitle />
+      <Routes>
       <Route path="/login" element={user ? <Navigate to="/" replace /> : <Login />} />
       <Route
         path="/*"
@@ -79,7 +89,7 @@ export default function App() {
                 <Route path="/ipoe" element={<IPoE />} />
                 <Route path="/map" element={<ClientsMap />} />
                 <Route path="/sales" element={<SalesReport />} />
-                <Route path="/routers" element={<Routers />} />
+                <Route path="/routers" element={<Navigate to="/network?tab=routers" replace />} />
                 <Route path="/inventory" element={<Inventory />} />
                 <Route path="/hotspot" element={<Hotspot />} />
                 <Route path="/uptime" element={<Uptime />} />
@@ -103,5 +113,6 @@ export default function App() {
         }
       />
     </Routes>
+    </>
   );
 }

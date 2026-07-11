@@ -84,7 +84,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Unlicensed: show every menu (read-only browsing)
     if (!user.licenseActivated) return true;
     if (user.permissions.includes('*')) return true;
-    return user.permissions.includes(permission);
+    if (user.permissions.includes(permission)) return true;
+    // Routers merged into Network — either permission grants access
+    if (permission === 'network' && user.permissions.includes('routers')) return true;
+    return false;
   };
 
   const canWrite = !!user?.licenseActivated;

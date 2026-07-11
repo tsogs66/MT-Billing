@@ -112,7 +112,7 @@ app.get('/api/company/branding', (_req, res) => {
     | { name?: string; logo?: string | null; address?: string | null }
     | undefined;
   res.json({
-    name: c?.name || 'MT-Billing',
+    name: c?.name || 'Mikrotik ISP Billing, Monitoring and Commisioning Software',
     logo: c?.logo || null,
     address: c?.address || null,
   });

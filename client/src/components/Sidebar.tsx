@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import {
-  LayoutDashboard, Bot, TerminalSquare, Router, Network, Users, Share2, Map,
+  LayoutDashboard, Bot, TerminalSquare, Network, Users, Share2, Map,
   BarChart3, Boxes, Wifi, FileCode2, Globe, Building2, Settings, ShieldCheck,
   DownloadCloud, ServerCog, ScrollText, KeyRound, Activity, Bell, ChevronDown,
   X,
@@ -26,11 +26,10 @@ const NAV_SECTIONS: NavSection[] = [
   {
     title: 'Network',
     items: [
-      { to: '/routers', label: 'Routers', icon: Router, permission: 'routers' },
       { to: '/network', label: 'Network', icon: Network, permission: 'network' },
       { to: '/pppoe', label: 'PPPoE Management', icon: Users, permission: 'pppoe' },
       { to: '/ipoe', label: 'IPoE Management', icon: Share2, permission: 'ipoe' },
-      { to: '/map', label: 'Clients Map', icon: Map, permission: 'map' },
+      { to: '/map', label: 'Topology', icon: Map, permission: 'map' },
       { to: '/zerotier', label: 'ZeroTier', icon: Globe, permission: 'zerotier' },
       { to: '/super-router', label: 'Super Router', icon: ServerCog, permission: 'super-router' },
       { to: '/files', label: 'Mikrotik Files', icon: FileCode2, permission: 'files' },
@@ -198,7 +197,7 @@ export default function Sidebar() {
           </span>
           <div className="min-w-0 flex-1">
             <div className="text-xs font-medium text-slate-300 truncate">{user?.username || 'Panel'}</div>
-            <div className="text-[10px] text-slate-500 truncate">{user?.role || '—'} · v1.0</div>
+            <div className="text-[10px] text-slate-500 truncate">{user?.role || '—'} · ts0gs v1.0.0</div>
           </div>
         </div>
       </div>
@@ -212,7 +211,7 @@ export function permissionForPath(pathname: string): string {
   const map: Record<string, string> = {
     '/terminal': 'terminal',
     '/ai-scripting': 'ai',
-    '/routers': 'routers',
+    '/routers': 'network',
     '/network': 'network',
     '/pppoe': 'pppoe',
     '/ipoe': 'ipoe',

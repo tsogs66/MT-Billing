@@ -39,14 +39,14 @@ export default function Updater() {
 
   return (
     <Layout title="Updater">
-      <PageHeader title="Application Updater" description="Check for and apply MT-Billing panel updates." icon={DownloadCloud} />
+      <PageHeader title="Application Updater" description="Check for and apply panel updates." icon={DownloadCloud} />
       <Flash message={msg} type="success" onDismiss={() => setMsg('')} />
 
       <Card className="max-w-3xl" interactive>
         <div className="flex items-center gap-3">
           <div className="w-12 h-12 rounded-xl bg-brand-50 text-brand-600 flex items-center justify-center"><DownloadCloud size={22} /></div>
           <div>
-            <div className="font-bold text-slate-800">MT-Billing {info.current}</div>
+            <div className="font-bold text-slate-800">Panel {info.current}</div>
             <div className="text-sm text-slate-500">Latest available: <span className="font-semibold text-slate-700">{info.latest}</span></div>
           </div>
           <div className="ml-auto">

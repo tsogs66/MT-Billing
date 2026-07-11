@@ -76,7 +76,7 @@ function PanelSettings({ app, setA, save }: any) {
   const themes: { key: ThemeId; label: string; Icon: typeof Sun; hint: string }[] = [
     { key: 'light', label: 'Light', Icon: Sun, hint: 'Clean daylight panel' },
     { key: 'dark', label: 'Dark', Icon: Moon, hint: 'Low-light operations' },
-    { key: 'onepiece', label: 'One Piece', Icon: Anchor, hint: 'Anime ocean / straw-hat' },
+    { key: 'onepiece', label: 'One Piece', Icon: Anchor, hint: 'Nautical map art · gold & crimson' },
   ];
   const selectTheme = (key: ThemeId) => {
     setA({ theme: key });
@@ -166,7 +166,7 @@ function ServerRestart({ flash }: { flash: (m: string) => void }) {
     <SettingsSection icon={Power} title="Server Restart" className="mt-5">
       <div className="max-w-2xl space-y-4">
         <p className="text-sm text-slate-500">
-          Restart the MT-Billing API service. Active sessions will be disconnected briefly. Use this after configuration changes or updates that require a full service restart.
+          Restart the API service. Active sessions will be disconnected briefly. Use this after configuration changes or updates that require a full service restart.
         </p>
         {!confirm ? (
           <button type="button" className="btn-secondary border-rose-200 text-rose-700 hover:bg-rose-50" onClick={() => setConfirm(true)}>

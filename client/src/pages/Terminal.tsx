@@ -137,7 +137,7 @@ export default function TerminalPage() {
     term.loadAddon(fit);
     term.open(termRef.current);
     fit.fit();
-    term.writeln('\x1b[1;36mMT-Billing MikroTik Terminal\x1b[0m');
+    term.writeln('\x1b[1;36mMikroTik Terminal · ts0gs v1.0.0\x1b[0m');
     term.writeln('Select a router and click Connect. Uses SSH (port 22) with API/demo fallback.\r\n');
 
     term.onData((data) => {

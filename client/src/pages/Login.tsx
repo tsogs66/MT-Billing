@@ -3,8 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
 import { Loader2, Lock, User, ArrowRight, Shield, Copy, CheckCircle2, KeyRound, ArrowLeft } from 'lucide-react';
-import Logo from '../components/Logo';
 import { FormField } from '../components/ui';
+import { BRAND_SHORT, BRAND_TAGLINE, DEFAULT_LOGO, PRODUCT_TITLE } from '../branding';
 
 const publicApi = axios.create({ baseURL: '/api' });
 
@@ -16,6 +16,10 @@ export default function Login() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [forgotOpen, setForgotOpen] = useState(false);
+
+  useEffect(() => {
+    document.title = PRODUCT_TITLE;
+  }, []);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -35,7 +39,7 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen flex bg-slate-950 relative overflow-hidden">
+    <div className="min-h-screen flex bg-slate-950 relative overflow-hidden theme-login">
       <div className="absolute inset-0 bg-mesh-dark" />
       <div className="absolute inset-0 bg-login-grid bg-grid opacity-40" />
       <div className="absolute top-1/4 -left-32 w-96 h-96 bg-brand-500/20 rounded-full blur-3xl animate-float" />
@@ -43,14 +47,22 @@ export default function Login() {
 
       <div className="relative z-10 flex flex-1 flex-col lg:flex-row min-h-screen">
         <div className="hidden lg:flex flex-1 flex-col justify-between p-12 xl:p-16">
-          <Logo size="lg" variant="dark" />
+          <div className="flex flex-col items-start gap-4">
+            <div className="w-28 h-28 rounded-2xl bg-white/95 flex items-center justify-center overflow-hidden shadow-glow ring-1 ring-white/20">
+              <img src={DEFAULT_LOGO} alt={BRAND_SHORT} className="h-full w-full object-contain object-center p-2" />
+            </div>
+            <div>
+              <div className="text-3xl font-bold text-white tracking-tight">{BRAND_SHORT}</div>
+              <div className="text-slate-400 text-sm mt-1">{BRAND_TAGLINE}</div>
+            </div>
+          </div>
           <div className="max-w-lg animate-fade-in-up">
             <h1 className="text-4xl xl:text-5xl font-bold text-white tracking-tight leading-tight mb-4">
-              MikroTik billing,<br />
+              ISP Business,<br />
               <span className="text-transparent bg-clip-text bg-gradient-to-r from-brand-300 to-brand-500">reimagined.</span>
             </h1>
             <p className="text-slate-400 text-lg leading-relaxed">
-              Manage PPPoE &amp; IPoE subscribers, monitor routers, track sales, and automate your network — all from one modern panel.
+              Manage PPPoE &amp; IPoE subscribers, monitor routers, track sales, and automate your MikroTik network — all from one modern panel.
             </p>
             <div className="flex flex-wrap gap-4 mt-8">
               {['PPPoE / IPoE', 'Live Terminal', 'AI Scripting', 'Sales & Maps'].map((tag) => (
@@ -60,24 +72,33 @@ export default function Login() {
               ))}
             </div>
           </div>
-          <div className="flex items-center gap-2 text-slate-500 text-sm">
-            <Shield size={14} />
-            <span>Secured with JWT authentication</span>
+          <div className="space-y-2">
+            <div className="flex items-center gap-2 text-slate-500 text-sm">
+              <Shield size={14} />
+              <span>Secured with JWT authentication</span>
+            </div>
+            <p className="text-[11px] text-slate-600 max-w-md leading-snug">{PRODUCT_TITLE}</p>
           </div>
         </div>
 
         <div className="flex flex-1 items-center justify-center p-6 sm:p-8">
           <div className="w-full max-w-md animate-scale-in">
-            <div className="lg:hidden mb-8 flex justify-center">
-              <Logo size="md" variant="dark" />
+            <div className="lg:hidden mb-8 flex flex-col items-center text-center gap-3">
+              <div className="w-24 h-24 rounded-2xl bg-white/95 flex items-center justify-center overflow-hidden shadow-glow">
+                <img src={DEFAULT_LOGO} alt={BRAND_SHORT} className="h-full w-full object-contain object-center p-2" />
+              </div>
+              <div>
+                <div className="text-2xl font-bold text-white">{BRAND_SHORT}</div>
+                <div className="text-slate-400 text-sm">{BRAND_TAGLINE}</div>
+              </div>
             </div>
 
-            <div className="bg-white/95 backdrop-blur-xl rounded-3xl shadow-2xl border border-white/20 p-8 sm:p-10">
+            <div className="theme-modal bg-white/95 backdrop-blur-xl rounded-3xl shadow-2xl border border-white/20 p-8 sm:p-10">
               {!forgotOpen ? (
                 <>
                   <div className="mb-8">
-                    <h2 className="text-2xl font-bold text-slate-900 tracking-tight">Welcome back</h2>
-                    <p className="text-slate-500 text-sm mt-1">Sign in to your MT-Billing panel</p>
+                    <h2 className="text-2xl font-bold text-slate-900 tracking-tight">{BRAND_SHORT}</h2>
+                    <p className="text-slate-500 text-sm mt-1">{BRAND_TAGLINE}</p>
                   </div>
 
                   <form onSubmit={submit} className="space-y-5">
@@ -209,7 +230,7 @@ function ForgotPasswordForm({ onBack, onSuccess }: { onBack: () => void; onSucce
           Reset panel login
         </h2>
         <p className="text-slate-500 text-sm mt-1 leading-relaxed">
-          Send your <strong>Panel ID</strong> to your vendor. They run the MT-Billing activator (same tool used for license keys) to give you a reset code. Enter it below to restore the default username and password.
+          Send your <strong>Panel ID</strong> to your vendor. They run the activator (same tool used for license keys) to give you a reset code. Enter it below to restore the default username and password.
         </p>
       </div>
 

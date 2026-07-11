@@ -6,6 +6,7 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { useRouterDevice } from '../context/RouterContext';
 import { useLayout } from './Layout';
+import { PRODUCT_TITLE } from '../branding';
 
 export default function Topbar({ title }: { title: string }) {
   const { logout, user } = useAuth();
@@ -38,7 +39,9 @@ export default function Topbar({ title }: { title: string }) {
         </button>
         <div className="min-w-0">
           <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight truncate">{title}</h1>
-          <p className="text-[11px] text-slate-400 hidden sm:block">MT-Billing control panel</p>
+          <p className="text-[11px] text-slate-400 hidden lg:block truncate max-w-[420px]" title={PRODUCT_TITLE}>
+            {PRODUCT_TITLE}
+          </p>
         </div>
       </div>
 

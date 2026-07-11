@@ -41,7 +41,7 @@ export default function Layout({
         toggleSidebar: () => setSidebarOpen((v) => !v),
       }}
     >
-      <div className="flex min-h-screen bg-slate-100 bg-mesh-light">
+      <div className="flex min-h-screen bg-slate-100 bg-mesh-light theme-main">
         {sidebarOpen && (
           <button
             type="button"

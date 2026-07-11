@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
 import { Router as RouterIcon, Plus, Pencil, Trash2, Wifi } from 'lucide-react';
-import Layout from '../components/Layout';
 import { Card, StatusBadge, EmptyState, Modal, ModalFooter, FormField } from '../components/ui';
 import { api } from '../api';
 import { useRouterDevice } from '../context/RouterContext';
 
-export default function Routers() {
+/** Router inventory panel — embedded as the first Network tab. */
+export function RoutersPanel() {
   const [routers, setRouters] = useState<any[]>([]);
   const [edit, setEdit] = useState<any>(null);
   const { refresh } = useRouterDevice();
@@ -22,9 +22,23 @@ export default function Routers() {
   };
 
   return (
-    <Layout title="Routers">
+    <div>
       <div className="flex justify-end mb-4">
-        <button className="btn-primary" onClick={() => setEdit({ name: '', host: '', port: 8728, api_user: '', api_pass: '', board: '', type: 'pppoe', status: 'offline' })}>
+        <button
+          className="btn-primary"
+          onClick={() =>
+            setEdit({
+              name: '',
+              host: '',
+              port: 8728,
+              api_user: '',
+              api_pass: '',
+              board: '',
+              type: 'pppoe',
+              status: 'offline',
+            })
+          }
+        >
           <Plus size={16} /> Add Router
         </button>
       </div>
@@ -37,12 +51,24 @@ export default function Routers() {
             <Card key={r.id} interactive title={r.name} icon={RouterIcon} right={<StatusBadge status={r.status} />}>
               <div className="text-xs text-slate-400">{r.board}</div>
               <dl className="mt-3 text-sm space-y-1">
-                <div className="flex justify-between"><dt className="text-slate-500">Host</dt><dd className="text-slate-700">{r.host}:{r.port}</dd></div>
-                <div className="flex justify-between"><dt className="text-slate-500">Type</dt><dd className="text-slate-700 uppercase">{r.type}</dd></div>
+                <div className="flex justify-between">
+                  <dt className="text-slate-500">Host</dt>
+                  <dd className="text-slate-700">
+                    {r.host}:{r.port}
+                  </dd>
+                </div>
+                <div className="flex justify-between">
+                  <dt className="text-slate-500">Type</dt>
+                  <dd className="text-slate-700 uppercase">{r.type}</dd>
+                </div>
               </dl>
               <div className="flex items-center gap-3 mt-3 text-slate-400">
-                <button className="inline-flex items-center gap-1 text-sm hover:text-sky-600" onClick={() => setEdit(r)}><Pencil size={14} /> Edit</button>
-                <button className="inline-flex items-center gap-1 text-sm hover:text-rose-600" onClick={() => del(r.id)}><Trash2 size={14} /> Delete</button>
+                <button className="inline-flex items-center gap-1 text-sm hover:text-sky-600" onClick={() => setEdit(r)}>
+                  <Pencil size={14} /> Edit
+                </button>
+                <button className="inline-flex items-center gap-1 text-sm hover:text-rose-600" onClick={() => del(r.id)}>
+                  <Trash2 size={14} /> Delete
+                </button>
               </div>
             </Card>
           ))}
@@ -60,7 +86,7 @@ export default function Routers() {
           }}
         />
       )}
-    </Layout>
+    </div>
   );
 }
 
@@ -111,7 +137,11 @@ function RouterModal({ router, onClose, onSaved }: any) {
     >
       <div className="space-y-3">
         {testResult && (
-          <div className={`text-sm rounded-lg px-3 py-2 ${testResult.online ? 'bg-emerald-50 text-emerald-800' : 'bg-rose-50 text-rose-800'}`}>
+          <div
+            className={`text-sm rounded-lg px-3 py-2 ${
+              testResult.online ? 'bg-emerald-50 text-emerald-800' : 'bg-rose-50 text-rose-800'
+            }`}
+          >
             {testResult.online ? (
               <>
                 <b>Connected</b>
@@ -132,7 +162,12 @@ function RouterModal({ router, onClose, onSaved }: any) {
             <input className="input" value={form.host || ''} onChange={(e) => set({ host: e.target.value })} />
           </FormField>
           <FormField label="API Port">
-            <input className="input" type="number" value={form.port || 8728} onChange={(e) => set({ port: Number(e.target.value) })} />
+            <input
+              className="input"
+              type="number"
+              value={form.port || 8728}
+              onChange={(e) => set({ port: Number(e.target.value) })}
+            />
           </FormField>
         </div>
         <div className="grid grid-cols-2 gap-3">
@@ -140,7 +175,13 @@ function RouterModal({ router, onClose, onSaved }: any) {
             <input className="input" value={form.api_user || ''} onChange={(e) => set({ api_user: e.target.value })} />
           </FormField>
           <FormField label="API Password">
-            <input className="input" type="password" placeholder={isEdit ? '(leave blank to keep)' : ''} value={form.api_pass || ''} onChange={(e) => set({ api_pass: e.target.value })} />
+            <input
+              className="input"
+              type="password"
+              placeholder={isEdit ? '(leave blank to keep)' : ''}
+              value={form.api_pass || ''}
+              onChange={(e) => set({ api_pass: e.target.value })}
+            />
           </FormField>
         </div>
         <div className="grid grid-cols-2 gap-3">
@@ -151,10 +192,21 @@ function RouterModal({ router, onClose, onSaved }: any) {
             </select>
           </FormField>
           <FormField label="Board">
-            <input className="input" value={form.board || ''} onChange={(e) => set({ board: e.target.value })} placeholder="Auto-filled after Test" readOnly={!!testResult?.board} />
+            <input
+              className="input"
+              value={form.board || ''}
+              onChange={(e) => set({ board: e.target.value })}
+              placeholder="Auto-filled after Test"
+              readOnly={!!testResult?.board}
+            />
           </FormField>
         </div>
       </div>
     </Modal>
   );
+}
+
+/** @deprecated Standalone page kept for redirects — use Network → Routers tab */
+export default function Routers() {
+  return <RoutersPanel />;
 }

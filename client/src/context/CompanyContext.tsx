@@ -26,8 +26,8 @@ const Ctx = createContext<CompanyCtx>({
 const publicApi = axios.create({ baseURL: '/api' });
 
 const DEFAULTS: CompanyBrand = {
-  name: 'MT-Billing',
-  logo: null,
+  name: 'ts0gs',
+  logo: '/logo.png',
 };
 
 export function CompanyProvider({ children }: { children: ReactNode }) {
@@ -44,7 +44,7 @@ export function CompanyProvider({ children }: { children: ReactNode }) {
           const c = r.data || {};
           setCompany({
             name: c.name || DEFAULTS.name,
-            logo: c.logo || null,
+            logo: c.logo || DEFAULTS.logo,
             address: c.address || null,
             phone: c.phone || null,
             email: c.email || null,
@@ -58,7 +58,7 @@ export function CompanyProvider({ children }: { children: ReactNode }) {
       const c = r.data || {};
       setCompany({
         name: c.name || DEFAULTS.name,
-        logo: c.logo || null,
+        logo: c.logo || DEFAULTS.logo,
         address: c.address || null,
       });
     } catch {

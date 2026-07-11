@@ -38,16 +38,25 @@ body {
   --page-fg: #e2e8f0;
   --card-bg: rgba(15, 23, 42, 0.92);
   --card-border: rgba(51, 65, 85, 0.85);
+  --modal-bg: rgba(15, 23, 42, 0.96);
+  --modal-border: rgba(51, 65, 85, 0.9);
+  --sidebar-bg: #020617;
 }
 [data-theme='dark'] body {
   background: #0b1220;
   color: #e2e8f0;
 }
+[data-theme='dark'] .theme-main,
 [data-theme='dark'] .bg-slate-100,
 [data-theme='dark'] .bg-mesh-light {
   background-color: #0b1220 !important;
   background-image: radial-gradient(at 20% 20%, rgba(249, 115, 22, 0.12) 0px, transparent 45%),
     radial-gradient(at 80% 80%, rgba(14, 165, 233, 0.08) 0px, transparent 45%) !important;
+}
+[data-theme='dark'] .theme-sidebar,
+[data-theme='dark'] aside.theme-sidebar {
+  background: linear-gradient(180deg, #020617 0%, #0b1220 100%) !important;
+  border-right-color: #1e293b !important;
 }
 [data-theme='dark'] .card,
 [data-theme='dark'] .card-interactive {
@@ -58,6 +67,19 @@ body {
 [data-theme='dark'] .glass {
   background: rgba(15, 23, 42, 0.85) !important;
   border-color: rgba(51, 65, 85, 0.7) !important;
+}
+[data-theme='dark'] .theme-modal {
+  background: var(--modal-bg) !important;
+  border-color: var(--modal-border) !important;
+  color: #e2e8f0;
+}
+[data-theme='dark'] .theme-modal-header,
+[data-theme='dark'] .theme-modal-footer {
+  border-color: rgba(51, 65, 85, 0.85) !important;
+  background: rgba(15, 23, 42, 0.6) !important;
+}
+[data-theme='dark'] .theme-modal-backdrop {
+  background: rgba(2, 6, 23, 0.72) !important;
 }
 [data-theme='dark'] .input,
 [data-theme='dark'] input.input,
@@ -89,48 +111,88 @@ body {
   background-color: #1e293b !important;
 }
 
-/* ── One Piece theme (straw-hat navy / gold / crimson) ── */
+/* ── One Piece theme (straw-hat navy / gold / crimson + map art) ── */
 [data-theme='onepiece'] {
   color-scheme: dark;
   --brand: #e8b923;
   --brand-glow: rgba(232, 185, 35, 0.4);
   --page-bg: #071525;
   --page-fg: #f8fafc;
-  --card-bg: rgba(12, 35, 64, 0.92);
+  --card-bg: rgba(12, 35, 64, 0.88);
   --card-border: rgba(232, 185, 35, 0.28);
+  --modal-bg: rgba(8, 28, 52, 0.96);
+  --modal-border: rgba(232, 185, 35, 0.35);
 }
 [data-theme='onepiece'] body {
-  background:
-    radial-gradient(ellipse at 10% 0%, rgba(200, 16, 46, 0.22) 0%, transparent 42%),
-    radial-gradient(ellipse at 90% 10%, rgba(232, 185, 35, 0.18) 0%, transparent 40%),
-    linear-gradient(160deg, #04101f 0%, #0a2744 45%, #071525 100%);
+  background-color: #04101f;
+  background-image:
+    linear-gradient(160deg, rgba(4, 16, 31, 0.82) 0%, rgba(10, 39, 68, 0.78) 45%, rgba(7, 21, 37, 0.88) 100%),
+    radial-gradient(ellipse at 12% 0%, rgba(200, 16, 46, 0.28) 0%, transparent 42%),
+    radial-gradient(ellipse at 88% 8%, rgba(232, 185, 35, 0.2) 0%, transparent 40%),
+    url('/themes/onepiece-bg.jpg');
+  background-size: auto, auto, auto, cover;
+  background-position: center, center, center, center top;
+  background-attachment: fixed;
+  background-repeat: no-repeat;
   color: #f8fafc;
 }
+[data-theme='onepiece'] .theme-main,
 [data-theme='onepiece'] .bg-slate-100,
 [data-theme='onepiece'] .bg-mesh-light {
   background-color: transparent !important;
-  background-image: none !important;
+  background-image:
+    linear-gradient(180deg, rgba(4, 16, 31, 0.55) 0%, rgba(7, 21, 37, 0.72) 100%),
+    url('/themes/onepiece-bg.jpg') !important;
+  background-size: auto, cover !important;
+  background-position: center, center top !important;
+  background-attachment: fixed !important;
+  background-repeat: no-repeat !important;
+}
+[data-theme='onepiece'] .theme-sidebar,
+[data-theme='onepiece'] aside.theme-sidebar {
+  background:
+    linear-gradient(180deg, rgba(6, 16, 28, 0.92) 0%, rgba(10, 31, 56, 0.88) 50%, rgba(12, 21, 40, 0.94) 100%),
+    url('/themes/onepiece-bg.jpg') !important;
+  background-size: auto, cover !important;
+  background-position: left center !important;
+  border-right-color: rgba(232, 185, 35, 0.35) !important;
+  box-shadow: 4px 0 24px rgba(0, 0, 0, 0.35);
 }
 [data-theme='onepiece'] .card,
 [data-theme='onepiece'] .card-interactive {
-  background: linear-gradient(145deg, rgba(12, 40, 72, 0.95), rgba(8, 28, 52, 0.92)) !important;
+  background: linear-gradient(145deg, rgba(12, 40, 72, 0.92), rgba(8, 28, 52, 0.88)) !important;
   border-color: rgba(232, 185, 35, 0.28) !important;
   box-shadow: 0 8px 28px -12px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(232, 185, 35, 0.08);
+  backdrop-filter: blur(8px);
 }
 [data-theme='onepiece'] .glass {
-  background: rgba(8, 28, 52, 0.88) !important;
+  background: rgba(8, 28, 52, 0.82) !important;
   border-color: rgba(232, 185, 35, 0.22) !important;
+  backdrop-filter: blur(12px);
+}
+[data-theme='onepiece'] .theme-modal {
+  background: linear-gradient(160deg, rgba(10, 36, 64, 0.97), rgba(6, 22, 42, 0.98)) !important;
+  border-color: rgba(232, 185, 35, 0.35) !important;
+  box-shadow: 0 24px 60px -16px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(232, 185, 35, 0.12);
+  color: #f8fafc;
+}
+[data-theme='onepiece'] .theme-modal-header,
+[data-theme='onepiece'] .theme-modal-footer {
+  border-color: rgba(232, 185, 35, 0.2) !important;
+  background: rgba(4, 16, 32, 0.55) !important;
+}
+[data-theme='onepiece'] .theme-modal-backdrop {
+  background:
+    linear-gradient(rgba(4, 16, 31, 0.72), rgba(4, 16, 31, 0.78)),
+    url('/themes/onepiece-bg.jpg') !important;
+  background-size: auto, cover !important;
+  background-position: center !important;
 }
 [data-theme='onepiece'] .btn-primary,
 [data-theme='onepiece'] button.btn-primary {
   background: linear-gradient(135deg, #c8102e, #e8b923) !important;
   border: none;
   color: #fff !important;
-}
-[data-theme='onepiece'] .theme-sidebar,
-[data-theme='onepiece'] aside.theme-sidebar {
-  background: linear-gradient(180deg, #06101c 0%, #0a1f38 50%, #0c1528 100%) !important;
-  border-right-color: rgba(232, 185, 35, 0.25) !important;
 }
 [data-theme='onepiece'] .input,
 [data-theme='onepiece'] input.input,
@@ -162,6 +224,11 @@ body {
 [data-theme='onepiece'] .text-brand-500,
 [data-theme='onepiece'] .text-brand-400 {
   color: #e8b923 !important;
+}
+
+/* Light theme modal alignment */
+[data-theme='light'] .theme-modal {
+  background: rgba(255, 255, 255, 0.98);
 }
 
 .sidebar-scroll {

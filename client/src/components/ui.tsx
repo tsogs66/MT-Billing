@@ -337,15 +337,15 @@ export function Modal({
 
   return createPortal(
     <div
-      className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-[2000] p-4 animate-fade-in"
+      className="theme-modal-backdrop fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-[2000] p-4 animate-fade-in"
       style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0 }}
       onClick={onClose}
     >
       <div
-        className={`bg-white rounded-2xl shadow-2xl w-full ${wide ? 'max-w-2xl' : widths[maxWidth]} max-h-[90vh] flex flex-col animate-scale-in border border-slate-200/80`}
+        className={`theme-modal bg-white rounded-2xl shadow-2xl w-full ${wide ? 'max-w-2xl' : widths[maxWidth]} max-h-[90vh] flex flex-col animate-scale-in border border-slate-200/80`}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-start justify-between px-5 py-4 border-b border-slate-100 shrink-0">
+        <div className="theme-modal-header flex items-start justify-between px-5 py-4 border-b border-slate-100 shrink-0">
           <div>
             <h3 className="font-bold text-slate-900 text-lg tracking-tight">{title}</h3>
             {subtitle && <p className="text-sm text-slate-400 mt-0.5">{subtitle}</p>}
@@ -355,7 +355,7 @@ export function Modal({
           </button>
         </div>
         <div className="p-5 overflow-y-auto flex-1 min-h-0">{children}</div>
-        {footer && <div className="flex justify-end gap-2 px-5 py-3 border-t border-slate-100 bg-slate-50/80 rounded-b-2xl shrink-0">{footer}</div>}
+        {footer && <div className="theme-modal-footer flex justify-end gap-2 px-5 py-3 border-t border-slate-100 bg-slate-50/80 rounded-b-2xl shrink-0">{footer}</div>}
       </div>
     </div>,
     document.body

@@ -290,6 +290,133 @@ export function migrate() {
   }
 
   db.prepare("UPDATE naps SET name = 'OLT Main Server' WHERE kind = 'olt' AND name = 'OLT-1'").run();
+
+  // One-time: remove demo/sample operational data; keep stock & inventory (+ users/settings).
+  purgeSampleOperationalDataOnce();
+  ensureBillingPlans();
+  ensureFiberInventory();
+}
+
+/** Wipe seeded demo rows (routers, clients, sales, map, logs, etc.) once per database. Inventory is preserved. */
+function purgeSampleOperationalDataOnce() {
+  if (!columnExists('app_settings', 'sample_purged_v2')) {
+    db.exec('ALTER TABLE app_settings ADD COLUMN sample_purged_v2 INTEGER DEFAULT 0');
+  }
+  if (count('app_settings') === 0) {
+    db.prepare('INSERT INTO app_settings (id) VALUES (1)').run();
+  }
+  const row = db.prepare('SELECT sample_purged_v2 FROM app_settings WHERE id = 1').get() as
+    | { sample_purged_v2: number }
+    | undefined;
+  if (row?.sample_purged_v2) return;
+
+  const tx = db.transaction(() => {
+    db.exec(`
+      DELETE FROM pppoe_users;
+      DELETE FROM naps;
+      DELETE FROM transactions;
+      DELETE FROM queues;
+      DELETE FROM logs;
+      DELETE FROM routers;
+      DELETE FROM profiles;
+      DELETE FROM ipoe_profiles;
+      DELETE FROM ipoe_plans;
+      DELETE FROM ipoe_lease_meta;
+      DELETE FROM ai_scripts;
+    `);
+    try {
+      db.exec('DELETE FROM wan_routes');
+    } catch {
+      /* table may not exist yet */
+    }
+    try {
+      db.exec('DELETE FROM firewall_rules');
+    } catch {
+      /* optional */
+    }
+    try {
+      db.prepare(
+        `UPDATE notify_settings SET email_from = 'billing@localhost', sms_sender = 'ISP' WHERE id = 1`
+      ).run();
+    } catch {
+      /* optional */
+    }
+    db.prepare('UPDATE app_settings SET sample_purged_v2 = 1 WHERE id = 1').run();
+  });
+  tx();
+}
+
+/** Catalog of basic fiber ISP equipment & peripherals (upsert by SKU). */
+function ensureFiberInventory() {
+  const items: [string, string, string, number, number, string][] = [
+    ['Huawei ONT HG8145V5', 'ONU/ONT', 'ONT-HG8145', 42, 850, 'In Stock'],
+    ['FiberHome AN5506-04-FG ONT', 'ONU/ONT', 'ONT-FH5506', 30, 780, 'In Stock'],
+    ['ZTE F660 V8 ONT', 'ONU/ONT', 'ONT-ZTEF660', 25, 720, 'In Stock'],
+    ['GPON OLT 4-PON', 'OLT', 'OLT-4PON', 2, 28000, 'Low Stock'],
+    ['GPON OLT 8-PON', 'OLT', 'OLT-8PON', 1, 45000, 'Low Stock'],
+    ['Fiber Drop Cable 1F Figure-8 (300m)', 'Cable', 'FDC-1F-300', 15, 2100, 'In Stock'],
+    ['Aerial Fiber Cable 12F (1km)', 'Cable', 'AFC-12F-1K', 8, 8500, 'In Stock'],
+    ['Aerial Fiber Cable 24F (1km)', 'Cable', 'AFC-24F-1K', 5, 12000, 'In Stock'],
+    ['ADSS Fiber Cable 48F (1km)', 'Cable', 'ADSS-48F-1K', 2, 18500, 'Low Stock'],
+    ['Indoor Duplex Fiber Patch Cord SC/APC 3m', 'Cable', 'PC-SCAPC-3M', 100, 45, 'In Stock'],
+    ['Indoor Duplex Fiber Patch Cord SC/UPC 3m', 'Cable', 'PC-SCUPC-3M', 80, 40, 'In Stock'],
+    ['Cat6 UTP Cable Box 305m', 'Cable', 'CAT6-305', 12, 3200, 'In Stock'],
+    ['SC/APC Fast Connector', 'Connector', 'SCAPC-FC', 320, 25, 'In Stock'],
+    ['SC/UPC Fast Connector', 'Connector', 'SCUPC-FC', 200, 22, 'In Stock'],
+    ['LC/UPC Fast Connector', 'Connector', 'LCUPC-FC', 150, 28, 'In Stock'],
+    ['SC/APC Adapter (simplex)', 'Connector', 'SCAPC-ADP', 250, 12, 'In Stock'],
+    ['RJ45 Cat6 Connector (100pcs)', 'Connector', 'RJ45-CAT6-100', 20, 180, 'In Stock'],
+    ['NAP Box 1x8 PLC Splitter', 'Splitter', 'NAP-8-PLC', 6, 1200, 'Low Stock'],
+    ['NAP Box 16-port', 'Splitter', 'NAP-16', 4, 1600, 'Low Stock'],
+    ['PLC Splitter 1x4 Bare', 'Splitter', 'PLC-1X4', 40, 180, 'In Stock'],
+    ['PLC Splitter 1x8 Bare', 'Splitter', 'PLC-1X8', 35, 220, 'In Stock'],
+    ['PLC Splitter 1x16 Bare', 'Splitter', 'PLC-1X16', 20, 350, 'In Stock'],
+    ['PLC Splitter 1x32 Bare', 'Splitter', 'PLC-1X32', 10, 550, 'In Stock'],
+    ['Dome Fiber Closure 48F', 'Enclosure', 'CLS-DOME-48', 8, 1400, 'In Stock'],
+    ['Inline Fiber Closure 24F', 'Enclosure', 'CLS-INLINE-24', 10, 900, 'In Stock'],
+    ['Outdoor Enclosure IP65', 'Enclosure', 'ENC-IP65', 6, 2100, 'In Stock'],
+    ['ODF / Fiber Patch Panel 24-port', 'Enclosure', 'ODF-24', 4, 2800, 'In Stock'],
+    ['MikroTik hAP ax3', 'Router', 'MT-HAPAX3', 3, 4500, 'Low Stock'],
+    ['MikroTik hEX S (RB760iGS)', 'Router', 'MT-HEX-S', 5, 3200, 'In Stock'],
+    ['MikroTik CCR2004', 'Router', 'MT-CCR2004', 1, 28000, 'Low Stock'],
+    ['MikroTik CRS328-24P-4S+', 'Switch', 'MT-CRS328', 2, 18500, 'Low Stock'],
+    ['Managed Switch 24-Port Gigabit', 'Switch', 'SW-24G', 3, 6500, 'In Stock'],
+    ['SFP Module 1.25G 1310nm 20km', 'Transceiver', 'SFP-1G-1310', 40, 450, 'In Stock'],
+    ['SFP Module 1.25G 1550nm 40km', 'Transceiver', 'SFP-1G-1550', 25, 650, 'In Stock'],
+    ['SFP+ Module 10G LR', 'Transceiver', 'SFP10G-LR', 10, 1800, 'In Stock'],
+    ['Media Converter RJ45–Fiber SC', 'Transceiver', 'MC-RJ45-SC', 15, 900, 'In Stock'],
+    ['PoE Injector 24V/48V', 'Power', 'POE-INJ', 20, 350, 'In Stock'],
+    ['UPS 650VA', 'Power', 'UPS-650', 4, 2800, 'In Stock'],
+    ['UPS 1500VA', 'Power', 'UPS-1500', 2, 6500, 'Low Stock'],
+    ['Battery 12V 100Ah', 'Power', 'BAT-12V-100', 6, 8500, 'In Stock'],
+    ['Pole Bracket Clamp', 'Accessory', 'PBC-01', 0, 45, 'Out of Stock'],
+    ['Wall Mount ONU Bracket', 'Accessory', 'ONU-BRKT', 50, 35, 'In Stock'],
+    ['Steel Messenger Wire 1.5mm (1km)', 'Accessory', 'MSG-1.5-1K', 5, 2200, 'In Stock'],
+    ['Dead-end Clamp', 'Accessory', 'CLMP-DEAD', 80, 25, 'In Stock'],
+    ['Suspension Clamp', 'Accessory', 'CLMP-SUSP', 80, 22, 'In Stock'],
+    ['Grounding Kit', 'Accessory', 'GND-KIT', 15, 180, 'In Stock'],
+    ['Cable Ties (100pcs)', 'Accessory', 'TIE-100', 40, 50, 'In Stock'],
+    ['Electrical Tape (roll)', 'Accessory', 'TAPE-ELEC', 60, 25, 'In Stock'],
+    ['Heat Shrink Tubing Kit', 'Accessory', 'HST-KIT', 25, 120, 'In Stock'],
+    ['Fusion Splice Sleeve (50pcs)', 'Tools', 'SPLICE-SLV-50', 30, 90, 'In Stock'],
+    ['Fiber Cleaver', 'Tools', 'TOOL-CLEAVER', 3, 3500, 'Low Stock'],
+    ['Fusion Splicer', 'Tools', 'TOOL-SPLICER', 1, 65000, 'Low Stock'],
+    ['Optical Power Meter', 'Tools', 'TOOL-OPM', 4, 2800, 'In Stock'],
+    ['Visual Fault Locator (VFL)', 'Tools', 'TOOL-VFL', 6, 650, 'In Stock'],
+    ['OTDR Handheld', 'Tools', 'TOOL-OTDR', 1, 42000, 'Low Stock'],
+    ['Fiber Stripper', 'Tools', 'TOOL-STRIP', 8, 280, 'In Stock'],
+    ['RJ45 Crimp Tool', 'Tools', 'TOOL-CRIMP', 5, 450, 'In Stock'],
+    ['Label Printer (handheld)', 'Peripherals', 'PER-LABEL', 2, 4500, 'Low Stock'],
+    ['USB Serial Console Cable', 'Peripherals', 'PER-USB-CONS', 10, 350, 'In Stock'],
+    ['Outdoor Wi-Fi CPE 5GHz', 'Peripherals', 'PER-CPE5', 8, 2200, 'In Stock'],
+  ];
+  const has = db.prepare('SELECT 1 FROM inventory WHERE sku = ?');
+  const ins = db.prepare(
+    'INSERT INTO inventory (name, category, sku, quantity, unit_price, status) VALUES (?, ?, ?, ?, ?, ?)'
+  );
+  for (const it of items) {
+    if (!has.get(it[2])) ins.run(...it);
+  }
 }
 
 /** Single-row notification settings, created with sensible defaults. */
@@ -298,7 +425,7 @@ function ensureNotifySettings() {
     db.prepare(
       `INSERT INTO notify_settings
         (id, reminder_enabled, days_before, email_enabled, sms_enabled, autodisable_enabled, autodisable_hours, email_from, sms_sender)
-       VALUES (1, 1, 3, 1, 1, 1, 24, 'billing@pa-north.net', 'PA-NORTH')`
+       VALUES (1, 1, 3, 1, 1, 1, 24, 'billing@localhost', 'ISP')`
     ).run();
   }
 }
@@ -323,21 +450,8 @@ function setOnlineStates() {
   db.exec("UPDATE pppoe_users SET online = CASE WHEN (id % 7 = 0) THEN 0 ELSE 1 END WHERE status = 'Active'");
 }
 
-const FIRST = ['Jonathan', 'Licerio', 'Lizel', 'Johnny', 'Magno', 'Gino', 'Leony', 'Lito', 'Denver', 'Eric', 'Lisa', 'Adela', 'Bernardo', 'Vic', 'Lucille', 'Glaiza', 'Marlon', 'Rowena', 'Ferdinand', 'Cristina', 'Ramon', 'Teresita', 'Danilo', 'Marites', 'Rodel', 'Jocelyn', 'Arnel', 'Editha', 'Reynaldo', 'Marilou'];
-const LAST = ['Castillano', 'Anonuevo', 'Cortina', 'Malabanan', 'Tanglang', 'Agapito', 'Badal', 'Aday', 'Reyes', 'Cabrera', 'Nohay', 'Desepeda', 'Grajo', 'Santos', 'Delacruz', 'Ramirez', 'Mercado', 'Villanueva', 'Aquino', 'Bautista', 'Gonzales', 'Torres', 'Flores', 'Rivera', 'Navarro'];
-const PROFILES = [
-  { name: '15mbps', rate: '15M/15M', price: 999 },
-  { name: '25mbps', rate: '25M/25M', price: 1299 },
-  { name: '50mbps', rate: '50M/50M', price: 1699 },
-  { name: 'non-payments', rate: '1M/1M', price: 0 },
-];
-
-function pad(n: number, len: number) {
-  return String(n).padStart(len, '0');
-}
-
+/** Seed essentials only — no demo routers/clients/sales/map. Inventory is filled via ensureFiberInventory(). */
 export function seed() {
-  // Admin user
   if (count('users') === 0) {
     const user = process.env.ADMIN_USER || 'admin';
     const pass = process.env.ADMIN_PASS || 'admin123';
@@ -347,176 +461,19 @@ export function seed() {
       'Administrator'
     );
   } else {
-    // Normalize legacy role labels
     db.prepare("UPDATE users SET role = 'Administrator' WHERE role IN ('superadmin', 'admin')").run();
   }
 
   if (count('company') === 0) {
     db.prepare('INSERT INTO company (id, name, address, phone, email, currency) VALUES (1, ?, ?, ?, ?, ?)').run(
-      'Pa-North Fiber Internet',
-      'Santa Cruz, North District',
-      '+63 900 000 0000',
-      'support@pa-north.net',
+      'ISP Business',
+      '',
+      '',
+      '',
       'PHP'
     );
   }
 
-  if (count('routers') === 0) {
-    db.prepare('INSERT INTO routers (name, host, port, board, type, status) VALUES (?, ?, ?, ?, ?, ?)').run(
-      'PPPoE MT Router', '192.168.88.1', 8728, 'x86 YANLING YL-CLU6L-V1', 'pppoe', 'online'
-    );
-    db.prepare('INSERT INTO routers (name, host, port, board, type, status) VALUES (?, ?, ?, ?, ?, ?)').run(
-      'IPoE MT Router', '192.168.89.1', 8728, 'RB5009UG+S+IN', 'ipoe', 'online'
-    );
-  }
-
-  if (count('profiles') === 0) {
-    const ins = db.prepare('INSERT INTO profiles (name, rate_limit, price, type) VALUES (?, ?, ?, ?)');
-    for (const p of PROFILES) ins.run(p.name, p.rate, p.price, 'pppoe');
-  }
-
-  // NAPs and OLT
-  if (count('naps') === 0) {
-    const baseLat = 15.1785;
-    const baseLng = 120.5945;
-    const insNap = db.prepare('INSERT INTO naps (name, kind, lat, lng, ports, parent_id) VALUES (?, ?, ?, ?, ?, ?)');
-    const oltId = insNap.run('OLT Main Server', 'olt', baseLat, baseLng, 128, null).lastInsertRowid as number;
-    for (let i = 1; i <= 18; i++) {
-      const angle = (i / 18) * Math.PI * 2;
-      const radius = 0.006 + (i % 4) * 0.0018;
-      const lat = baseLat + Math.sin(angle) * radius;
-      const lng = baseLng + Math.cos(angle) * radius * 1.3;
-      insNap.run(`NAP${i}`, 'nap', lat, lng, 8, oltId);
-    }
-  }
-
-  // PPPoE users
-  if (count('pppoe_users') === 0) {
-    const naps = db.prepare("SELECT id, lat, lng FROM naps WHERE kind = 'nap'").all() as { id: number; lat: number; lng: number }[];
-    const ins = db.prepare(`INSERT INTO pppoe_users
-      (username, customer_name, account_number, profile, status, subscription_due, price, router_id, address, lat, lng, nap_id, service)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-    let n = 0;
-    const total = 72;
-    for (let i = 0; i < total; i++) {
-      const first = FIRST[i % FIRST.length];
-      const last = LAST[(i * 3) % LAST.length];
-      const customer = `${first} ${last}`;
-      const username = `${first}${last}`;
-      const account = `${pad(Math.floor(Math.random() * 900000) + 100000, 6)}${pad(Math.floor(Math.random() * 900000) + 100000, 6)}`;
-      let profile: string, status: string, price: number;
-      if (i < 6) {
-        profile = 'non-payments'; status = 'inactive'; price = 0;
-      } else {
-        const p = PROFILES[i % 3];
-        profile = p.name; price = p.price;
-        status = i % 11 === 0 ? 'expired' : 'Active';
-      }
-      const due = new Date();
-      due.setDate(due.getDate() + ((i % 30) - 5));
-      const nap = naps[i % naps.length];
-      const jitterLat = (Math.random() - 0.5) * 0.0016;
-      const jitterLng = (Math.random() - 0.5) * 0.0016;
-      const hasLocation = i % 15 !== 0; // ~5 without location, like screenshot
-      ins.run(
-        username, customer, account, profile, status,
-        due.toISOString().slice(0, 10), price, 1,
-        `Purok ${1 + (i % 7)}, North District`,
-        hasLocation ? nap.lat + jitterLat : null,
-        hasLocation ? nap.lng + jitterLng : null,
-        nap.id, 'pppoe'
-      );
-      n++;
-    }
-
-    // A few IPoE users on router 2
-    for (let i = 0; i < 12; i++) {
-      const first = FIRST[(i + 5) % FIRST.length];
-      const last = LAST[(i + 2) % LAST.length];
-      const nap = naps[i % naps.length];
-      ins.run(
-        `${first}${last}IP`, `${first} ${last}`, `${pad(400000 + i, 6)}${pad(100000 + i, 6)}`,
-        '25mbps', 'Active', new Date(Date.now() + 15 * 86400000).toISOString().slice(0, 10),
-        1299, 2, `Purok ${1 + (i % 7)}, North District`,
-        nap.lat + 0.0005, nap.lng + 0.0005, nap.id, 'ipoe'
-      );
-    }
-
-    setOnlineStates();
-  }
-
-  // Transactions for the last 7 days (shaped like screenshot peak at day 3)
-  if (count('transactions') === 0) {
-    const shape = [0, 800, 2100, 27100, 0, 0, 0]; // recent 7 days, index 0 = 6 days ago
-    const ins = db.prepare('INSERT INTO transactions (customer_name, amount, type, created_at) VALUES (?, ?, ?, ?)');
-    for (let d = 0; d < 7; d++) {
-      const day = new Date();
-      day.setDate(day.getDate() - (6 - d));
-      let remaining = shape[d];
-      let guard = 0;
-      while (remaining > 0 && guard < 40) {
-        const amt = Math.min(remaining, [999, 1299, 1699][guard % 3]);
-        const cust = `${FIRST[guard % FIRST.length]} ${LAST[guard % LAST.length]}`;
-        ins.run(cust, amt, 'payment', day.toISOString());
-        remaining -= amt;
-        guard++;
-      }
-    }
-    // add older history for month/year views
-    for (let m = 1; m < 60; m++) {
-      const day = new Date();
-      day.setDate(day.getDate() - m * 3);
-      const cust = `${FIRST[m % FIRST.length]} ${LAST[m % LAST.length]}`;
-      ins.run(cust, [999, 1299, 1699][m % 3], 'payment', day.toISOString());
-    }
-  }
-
-  if (count('queues') === 0) {
-    const q = db.prepare('INSERT INTO queues (name, avg_rate) VALUES (?, ?)');
-    const rows: [string, number][] = [
-      ['Downstream 2024', 40.94],
-      ['Roblox PC', 30.08],
-      ['t. Total Download', 8.61],
-      ['Streaming Connections Down', 7.42],
-      ['Point Blank', 2.18],
-      ['Downloading Connections Down', 0.894],
-      ['Browsing Connections Down', 0.158],
-    ];
-    for (const r of rows) q.run(r[0], r[1]);
-  }
-
-  if (count('inventory') === 0) {
-    const ins = db.prepare('INSERT INTO inventory (name, category, sku, quantity, unit_price, status) VALUES (?, ?, ?, ?, ?, ?)');
-    const items: [string, string, string, number, number, string][] = [
-      ['Huawei ONT HG8145V5', 'ONU/ONT', 'ONT-HG8145', 42, 850, 'In Stock'],
-      ['Fiber Drop Cable 1F (300m)', 'Cable', 'FDC-1F-300', 15, 2100, 'In Stock'],
-      ['SC/APC Fast Connector', 'Connector', 'SCAPC-FC', 320, 25, 'In Stock'],
-      ['NAP Box 1x8 PLC Splitter', 'Splitter', 'NAP-8-PLC', 6, 1200, 'Low Stock'],
-      ['MikroTik hAP ax3', 'Router', 'MT-HAPAX3', 3, 4500, 'Low Stock'],
-      ['Pole Bracket Clamp', 'Accessory', 'PBC-01', 0, 45, 'Out of Stock'],
-    ];
-    for (const it of items) ins.run(...it);
-  }
-
-  if (count('logs') === 0) {
-    const ins = db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)');
-    ins.run('info', 'system', 'MT-Billing panel started');
-    ins.run('info', 'pppoe', 'Synced 72 PPPoE secrets from PPPoE MT Router');
-    ins.run('warning', 'router', 'IPoE MT Router API latency high (240ms)');
-    ins.run('info', 'billing', 'Generated 54 invoices for the current cycle');
-  }
-
-  if (count('ipoe_profiles') === 0) {
-    db.prepare('INSERT INTO ipoe_profiles (name, download_mbps, upload_mbps, max_limit) VALUES (?, ?, ?, ?)').run(
-      '100MBPS U limited',
-      100,
-      100,
-      '100M/100M'
-    );
-  }
-  if (count('ipoe_plans') === 0) {
-    db.prepare(
-      'INSERT INTO ipoe_plans (name, price, cycle, profile_name, download_mbps, upload_mbps) VALUES (?, ?, ?, ?, ?, ?)'
-    ).run('UNLI100', 1200, 'Monthly', '100MBPS U limited', 100, 100);
-  }
+  ensureBillingPlans();
+  ensureFiberInventory();
 }

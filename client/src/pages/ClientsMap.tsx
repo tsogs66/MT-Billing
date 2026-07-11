@@ -262,7 +262,7 @@ export default function ClientsMap() {
   const savedRouteCount = connectors.length;
 
   return (
-    <Layout title="Clients Map">
+    <Layout title="Topology">
       <div className="card p-3 mb-3 flex items-center justify-between flex-wrap gap-3">
         <div className="text-sm text-slate-500 flex items-center gap-4 flex-wrap">
           <span>Servers: <b className="text-slate-700">{stats.servers ?? '—'}</b></span>
