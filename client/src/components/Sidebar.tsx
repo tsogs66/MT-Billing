@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Bot, TerminalSquare, Router, Network, Users, Share2, Map,
   BarChart3, Boxes, Wifi, FileCode2, Globe, Building2, Settings, ShieldCheck,
   DownloadCloud, ServerCog, ScrollText, KeyRound, Activity, Bell, ChevronDown,
-  X,
+  X, Printer,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import Logo from './Logo';
@@ -50,6 +50,7 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       { to: '/uptime', label: 'Uptime Monitor', icon: Activity },
       { to: '/logs', label: 'System Logs', icon: ScrollText },
+      { to: '/printers', label: 'Printers', icon: Printer },
       { to: '/company', label: 'Company', icon: Building2 },
       { to: '/settings', label: 'System Settings', icon: Settings },
       { to: '/roles', label: 'Panel Roles', icon: ShieldCheck },

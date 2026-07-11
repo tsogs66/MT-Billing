@@ -8,6 +8,7 @@ import {
 import { api, peso, addMonthsPreserveDay } from '../api';
 import LocationEditor, { DEFAULT_PIN } from '../components/LocationEditor';
 import { useRouterDevice } from '../context/RouterContext';
+import { printPaymentReceipt } from '../lib/printer';
 
 interface PUser {
   id: number;
@@ -410,30 +411,12 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
   );
 }
 
-function printReceipt(receipt: any) {
-  const line = (a: string, b: string) => `<div style="display:flex;justify-content:space-between;margin:2px 0"><span>${a}</span><span>${b}</span></div>`;
-  const html = `<!doctype html><html><head><title>Receipt ${receipt.account}</title>
-    <style>body{font-family:Arial,sans-serif;color:#111;padding:24px;max-width:360px;margin:auto}
-    h2{margin:0 0 2px} .muted{color:#666;font-size:12px} hr{border:none;border-top:1px dashed #bbb;margin:10px 0}
-    .tot{display:flex;justify-content:space-between;font-weight:700;font-size:16px;margin-top:6px}</style></head>
-    <body>
-      <h2>${receipt.company}</h2><div class="muted">Official Payment Receipt</div><hr/>
-      ${line('Account #', receipt.account)}
-      ${line('Customer', receipt.customer)}
-      ${line('Plan', `${receipt.plan} × ${receipt.months} mo`)}
-      ${line('Payment date', receipt.paymentDate)}
-      ${line('Next due date', receipt.newDue)}
-      <hr/>
-      ${line('Subtotal', `\u20b1${receipt.subtotal.toFixed(2)}`)}
-      ${line(`Discount (${receipt.discountDays} day/s downtime)`, `- \u20b1${receipt.discount.toFixed(2)}`)}
-      <div class="tot"><span>TOTAL</span><span>\u20b1${receipt.total.toFixed(2)}</span></div>
-      <hr/><div class="muted">Thank you for your payment.</div>
-      <script>window.onload=function(){window.print();}</script>
-    </body></html>`;
-  const w = window.open('', '_blank', 'width=420,height=640');
-  if (w) {
-    w.document.write(html);
-    w.document.close();
+async function printReceipt(receipt: any) {
+  try {
+    await printPaymentReceipt(receipt);
+  } catch (e: any) {
+    console.error(e);
+    alert(e?.message || 'Could not print receipt. Check Printers settings or allow pop-ups.');
   }
 }
 

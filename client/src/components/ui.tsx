@@ -3,6 +3,7 @@ import type { LucideIcon } from 'lucide-react';
 import {
   Construction, Sparkles, X, Loader2, CheckCircle2, AlertCircle, Inbox, Search,
 } from 'lucide-react';
+import { Portal } from './Portal';
 
 /* ─── Card ─── */
 
@@ -320,27 +321,32 @@ export function Modal({
 }) {
   const widths = { sm: 'max-w-sm', md: 'max-w-md', lg: 'max-w-lg', xl: 'max-w-xl' };
   return (
-    <div
-      className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-[1000] p-4 animate-fade-in"
-      onClick={onClose}
-    >
+    <Portal>
       <div
-        className={`bg-white rounded-2xl shadow-2xl w-full ${wide ? 'max-w-2xl' : widths[maxWidth]} max-h-[92vh] flex flex-col animate-scale-in border border-slate-200/80`}
-        onClick={(e) => e.stopPropagation()}
+        className="fixed inset-0 z-[1100] flex items-center justify-center p-4 sm:p-6 bg-slate-900/55 backdrop-blur-sm animate-fade-in"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="modal-title"
+        onClick={onClose}
       >
-        <div className="flex items-start justify-between px-5 py-4 border-b border-slate-100">
-          <div>
-            <h3 className="font-bold text-slate-900 text-lg tracking-tight">{title}</h3>
-            {subtitle && <p className="text-sm text-slate-400 mt-0.5">{subtitle}</p>}
+        <div
+          className={`relative bg-white rounded-2xl shadow-2xl w-full ${wide ? 'max-w-2xl' : widths[maxWidth]} max-h-[min(92vh,900px)] flex flex-col animate-scale-in border border-slate-200/80 mx-auto my-auto`}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex items-start justify-between px-5 py-4 border-b border-slate-100 shrink-0">
+            <div>
+              <h3 id="modal-title" className="font-bold text-slate-900 text-lg tracking-tight">{title}</h3>
+              {subtitle && <p className="text-sm text-slate-400 mt-0.5">{subtitle}</p>}
+            </div>
+            <button type="button" onClick={onClose} className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors">
+              <X size={18} />
+            </button>
           </div>
-          <button type="button" onClick={onClose} className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors">
-            <X size={18} />
-          </button>
+          <div className="p-5 overflow-y-auto flex-1 min-h-0">{children}</div>
+          {footer && <div className="flex justify-end gap-2 px-5 py-3 border-t border-slate-100 bg-slate-50/80 rounded-b-2xl shrink-0">{footer}</div>}
         </div>
-        <div className="p-5 overflow-y-auto flex-1">{children}</div>
-        {footer && <div className="flex justify-end gap-2 px-5 py-3 border-t border-slate-100 bg-slate-50/80 rounded-b-2xl">{footer}</div>}
       </div>
-    </div>
+    </Portal>
   );
 }
 

@@ -299,30 +299,42 @@ export async function runAutomations() {
 
   const all = db
     .prepare(
-      `SELECT id, username, customer_name, profile, status, email, contact, subscription_due, nonpayment_since, reminder_sent, router_id
+      `SELECT id, username, customer_name, profile, status, email, contact, subscription_due, nonpayment_since, reminder_sent, router_id, price, account_number
        FROM pppoe_users`
     )
-    .all() as (Client & { status: string; profile: string; nonpayment_since: string | null; reminder_sent: string | null; router_id?: number })[];
+    .all() as (Client & {
+      status: string;
+      profile: string;
+      nonpayment_since: string | null;
+      reminder_sent: string | null;
+      router_id?: number;
+      price?: number;
+      account_number?: string;
+    })[];
+
+  const company = db.prepare('SELECT name FROM company WHERE id = 1').get() as { name?: string } | undefined;
+  const companyName = company?.name || 'Pa-North';
 
   for (const u of all) {
     const d = daysUntil(u.subscription_due);
     if (d == null) continue;
 
-    // Expiry reminder
+    // Expiry / payment reminder (N days before due date)
     if (s.reminder_enabled && u.status === 'Active' && d >= 0 && d <= s.days_before && u.reminder_sent !== u.subscription_due) {
       const channels: ('email' | 'sms')[] = [];
       if (s.email_enabled) channels.push('email');
       if (s.sms_enabled) channels.push('sms');
       if (channels.length) {
-        const subject = 'Your internet plan is about to expire';
-        const msg = `Hi ${u.customer_name || u.username}, your ${u.profile} plan expires on ${u.subscription_due} (in ${d} day${d === 1 ? '' : 's'}). Please settle your payment to avoid disconnection.`;
+        const amount = Number(u.price) || 0;
+        const subject = `${companyName} — Payment reminder`;
+        const msg = `Hi ${u.customer_name || u.username}, this is a friendly reminder that your ${u.profile} plan (Account #${u.account_number || u.username}) is due on ${u.subscription_due} (in ${d} day${d === 1 ? '' : 's'}). Amount due: PHP ${amount.toFixed(2)}. Please settle on or before the due date to avoid interruption of service. Thank you! — ${companyName}`;
         await notifyClient(u, channels, subject, msg, 'expiry_reminder');
         db.prepare('UPDATE pppoe_users SET reminder_sent = ? WHERE id = ?').run(u.subscription_due, u.id);
         summary.remindersSent++;
       }
     }
 
-    // Non-payment tracking + auto-disable
+    // Non-payment tracking + auto-disable on MikroTik after configured hours
     if (d < 0 && u.status !== 'disabled') {
       if (!u.nonpayment_since) {
         db.prepare("UPDATE pppoe_users SET nonpayment_since = ?, status = 'non-payment' WHERE id = ?").run(new Date(now).toISOString(), u.id);
@@ -348,9 +360,17 @@ export async function runAutomations() {
           const channels: ('email' | 'sms')[] = [];
           if (s.email_enabled) channels.push('email');
           if (s.sms_enabled) channels.push('sms');
-          const msg = `Hi ${u.customer_name || u.username}, your service has been temporarily disabled due to non-payment for more than ${s.autodisable_hours} hours. Please settle your balance to restore your connection.`;
+          const waitLabel =
+            s.autodisable_hours >= 24 && s.autodisable_hours % 24 === 0
+              ? `${s.autodisable_hours / 24} day(s)`
+              : `${s.autodisable_hours} hour(s)`;
+          const msg = `Hi ${u.customer_name || u.username}, your service has been temporarily disabled on the network due to non-payment for more than ${waitLabel}. Please settle your balance to restore your connection. — ${companyName}`;
           if (channels.length) await notifyClient(u, channels, 'Service disabled — payment overdue', msg, 'auto_disable');
-          db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run('warning', 'billing', `Auto-disabled ${u.username} after ${Math.round(hours)}h non-payment`);
+          db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+            'warning',
+            'billing',
+            `Auto-disabled ${u.username} on MikroTik after ${Math.round(hours)}h non-payment`
+          );
           summary.disabled++;
         }
       }

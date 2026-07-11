@@ -79,6 +79,13 @@ export default function Notifications() {
   const [tab, setTab] = useState('send');
   const [smtpPass, setSmtpPass] = useState('');
   const [smsPass, setSmsPass] = useState('');
+  const [disableUnit, setDisableUnit] = useState<'hours' | 'days'>(() => {
+    try {
+      return (localStorage.getItem('mt_autodisable_unit') as 'hours' | 'days') || 'hours';
+    } catch {
+      return 'hours';
+    }
+  });
 
   const loadLogs = () => api.get('/notifications').then((r) => setLogs(r.data));
 
@@ -87,6 +94,14 @@ export default function Notifications() {
     api.get('/clients').then((r) => setClients(r.data));
     loadLogs();
   }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('mt_autodisable_unit', disableUnit);
+    } catch {
+      /* ignore */
+    }
+  }, [disableUnit]);
 
   const applyTemplate = (key: string) => {
     const t = TEMPLATES.find((x) => x.key === key);
@@ -260,10 +275,19 @@ export default function Notifications() {
       {tab === 'automation' && (
         <Card title="Reminder & Auto-disable Settings">
           <div className="space-y-4">
-            <Row icon={<Bell size={16} className="text-brand-500" />} label="Expiry reminders" desc="Notify clients before their plan expires">
+            <div className="rounded-xl bg-slate-50 border border-slate-100 px-4 py-3 text-sm text-slate-600">
+              After SMTP/SMS is configured below, the panel automatically:
+              <ul className="list-disc ml-5 mt-1.5 space-y-0.5 text-slate-500">
+                <li>Sends payment reminders based on each user&apos;s expiration date</li>
+                <li>Marks overdue accounts as non-payment</li>
+                <li>Disables the MikroTik PPP secret after the grace period you set</li>
+              </ul>
+            </div>
+
+            <Row icon={<Bell size={16} className="text-brand-500" />} label="Expiry / payment reminders" desc="Notify clients before their plan expires">
               <Toggle label="Expiry reminders" on={!!settings.reminder_enabled} onChange={() => saveSettings({ reminder_enabled: settings.reminder_enabled ? 0 : 1 })} />
             </Row>
-            <div className="flex items-center justify-between text-sm pl-7">
+            <div className="flex items-center justify-between text-sm pl-7 gap-3 flex-wrap">
               <span className="text-slate-500">Send reminder this many days before expiration</span>
               <input
                 type="number"
@@ -281,22 +305,52 @@ export default function Notifications() {
 
             <div className="border-t border-slate-100 pt-3" />
 
-            <Row icon={<PowerOff size={16} className="text-rose-500" />} label="Auto-disable on non-payment" desc="Disconnect overdue clients automatically">
+            <Row icon={<PowerOff size={16} className="text-rose-500" />} label="Auto-disable on MikroTik" desc="Disable PPP secret when payment is overdue">
               <Toggle label="Auto-disable on non-payment" on={!!settings.autodisable_enabled} onChange={() => saveSettings({ autodisable_enabled: settings.autodisable_enabled ? 0 : 1 })} />
             </Row>
-            <div className="flex items-center justify-between text-sm pl-7">
-              <span className="text-slate-500">Disable after this many hours of non-payment</span>
-              <input
-                type="number"
-                min={1}
-                className="input w-20 text-center"
-                value={settings.autodisable_hours}
-                onChange={(e) => saveSettings({ autodisable_hours: Number(e.target.value) })}
-              />
+            <div className="flex items-center justify-between text-sm pl-7 gap-3 flex-wrap">
+              <span className="text-slate-500">Grace period after due date before disabling on MikroTik</span>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min={1}
+                  className="input w-20 text-center"
+                  value={
+                    disableUnit === 'days'
+                      ? Math.max(1, Math.round((settings.autodisable_hours || 24) / 24))
+                      : settings.autodisable_hours
+                  }
+                  onChange={(e) => {
+                    const n = Math.max(1, Number(e.target.value) || 1);
+                    saveSettings({
+                      autodisable_hours: disableUnit === 'days' ? n * 24 : n,
+                    });
+                  }}
+                />
+                <select
+                  className="input w-28"
+                  value={disableUnit}
+                  onChange={(e) => {
+                    const unit = e.target.value as 'hours' | 'days';
+                    const currentHours = Number(settings.autodisable_hours) || 24;
+                    const display = unit === 'days' ? Math.max(1, Math.round(currentHours / 24)) : currentHours;
+                    setDisableUnit(unit);
+                    saveSettings({
+                      autodisable_hours: unit === 'days' ? display * 24 : display,
+                    });
+                  }}
+                >
+                  <option value="hours">Hours</option>
+                  <option value="days">Days</option>
+                </select>
+              </div>
             </div>
+            <p className="text-xs text-slate-400 pl-7">
+              Stored as {settings.autodisable_hours || 24} hour(s). When due, the panel disables the user&apos;s <code className="text-[11px]">/ppp/secret</code> on their router.
+            </p>
 
-            <div className="border-t border-slate-100 pt-3 flex items-center justify-between">
-              <div className="text-xs text-slate-400 flex items-center gap-1.5"><Clock size={14} /> Runs automatically every 5 minutes.</div>
+            <div className="border-t border-slate-100 pt-3 flex items-center justify-between flex-wrap gap-2">
+              <div className="text-xs text-slate-400 flex items-center gap-1.5"><Clock size={14} /> Runs automatically every 5 minutes once email/SMS channels are enabled.</div>
               <button type="button" className="inline-flex items-center gap-2 text-sm border border-slate-200 rounded-lg px-3 py-1.5 hover:bg-slate-50 text-slate-600" onClick={runNow} disabled={busy}>
                 <PlayCircle size={15} /> Run checks now
               </button>

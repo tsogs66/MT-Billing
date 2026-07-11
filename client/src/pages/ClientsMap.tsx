@@ -167,7 +167,7 @@ export default function ClientsMap() {
   const napNodes = useMemo(() => naps.filter((n) => n.kind === 'nap'), [naps]);
   const napsById = useMemo(() => Object.fromEntries(naps.map((n) => [n.id, n])), [naps]);
 
-  const center: [number, number] = olt ? [olt.lat, olt.lng] : servers[0] ? [servers[0].lat, servers[0].lng] : [15.1785, 120.5945];
+  const center: [number, number] = olt ? [olt.lat, olt.lng] : servers[0] ? [servers[0].lat, servers[0].lng] : [13.918727824777054, 120.93881797116397];
   const highlightId = selected?.id ?? hoveredId;
 
   const chainFor = useCallback((clientId: number) => {

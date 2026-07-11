@@ -14,6 +14,7 @@ import Logs from './pages/Logs';
 import Company from './pages/Company';
 import Uptime from './pages/Uptime';
 import Notifications from './pages/Notifications';
+import Printers from './pages/Printers';
 import SystemSettings from './pages/SystemSettings';
 import Network from './pages/Network';
 import ZeroTier from './pages/ZeroTier';
@@ -77,6 +78,7 @@ export default function App() {
               <Route path="/files" element={<MikrotikFiles />} />
               <Route path="/zerotier" element={<ZeroTier />} />
               <Route path="/settings" element={<SystemSettings />} />
+              <Route path="/printers" element={<Printers />} />
               <Route path="/roles" element={<PanelRoles />} />
               <Route path="/updater" element={<Updater />} />
               <Route path="/super-router" element={stub('Super Router', 'Central controller for managing multiple MikroTik routers.')} />
