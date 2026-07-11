@@ -1517,7 +1517,11 @@ function seeded(id: number, salt: number, mod: number) {
 
 app.get('/api/map', (req, res) => {
   const routerId = req.query.routerId ? Number(req.query.routerId) : null;
-  const naps = db.prepare('SELECT id, name, kind, lat, lng, ports, parent_id AS parentId FROM naps').all();
+  const naps = db.prepare(
+    `SELECT id, name, kind, lat, lng, ports, parent_id AS parentId,
+            code, status, address, splitter_ratio AS splitterRatio, pon_port AS ponPort
+     FROM naps`
+  ).all();
   const clientSql = `
       SELECT u.id, u.username, u.customer_name AS customer, u.status, u.online, u.lat, u.lng,
               u.nap_id AS napId, u.router_id AS routerId, u.service, u.account_number AS account,
@@ -1540,14 +1544,15 @@ app.get('/api/map', (req, res) => {
     | undefined;
   const baseLat = oltPos?.lat ?? 15.1785;
   const baseLng = oltPos?.lng ?? 120.5945;
-  const servers = (db.prepare('SELECT id, name, host, status FROM routers ORDER BY id').all() as any[]).map(
+  const servers = (db.prepare('SELECT id, name, host, status, lat, lng, address FROM routers ORDER BY id').all() as any[]).map(
     (s, i) => ({
       id: s.id,
       name: s.name,
       host: s.host,
       status: s.status,
-      lat: baseLat - 0.0015 - i * 0.0006,
-      lng: baseLng - 0.0025 - i * 0.0004,
+      address: s.address || '',
+      lat: s.lat != null ? Number(s.lat) : baseLat - 0.0015 - i * 0.0006,
+      lng: s.lng != null ? Number(s.lng) : baseLng - 0.0025 - i * 0.0004,
     })
   );
   clients.forEach((c) => {
@@ -1593,6 +1598,7 @@ app.get('/api/naps', (req, res) => {
   const rows = db
     .prepare(
       `SELECT n.id, n.name, n.kind, n.ports, n.lat, n.lng, n.parent_id AS parentId,
+              n.code, n.status, n.address, n.splitter_ratio AS splitterRatio, n.pon_port AS ponPort,
               (SELECT name FROM naps o WHERE o.id = n.parent_id) AS oltName
        FROM naps n ${where} ORDER BY n.kind DESC, n.id`
     )
@@ -1604,16 +1610,31 @@ app.post('/api/naps', (req, res) => {
   const b = req.body || {};
   if (!b.name?.trim()) return res.status(400).json({ error: 'name is required' });
   const info = db
-    .prepare('INSERT INTO naps (name, kind, lat, lng, ports, parent_id) VALUES (?, ?, ?, ?, ?, ?)')
+    .prepare(
+      `INSERT INTO naps (name, kind, lat, lng, ports, parent_id, code, status, address, splitter_ratio, pon_port)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
     .run(
       String(b.name).trim(),
       b.kind || 'nap',
       b.lat != null ? Number(b.lat) : null,
       b.lng != null ? Number(b.lng) : null,
       Number(b.ports) || 8,
-      b.parentId ? Number(b.parentId) : null
+      b.parentId ? Number(b.parentId) : null,
+      b.code ? String(b.code).trim() : null,
+      b.status || 'active',
+      b.address ? String(b.address).trim() : null,
+      b.splitterRatio ? String(b.splitterRatio).trim() : null,
+      b.ponPort != null && b.ponPort !== '' ? Number(b.ponPort) : null
     );
-  res.status(201).json(db.prepare('SELECT id, name, kind, lat, lng, ports, parent_id AS parentId FROM naps WHERE id = ?').get(info.lastInsertRowid));
+  res.status(201).json(
+    db
+      .prepare(
+        `SELECT id, name, kind, lat, lng, ports, parent_id AS parentId, code, status, address,
+                splitter_ratio AS splitterRatio, pon_port AS ponPort FROM naps WHERE id = ?`
+      )
+      .get(info.lastInsertRowid)
+  );
 });
 
 app.put('/api/naps/:id', (req, res) => {
@@ -1621,16 +1642,38 @@ app.put('/api/naps/:id', (req, res) => {
   const ex = db.prepare('SELECT * FROM naps WHERE id = ?').get(id) as any;
   if (!ex) return res.status(404).json({ error: 'not found' });
   const b = req.body || {};
-  db.prepare('UPDATE naps SET name=?, kind=?, lat=?, lng=?, ports=?, parent_id=? WHERE id=?').run(
+  db.prepare(
+    `UPDATE naps SET name=?, kind=?, lat=?, lng=?, ports=?, parent_id=?, code=?, status=?, address=?, splitter_ratio=?, pon_port=? WHERE id=?`
+  ).run(
     b.name ?? ex.name,
     b.kind ?? ex.kind,
     b.lat != null ? Number(b.lat) : ex.lat,
     b.lng != null ? Number(b.lng) : ex.lng,
     b.ports != null ? Number(b.ports) : ex.ports,
     b.parentId !== undefined ? (b.parentId ? Number(b.parentId) : null) : ex.parent_id,
+    b.code !== undefined ? (b.code ? String(b.code).trim() : null) : ex.code,
+    b.status ?? ex.status ?? 'active',
+    b.address !== undefined ? (b.address ? String(b.address).trim() : null) : ex.address,
+    b.splitterRatio !== undefined
+      ? b.splitterRatio
+        ? String(b.splitterRatio).trim()
+        : null
+      : ex.splitter_ratio,
+    b.ponPort !== undefined
+      ? b.ponPort != null && b.ponPort !== ''
+        ? Number(b.ponPort)
+        : null
+      : ex.pon_port,
     id
   );
-  res.json(db.prepare('SELECT id, name, kind, lat, lng, ports, parent_id AS parentId FROM naps WHERE id = ?').get(id));
+  res.json(
+    db
+      .prepare(
+        `SELECT id, name, kind, lat, lng, ports, parent_id AS parentId, code, status, address,
+                splitter_ratio AS splitterRatio, pon_port AS ponPort FROM naps WHERE id = ?`
+      )
+      .get(id)
+  );
 });
 
 app.delete('/api/naps/:id', (req, res) => {
@@ -1644,6 +1687,23 @@ app.delete('/api/naps/:id', (req, res) => {
     'olt-nap', id, id, 'nap-client', id, id
   );
   res.json({ ok: true });
+});
+
+/** Update map location / display fields for a server (router) without probing API. */
+app.put('/api/map/servers/:id', (req, res) => {
+  const id = Number(req.params.id);
+  const ex = db.prepare('SELECT * FROM routers WHERE id = ?').get(id) as any;
+  if (!ex) return res.status(404).json({ error: 'not found' });
+  const b = req.body || {};
+  db.prepare('UPDATE routers SET name=?, status=?, lat=?, lng=?, address=? WHERE id=?').run(
+    b.name != null ? String(b.name).trim() : ex.name,
+    b.status != null ? String(b.status) : ex.status,
+    b.lat != null && b.lat !== '' ? Number(b.lat) : ex.lat,
+    b.lng != null && b.lng !== '' ? Number(b.lng) : ex.lng,
+    b.address !== undefined ? (b.address ? String(b.address).trim() : null) : ex.address,
+    id
+  );
+  res.json(db.prepare('SELECT id, name, host, status, lat, lng, address FROM routers WHERE id = ?').get(id));
 });
 
 // ---- Map cable connectors (editable street paths) ----

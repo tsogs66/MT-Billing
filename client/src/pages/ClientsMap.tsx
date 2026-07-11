@@ -1,15 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MapContainer, TileLayer, Marker, Polyline, Popup, Tooltip as LTooltip, useMap, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
-import { Link } from 'react-router-dom';
-import { Search, SlidersHorizontal, Maximize2, Plus, Server, X, Route } from 'lucide-react';
+import { Search, SlidersHorizontal, Maximize2, Plus, Server, X, Route, MapPin } from 'lucide-react';
 import Layout from '../components/Layout';
-import { Modal, ModalFooter, FormField, StatusBadge } from '../components/ui';
+import { Modal, ModalFooter, FormField } from '../components/ui';
 import { api } from '../api';
 import { useRouterDevice } from '../context/RouterContext';
 
-interface ServerNode { id: number; name: string; host?: string; status: string; lat: number; lng: number }
-interface Nap { id: number; name: string; kind: string; lat: number; lng: number; ports: number; parentId: number | null }
+interface ServerNode {
+  id: number; name: string; host?: string; status: string;
+  lat: number; lng: number; address?: string;
+}
+interface Nap {
+  id: number; name: string; kind: string; lat: number; lng: number; ports: number;
+  parentId: number | null; code?: string | null; status?: string; address?: string | null;
+  splitterRatio?: string | null; ponPort?: number | null;
+}
 interface Connector { id: number; kind: string; fromId: number; toId: number; points: [number, number][] }
 interface Client {
   id: number; username: string; customer: string; status: string; online: boolean;
@@ -70,80 +76,63 @@ function escapeHtml(s: string) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-/** Server / POP — telecom tower + rack (teal) */
+/** Server — teal square rack badge + label */
 function serverIcon(name: string, active = false) {
-  const svg = `<svg viewBox="0 0 40 48" width="36" height="44" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-    <rect x="10" y="18" width="20" height="22" rx="2.5" fill="#0d9488" stroke="#fff" stroke-width="1.5"/>
-    <rect x="13" y="21" width="14" height="3.5" rx="1" fill="#ccfbf1"/>
-    <rect x="13" y="26.5" width="14" height="3.5" rx="1" fill="#99f6e4"/>
-    <rect x="13" y="32" width="14" height="3.5" rx="1" fill="#5eead4"/>
-    <circle cx="20" cy="12" r="5.5" fill="#14b8a6" stroke="#fff" stroke-width="1.5"/>
-    <path d="M20 6.5 V3 M16.5 8.2 L14.2 5.5 M23.5 8.2 L25.8 5.5" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/>
-    <rect x="17.5" y="40" width="5" height="4" fill="#0f766e"/>
-  </svg>`;
   return L.divIcon({
     className: 'map-equip-marker',
-    html: `<div class="map-equip ${active ? 'is-active' : ''}">${svg}<span class="map-equip-label">${escapeHtml(name)}</span></div>`,
-    iconSize: [72, 62],
-    iconAnchor: [36, 44],
+    html: `<div class="map-equip-row ${active ? 'is-active' : ''}">
+      <span class="map-badge map-badge-server">S</span>
+      <span class="map-equip-label">${escapeHtml(name)}</span>
+    </div>`,
+    iconSize: [110, 28],
+    iconAnchor: [14, 14],
   });
 }
 
-/** OLT — fiber chassis with PON ports (violet) */
+/** OLT — violet square badge */
 function oltIcon(name: string, active = false) {
-  const svg = `<svg viewBox="0 0 44 36" width="40" height="34" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-    <rect x="2" y="6" width="40" height="24" rx="3" fill="#7c3aed" stroke="#fff" stroke-width="1.5"/>
-    <rect x="5" y="9" width="18" height="8" rx="1.5" fill="#ede9fe"/>
-    <circle cx="8.5" cy="22" r="2.2" fill="#4ade80"/>
-    <circle cx="15" cy="22" r="2.2" fill="#4ade80"/>
-    <circle cx="21.5" cy="22" r="2.2" fill="#fbbf24"/>
-    <circle cx="28" cy="22" r="2.2" fill="#4ade80"/>
-    <circle cx="34.5" cy="22" r="2.2" fill="#94a3b8"/>
-    <text x="28" y="15" text-anchor="middle" font-size="7" font-weight="700" fill="#fff" font-family="system-ui,sans-serif">OLT</text>
-  </svg>`;
   return L.divIcon({
     className: 'map-equip-marker',
-    html: `<div class="map-equip ${active ? 'is-active' : ''}">${svg}<span class="map-equip-label">${escapeHtml(name)}</span></div>`,
-    iconSize: [76, 52],
-    iconAnchor: [38, 34],
+    html: `<div class="map-equip-row ${active ? 'is-active' : ''}">
+      <span class="map-badge map-badge-olt">OLT</span>
+      <span class="map-equip-label">${escapeHtml(name)}</span>
+    </div>`,
+    iconSize: [120, 28],
+    iconAnchor: [14, 14],
   });
 }
 
-/** NAP — outdoor fiber cabinet (amber) */
+/** NAP — blue square box with N (matches reference) */
 function napIcon(name: string, active = false) {
-  const svg = `<svg viewBox="0 0 36 42" width="34" height="40" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-    <path d="M6 12 L18 4 L30 12 V34 H6 Z" fill="#d97706" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/>
-    <rect x="11" y="16" width="14" height="14" rx="1.5" fill="#fef3c7"/>
-    <rect x="13.5" y="19" width="4" height="3" rx=".5" fill="#b45309"/>
-    <rect x="18.5" y="19" width="4" height="3" rx=".5" fill="#b45309"/>
-    <rect x="13.5" y="24" width="4" height="3" rx=".5" fill="#b45309"/>
-    <rect x="18.5" y="24" width="4" height="3" rx=".5" fill="#b45309"/>
-    <circle cx="18" cy="10" r="2" fill="#fbbf24" stroke="#fff" stroke-width="1"/>
-  </svg>`;
   return L.divIcon({
     className: 'map-equip-marker',
-    html: `<div class="map-equip ${active ? 'is-active' : ''}">${svg}<span class="map-equip-label">${escapeHtml(name)}</span></div>`,
-    iconSize: [72, 58],
-    iconAnchor: [36, 40],
+    html: `<div class="map-equip-row ${active ? 'is-active' : ''}">
+      <span class="map-badge map-badge-nap">N</span>
+      <span class="map-equip-label">${escapeHtml(name)}</span>
+    </div>`,
+    iconSize: [100, 26],
+    iconAnchor: [13, 13],
   });
 }
 
-/** Client ONU — house + antenna (green / orange / red by state) */
+/** Client ONU — round disc with house; pulse when online (color matches icon) */
 function onuIcon(state: ClientState, hovered = false, selected = false) {
-  const { fill } = CLIENT_COLORS[state];
-  const size = selected || hovered ? 28 : 22;
-  const svg = `<svg viewBox="0 0 32 34" width="${size}" height="${Math.round(size * 1.06)}" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-    <path d="M4 14 L16 4 L28 14 V28 H4 Z" fill="${fill}" stroke="#fff" stroke-width="1.6" stroke-linejoin="round"/>
-    <rect x="12" y="18" width="8" height="10" rx="1" fill="#fff" fill-opacity=".92"/>
-    <path d="M16 2.5 V6 M12.8 4.2 L10.5 2 M19.2 4.2 L21.5 2" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/>
-    <circle cx="16" cy="9.5" r="2" fill="#fff" fill-opacity=".9"/>
+  const { fill, glow } = CLIENT_COLORS[state];
+  const size = selected || hovered ? 22 : 18;
+  const house = `<svg viewBox="0 0 16 16" width="10" height="10" aria-hidden="true">
+    <path d="M2.5 7.5 L8 2.5 L13.5 7.5 V13 H9.5 V10 H6.5 V13 H2.5 Z" fill="#fff"/>
   </svg>`;
-  const cls = ['map-onu', state, hovered || selected ? 'is-hot' : '', selected ? 'is-selected' : ''].filter(Boolean).join(' ');
+  const cls = [
+    'map-onu-round',
+    state,
+    hovered || selected ? 'is-hot' : '',
+    selected ? 'is-selected' : '',
+  ].filter(Boolean).join(' ');
   return L.divIcon({
     className: 'map-onu-marker',
-    html: `<div class="${cls}">${svg}</div>`,
-    iconSize: [size, Math.round(size * 1.06)],
-    iconAnchor: [size / 2, Math.round(size * 1.06)],
+    html: `<span class="${cls}" style="--onu-color:${fill};--onu-glow:${glow};width:${size}px;height:${size}px">${house}</span>`,
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2],
   });
 }
 
@@ -173,8 +162,128 @@ function MapDrawClicks({ active, onAdd }: { active: boolean; onAdd: (lat: number
   return null;
 }
 
-const emptyNap = (): Partial<Nap> => ({
-  name: '', kind: 'nap', lat: 15.1785, lng: 120.5945, ports: 8, parentId: null,
+function MapPickerClick({ onPick }: { onPick: (lat: number, lng: number) => void }) {
+  useMapEvents({
+    click(e) {
+      onPick(e.latlng.lat, e.latlng.lng);
+    },
+  });
+  return null;
+}
+
+function MapInvalidateSize() {
+  const map = useMap();
+  useEffect(() => {
+    const t = setTimeout(() => map.invalidateSize(), 80);
+    return () => clearTimeout(t);
+  }, [map]);
+  return null;
+}
+
+type LocDraft = { lat: number; lng: number };
+
+function MapLocationPicker({
+  open,
+  lat,
+  lng,
+  onClose,
+  onConfirm,
+}: {
+  open: boolean;
+  lat: number;
+  lng: number;
+  onClose: () => void;
+  onConfirm: (lat: number, lng: number) => void;
+}) {
+  const [draft, setDraft] = useState<LocDraft>({ lat, lng });
+  useEffect(() => {
+    if (open) setDraft({ lat: Number(lat) || 15.1785, lng: Number(lng) || 120.5945 });
+  }, [open, lat, lng]);
+
+  if (!open) return null;
+  const center: [number, number] = [draft.lat || 15.1785, draft.lng || 120.5945];
+
+  return (
+    <Modal
+      title="Pick on Map"
+      subtitle="Click the map to set coordinates, or edit values below."
+      onClose={onClose}
+      maxWidth="xl"
+      footer={
+        <ModalFooter
+          onCancel={onClose}
+          onConfirm={() => onConfirm(draft.lat, draft.lng)}
+          confirmLabel="Use Location"
+        />
+      }
+    >
+      <div className="space-y-3">
+        <div className="h-72 rounded-xl overflow-hidden border border-slate-200 relative">
+          <MapContainer
+            key={`location-picker-${open}`}
+            center={center}
+            zoom={17}
+            minZoom={3}
+            maxZoom={22}
+            style={{ height: '100%', width: '100%' }}
+            scrollWheelZoom
+          >
+            <TileLayer
+              attribution="&copy; OpenStreetMap"
+              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+              maxZoom={22}
+              maxNativeZoom={19}
+            />
+            <MapInvalidateSize />
+            <MapPickerClick onPick={(la, ln) => setDraft({ lat: Number(la.toFixed(8)), lng: Number(ln.toFixed(8)) })} />
+            <Marker position={[draft.lat, draft.lng]} icon={L.divIcon({
+              className: 'map-equip-marker',
+              html: '<span class="map-picker-pin"></span>',
+              iconSize: [18, 18],
+              iconAnchor: [9, 9],
+            })} />
+          </MapContainer>
+          <div className="absolute top-2 left-2 z-[500] bg-white/95 text-[11px] text-slate-600 px-2 py-1 rounded border border-slate-200 shadow-sm">
+            Click map to place pin
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <FormField label="Latitude">
+            <input
+              className="input font-mono text-sm"
+              type="number"
+              step="any"
+              value={draft.lat}
+              onChange={(e) => setDraft((d) => ({ ...d, lat: Number(e.target.value) }))}
+            />
+          </FormField>
+          <FormField label="Longitude">
+            <input
+              className="input font-mono text-sm"
+              type="number"
+              step="any"
+              value={draft.lng}
+              onChange={(e) => setDraft((d) => ({ ...d, lng: Number(e.target.value) }))}
+            />
+          </FormField>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+const emptyNap = (kind: 'nap' | 'olt' = 'nap', parentId: number | null = null): Partial<Nap> => ({
+  name: '',
+  code: kind === 'nap' ? '' : '',
+  kind,
+  lat: 15.1785,
+  lng: 120.5945,
+  ports: kind === 'olt' ? 8 : 8,
+  parentId,
+  status: 'active',
+  address: '',
+  splitterRatio: kind === 'nap' ? '1:8' : '',
+  ponPort: kind === 'nap' ? 1 : null,
 });
 
 export default function ClientsMap() {
@@ -187,6 +296,8 @@ export default function ClientsMap() {
   const [search, setSearch] = useState('');
   const [topoOpen, setTopoOpen] = useState(false);
   const [editNap, setEditNap] = useState<Partial<Nap> | null>(null);
+  const [editServer, setEditServer] = useState<Partial<ServerNode> | null>(null);
+  const [pickFor, setPickFor] = useState<'nap' | 'server' | null>(null);
   const [busy, setBusy] = useState(false);
   const [hoveredId, setHoveredId] = useState<number | null>(null);
   const [selected, setSelected] = useState<Client | null>(null);
@@ -269,6 +380,18 @@ export default function ClientsMap() {
     }
   };
 
+  const saveServer = async () => {
+    if (!editServer?.id || !editServer.name?.trim()) return;
+    setBusy(true);
+    try {
+      await api.put(`/map/servers/${editServer.id}`, editServer);
+      setEditServer(null);
+      load();
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const deleteNap = async (id: number) => {
     if (!confirm('Delete this topology node?')) return;
     try {
@@ -311,62 +434,126 @@ export default function ClientsMap() {
     active ? (backbone ? 'flow-line-backbone' : 'flow-line-active') : '';
 
   const savedRouteCount = connectors.length;
+  const pickLat = pickFor === 'server' ? Number(editServer?.lat) || center[0] : Number(editNap?.lat) || center[0];
+  const pickLng = pickFor === 'server' ? Number(editServer?.lng) || center[1] : Number(editNap?.lng) || center[1];
 
   return (
     <Layout title="Clients Map" fullBleed>
       <div className="map-page-shell">
-        <div className="map-toolbar bg-white/95 border-b border-slate-200 px-3 py-2 flex items-center justify-between flex-wrap gap-2">
-          <div className="flex items-center gap-3 flex-wrap text-xs text-slate-500">
-            <span>Servers <b className="text-slate-700">{stats.servers ?? '—'}</b></span>
-            <span>OLTs <b className="text-slate-700">{stats.olts ?? '—'}</b></span>
-            <span>NAPs <b className="text-slate-700">{stats.naps ?? '—'}</b></span>
-            <span>ONUs <b className="text-slate-700">{(stats.totalClients ?? 0) - (stats.withoutLocation || 0)}</b>
-              <span className="text-slate-400"> / {stats.withoutLocation ?? 0} no GPS</span>
-            </span>
-            <span className="hidden sm:inline-flex items-center gap-2 ml-1 pl-2 border-l border-slate-200">
-              <span className="map-legend-chip"><span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" /> Online</span>
-              <span className="map-legend-chip"><span className="w-2 h-2 rounded-full bg-orange-500" /> Offline</span>
-              <span className="map-legend-chip"><span className="w-2 h-2 rounded-full bg-rose-500" /> Disabled</span>
+        <div className="map-toolbar bg-white border-b border-slate-200 px-3 py-2.5 flex items-center justify-between flex-wrap gap-2">
+          <div className="flex items-center gap-4 flex-wrap text-sm text-slate-500">
+            <span>Servers: <b className="text-slate-700">{stats.servers ?? '—'}</b></span>
+            <span>OLTs: <b className="text-slate-700">{stats.olts ?? '—'}</b></span>
+            <span>NAPs: <b className="text-slate-700">{stats.naps ?? '—'}</b></span>
+            <span>
+              Clients with location:{' '}
+              <b className="text-slate-700">{(stats.totalClients ?? 0) - (stats.withoutLocation || 0)}</b>
+              <span className="text-slate-400"> ({stats.withoutLocation ?? 0} not shown)</span>
             </span>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
             <button
               type="button"
-              className={`inline-flex items-center gap-1.5 text-xs border rounded-lg px-2.5 py-1.5 ${topoOpen ? 'border-brand-300 bg-brand-50 text-brand-700' : 'border-slate-200 hover:bg-slate-50 text-slate-600'}`}
+              className={`inline-flex items-center gap-2 text-sm border rounded-lg px-3 py-1.5 ${topoOpen ? 'border-brand-300 bg-brand-50 text-brand-700' : 'border-slate-200 hover:bg-slate-50 text-slate-600'}`}
               onClick={() => setTopoOpen((v) => !v)}
             >
-              <SlidersHorizontal size={14} /> Topology
+              <SlidersHorizontal size={15} /> Topology Config
             </button>
             <div className="relative">
-              <Search size={14} className="absolute left-2 top-2 text-slate-400" />
+              <Search size={15} className="absolute left-2.5 top-2.5 text-slate-400" />
               <input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search clients…"
-                className="text-xs border border-slate-200 rounded-lg pl-7 pr-2.5 py-1.5 w-52 sm:w-64 focus:outline-none focus:ring-2 focus:ring-brand-500"
+                placeholder="Search name, username, account#, address..."
+                className="text-sm border border-slate-200 rounded-lg pl-8 pr-3 py-2 w-64 sm:w-80 focus:outline-none focus:ring-2 focus:ring-brand-500"
               />
             </div>
+            <span className="hidden lg:inline text-xs text-slate-400 max-w-xs">
+              Clients: Online green · Offline orange · Disabled red · Lines: Server → OLT → NAP → Client
+            </span>
           </div>
         </div>
 
         {topoOpen && (
-          <div className="map-toolbar bg-slate-50 border-b border-slate-200 px-3 py-3 max-h-[42vh] overflow-y-auto">
+          <div className="map-toolbar bg-slate-50/90 border-b border-slate-200 px-3 py-3 max-h-[46vh] overflow-y-auto shrink-0">
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-3">
-              <TopoPanel title="Server Configuration" action={<Link to="/routers" className="text-xs text-brand-600 hover:underline">Manage routers →</Link>}>
-                {servers.length === 0 ? <p className="text-sm text-slate-400 py-4 text-center">No servers added.</p> : servers.map((s) => (
-                  <TopoRow key={s.id} name={s.name} sub={s.host || '—'} right={<StatusBadge status={s.status === 'online' ? 'online' : 'offline'} />} />
-                ))}
+              <TopoPanel
+                title="Server Configuration"
+                action={<span className="text-[11px] text-slate-400">Map location</span>}
+              >
+                {servers.length === 0 ? (
+                  <p className="text-sm text-slate-400 py-4 text-center">No servers added.</p>
+                ) : (
+                  servers.map((s) => (
+                    <TopoRow
+                      key={s.id}
+                      name={s.name}
+                      sub={`${s.host || '—'} · ${s.status || '—'}`}
+                      right={
+                        <div className="flex gap-2">
+                          <button type="button" className="text-xs text-sky-600" onClick={() => setEditServer({ ...s })}>Edit</button>
+                        </div>
+                      }
+                    />
+                  ))
+                )}
               </TopoPanel>
-              <TopoPanel title="OLT Configuration" action={<button type="button" className="text-xs text-brand-600 hover:underline" onClick={() => setEditNap({ ...emptyNap(), kind: 'olt' })}><Plus size={12} className="inline" /> New OLT</button>}>
-                {olts.length === 0 ? <p className="text-sm text-slate-400 py-4 text-center">No OLT configured.</p> : olts.map((o) => (
-                  <TopoRow key={o.id} name={o.name} sub={`${o.ports} PONs`} right={<div className="flex gap-2"><button type="button" className="text-xs text-sky-600" onClick={() => setEditNap({ ...o })}>Edit</button><button type="button" className="text-xs text-rose-600" onClick={() => deleteNap(o.id)}>Delete</button></div>} />
-                ))}
+              <TopoPanel
+                title="OLT Configuration"
+                action={
+                  <button type="button" className="text-xs text-brand-600 hover:underline" onClick={() => setEditNap(emptyNap('olt'))}>
+                    <Plus size={12} className="inline" /> New OLT
+                  </button>
+                }
+              >
+                {olts.length === 0 ? (
+                  <p className="text-sm text-slate-400 py-4 text-center">No OLT configured.</p>
+                ) : (
+                  olts.map((o) => (
+                    <TopoRow
+                      key={o.id}
+                      name={o.name}
+                      sub={`PONs: ${o.ports} · ${o.status || 'active'}`}
+                      right={
+                        <div className="flex gap-2">
+                          <button type="button" className="text-xs text-sky-600" onClick={() => setEditNap({ ...o })}>Edit</button>
+                          <button type="button" className="text-xs text-rose-600" onClick={() => deleteNap(o.id)}>Delete</button>
+                        </div>
+                      }
+                    />
+                  ))
+                )}
               </TopoPanel>
-              <TopoPanel title="NAP Configuration" action={<button type="button" className="text-xs text-brand-600 hover:underline" onClick={() => setEditNap({ ...emptyNap(), parentId: olt?.id || null })}><Plus size={12} className="inline" /> New NAP</button>}>
-                <div className="max-h-40 overflow-y-auto space-y-1 pr-1">
-                  {napNodes.length === 0 ? <p className="text-sm text-slate-400 py-4 text-center">No NAPs.</p> : napNodes.map((n) => (
-                    <TopoRow key={n.id} name={n.name} sub={n.parentId ? `From: ${napsById[n.parentId]?.name}` : 'No parent'} right={<div className="flex gap-2"><button type="button" className="text-xs text-sky-600" onClick={() => setEditNap({ ...n })}>Edit</button><button type="button" className="text-xs text-rose-600" onClick={() => deleteNap(n.id)}>Delete</button></div>} />
-                  ))}
+              <TopoPanel
+                title="NAP Configuration"
+                action={
+                  <button
+                    type="button"
+                    className="text-xs text-brand-600 hover:underline"
+                    onClick={() => setEditNap(emptyNap('nap', olt?.id || null))}
+                  >
+                    <Plus size={12} className="inline" /> New NAP
+                  </button>
+                }
+              >
+                <div className="max-h-44 overflow-y-auto space-y-1 pr-1">
+                  {napNodes.length === 0 ? (
+                    <p className="text-sm text-slate-400 py-4 text-center">No NAPs.</p>
+                  ) : (
+                    napNodes.map((n) => (
+                      <TopoRow
+                        key={n.id}
+                        name={n.code ? `${n.code}` : n.name}
+                        sub={`${n.name}${n.parentId ? ` · From: ${napsById[n.parentId]?.name}` : ''}${n.ponPort ? ` · PON ${n.ponPort}` : ''}`}
+                        right={
+                          <div className="flex gap-2">
+                            <button type="button" className="text-xs text-sky-600" onClick={() => setEditNap({ ...n })}>Edit</button>
+                            <button type="button" className="text-xs text-rose-600" onClick={() => deleteNap(n.id)}>Delete</button>
+                          </div>
+                        }
+                      />
+                    ))
+                  )}
                 </div>
               </TopoPanel>
             </div>
@@ -375,7 +562,7 @@ export default function ClientsMap() {
               <div className="flex items-center gap-2 mb-2">
                 <Route size={15} className="text-brand-500" />
                 <h3 className="text-sm font-semibold text-slate-700">Cable Route (Street Path)</h3>
-                <span className="text-xs text-slate-400 ml-auto">Saved: {savedRouteCount}</span>
+                <span className="text-xs text-slate-400 ml-auto">Saved routes: {savedRouteCount}</span>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
                 <FormField label="Route type">
@@ -420,20 +607,15 @@ export default function ClientsMap() {
             </div>
           )}
 
-          {selected && (
-            <ClientPanel client={selected} onClose={() => setSelected(null)} />
-          )}
+          {selected && <ClientPanel client={selected} onClose={() => setSelected(null)} />}
 
-          <button onClick={() => document.getElementById('map-wrap')?.requestFullscreen?.()} className="absolute top-3 right-3 z-[500] bg-white/95 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-600 hover:bg-white flex items-center gap-1.5 shadow-sm">
+          <button
+            type="button"
+            onClick={() => document.getElementById('map-wrap')?.requestFullscreen?.()}
+            className="absolute top-3 right-3 z-[500] bg-white/95 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-600 hover:bg-white flex items-center gap-1.5 shadow-sm"
+          >
             <Maximize2 size={13} /> Fullscreen
           </button>
-
-          <div className="absolute bottom-3 left-3 z-[500] bg-white/95 border border-slate-200 rounded-lg px-2.5 py-2 shadow-sm hidden sm:flex items-center gap-3 text-[10px] text-slate-600">
-            <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm bg-teal-600" /> Server</span>
-            <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm bg-violet-600" /> OLT</span>
-            <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm bg-amber-600" /> NAP</span>
-            <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm bg-emerald-500" /> ONU</span>
-          </div>
 
           <MapContainer
             center={center}
@@ -458,9 +640,16 @@ export default function ClientsMap() {
               const hi = highlightChain?.serverId === srv.id && highlightChain?.oltId === olt.id;
               const path = resolvePath(connectors, 'server-olt', srv.id, olt.id, defaultPath([srv.lat, srv.lng], [olt.lat, olt.lng]));
               return (
-                <Polyline key={`s-olt-${srv.id}`} positions={path} pathOptions={{
-                  color: '#0d9488', weight: hi ? 4 : 2.5, opacity: 0.75 * lineDim(hi), className: lineClass(true, true),
-                }} />
+                <Polyline
+                  key={`s-olt-${srv.id}`}
+                  positions={path}
+                  pathOptions={{
+                    color: '#0d9488',
+                    weight: hi ? 4 : 2.5,
+                    opacity: 0.75 * lineDim(hi),
+                    className: lineClass(true, true),
+                  }}
+                />
               );
             })}
 
@@ -468,9 +657,16 @@ export default function ClientsMap() {
               const hi = highlightChain?.oltId === olt.id && highlightChain?.napId === n.id;
               const path = resolvePath(connectors, 'olt-nap', olt.id, n.id, defaultPath([olt.lat, olt.lng], [n.lat, n.lng]));
               return (
-                <Polyline key={`olt-nap-${n.id}`} positions={path} pathOptions={{
-                  color: '#2563eb', weight: hi ? 3.5 : 2, opacity: 0.8 * lineDim(hi), className: lineClass(true, true),
-                }} />
+                <Polyline
+                  key={`olt-nap-${n.id}`}
+                  positions={path}
+                  pathOptions={{
+                    color: '#2563eb',
+                    weight: hi ? 3.5 : 2,
+                    opacity: 0.8 * lineDim(hi),
+                    className: lineClass(true, true),
+                  }}
+                />
               );
             })}
 
@@ -480,13 +676,20 @@ export default function ClientsMap() {
               const state = clientState(c);
               const active = state === 'online';
               const hi = highlightChain?.clientId === c.id;
-              const lineColor = state === 'online' ? '#22c55e' : state === 'offline' ? '#f97316' : '#f87171';
+              const lineColor = CLIENT_COLORS[state].fill;
               const path = resolvePath(connectors, 'nap-client', nap.id, c.id, defaultPath([nap.lat, nap.lng], [c.lat, c.lng]));
               return (
-                <Polyline key={`cl-${c.id}`} positions={path} pathOptions={{
-                  color: lineColor, weight: hi ? 3 : 1.5, opacity: (active ? 0.9 : 0.35) * lineDim(hi),
-                  dashArray: active ? undefined : '4 6', className: active ? lineClass(true) : '',
-                }} />
+                <Polyline
+                  key={`cl-${c.id}`}
+                  positions={path}
+                  pathOptions={{
+                    color: lineColor,
+                    weight: hi ? 3 : 1.5,
+                    opacity: (active ? 0.9 : 0.35) * lineDim(hi),
+                    dashArray: active ? undefined : '4 6',
+                    className: active ? `${lineClass(true)} flow-line-pulse-${state}` : '',
+                  }}
+                />
               );
             })}
 
@@ -500,7 +703,7 @@ export default function ClientsMap() {
 
             {servers.map((s) => (
               <Marker key={`srv-${s.id}`} position={[s.lat, s.lng]} icon={serverIcon(s.name, highlightChain?.serverId === s.id)}>
-                <Popup><b>{s.name}</b><br />Server / POP</Popup>
+                <Popup><b>{s.name}</b><br />Server</Popup>
               </Marker>
             ))}
 
@@ -508,7 +711,11 @@ export default function ClientsMap() {
               <Marker
                 key={n.id}
                 position={[n.lat, n.lng]}
-                icon={equipIcon(n.name, n.kind, highlightChain?.napId === n.id || (n.kind === 'olt' && highlightChain?.oltId === n.id))}
+                icon={equipIcon(
+                  n.code || n.name,
+                  n.kind,
+                  highlightChain?.napId === n.id || (n.kind === 'olt' && highlightChain?.oltId === n.id)
+                )}
               >
                 <Popup><b>{n.name}</b> ({n.kind.toUpperCase()})</Popup>
               </Marker>
@@ -543,24 +750,148 @@ export default function ClientsMap() {
         </div>
       </div>
 
-      {editNap && (
-        <Modal title={editNap.id ? `Edit ${editNap.kind?.toUpperCase()}` : `New ${editNap.kind?.toUpperCase()}`} onClose={() => setEditNap(null)} footer={<ModalFooter onCancel={() => setEditNap(null)} onConfirm={saveNap} busy={busy} />}>
+      {editServer && (
+        <Modal
+          title={editServer.id ? 'Edit Server' : 'New Server'}
+          onClose={() => setEditServer(null)}
+          footer={<ModalFooter onCancel={() => setEditServer(null)} onConfirm={saveServer} confirmLabel="Save Server" busy={busy} />}
+        >
           <div className="space-y-3">
-            <FormField label="Name" required><input className="input" value={editNap.name || ''} onChange={(e) => setEditNap({ ...editNap, name: e.target.value })} /></FormField>
-            <div className="grid grid-cols-2 gap-3">
-              <FormField label="Kind"><select className="input" value={editNap.kind || 'nap'} onChange={(e) => setEditNap({ ...editNap, kind: e.target.value })}><option value="olt">OLT</option><option value="nap">NAP</option></select></FormField>
-              <FormField label="Ports"><input className="input" type="number" value={editNap.ports || 8} onChange={(e) => setEditNap({ ...editNap, ports: Number(e.target.value) })} /></FormField>
+            <FormField label="Name" required>
+              <input className="input" value={editServer.name || ''} onChange={(e) => setEditServer({ ...editServer, name: e.target.value })} />
+            </FormField>
+            <div className="grid grid-cols-2 gap-3 items-end">
+              <FormField label="Status">
+                <select className="input" value={editServer.status || 'online'} onChange={(e) => setEditServer({ ...editServer, status: e.target.value })}>
+                  <option value="online">active</option>
+                  <option value="offline">offline</option>
+                </select>
+              </FormField>
+              <button type="button" className="btn-secondary text-sm inline-flex items-center justify-center gap-1.5 h-[42px]" onClick={() => setPickFor('server')}>
+                <MapPin size={14} /> Pick on Map
+              </button>
             </div>
-            {editNap.kind === 'nap' && (
-              <FormField label="Parent OLT"><select className="input" value={editNap.parentId || ''} onChange={(e) => setEditNap({ ...editNap, parentId: e.target.value ? Number(e.target.value) : null })}><option value="">—</option>{olts.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}</select></FormField>
-            )}
             <div className="grid grid-cols-2 gap-3">
-              <FormField label="Latitude"><input className="input" type="number" step="any" value={editNap.lat ?? ''} onChange={(e) => setEditNap({ ...editNap, lat: Number(e.target.value) })} /></FormField>
-              <FormField label="Longitude"><input className="input" type="number" step="any" value={editNap.lng ?? ''} onChange={(e) => setEditNap({ ...editNap, lng: Number(e.target.value) })} /></FormField>
+              <FormField label="Latitude">
+                <input className="input font-mono text-sm" type="number" step="any" value={editServer.lat ?? ''} onChange={(e) => setEditServer({ ...editServer, lat: Number(e.target.value) })} />
+              </FormField>
+              <FormField label="Longitude">
+                <input className="input font-mono text-sm" type="number" step="any" value={editServer.lng ?? ''} onChange={(e) => setEditServer({ ...editServer, lng: Number(e.target.value) })} />
+              </FormField>
             </div>
+            <FormField label="Address">
+              <textarea className="input min-h-[72px]" value={editServer.address || ''} onChange={(e) => setEditServer({ ...editServer, address: e.target.value })} />
+            </FormField>
           </div>
         </Modal>
       )}
+
+      {editNap && (
+        <Modal
+          title={editNap.id ? `Edit ${editNap.kind === 'olt' ? 'OLT' : 'NAP'}` : `New ${editNap.kind === 'olt' ? 'OLT' : 'NAP'}`}
+          onClose={() => setEditNap(null)}
+          footer={
+            <ModalFooter
+              onCancel={() => setEditNap(null)}
+              onConfirm={saveNap}
+              confirmLabel={editNap.kind === 'olt' ? 'Save OLT' : 'Save NAP'}
+              busy={busy}
+            />
+          }
+        >
+          <div className="space-y-3">
+            {editNap.kind === 'nap' ? (
+              <>
+                <div className="grid grid-cols-2 gap-3">
+                  <FormField label="NAP Code">
+                    <input className="input" value={editNap.code || ''} onChange={(e) => setEditNap({ ...editNap, code: e.target.value })} placeholder="NAP1" />
+                  </FormField>
+                  <FormField label="Name" required>
+                    <input className="input" value={editNap.name || ''} onChange={(e) => setEditNap({ ...editNap, name: e.target.value })} />
+                  </FormField>
+                </div>
+                <div className="grid grid-cols-2 gap-3 items-end">
+                  <FormField label="Upstream">
+                    <select className="input" defaultValue="olt">
+                      <option value="olt">From OLT</option>
+                    </select>
+                  </FormField>
+                  <button type="button" className="btn-secondary text-sm inline-flex items-center justify-center gap-1.5 h-[42px]" onClick={() => setPickFor('nap')}>
+                    <MapPin size={14} /> Pick on Map
+                  </button>
+                </div>
+                <FormField label="OLT">
+                  <select
+                    className="input"
+                    value={editNap.parentId || ''}
+                    onChange={(e) => setEditNap({ ...editNap, parentId: e.target.value ? Number(e.target.value) : null })}
+                  >
+                    <option value="">—</option>
+                    {olts.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                  </select>
+                </FormField>
+                <div className="grid grid-cols-2 gap-3">
+                  <FormField label="PON Port">
+                    <input className="input" type="number" value={editNap.ponPort ?? ''} onChange={(e) => setEditNap({ ...editNap, ponPort: e.target.value === '' ? null : Number(e.target.value) })} />
+                  </FormField>
+                  <FormField label="Splitter Ratio">
+                    <input className="input" value={editNap.splitterRatio || ''} onChange={(e) => setEditNap({ ...editNap, splitterRatio: e.target.value })} placeholder="95/5" />
+                  </FormField>
+                </div>
+                <FormField label="Status">
+                  <select className="input" value={editNap.status || 'active'} onChange={(e) => setEditNap({ ...editNap, status: e.target.value })}>
+                    <option value="active">active</option>
+                    <option value="inactive">inactive</option>
+                  </select>
+                </FormField>
+              </>
+            ) : (
+              <>
+                <FormField label="Name" required>
+                  <input className="input" value={editNap.name || ''} onChange={(e) => setEditNap({ ...editNap, name: e.target.value })} />
+                </FormField>
+                <div className="grid grid-cols-2 gap-3 items-end">
+                  <FormField label="Status">
+                    <select className="input" value={editNap.status || 'active'} onChange={(e) => setEditNap({ ...editNap, status: e.target.value })}>
+                      <option value="active">active</option>
+                      <option value="inactive">inactive</option>
+                    </select>
+                  </FormField>
+                  <button type="button" className="btn-secondary text-sm inline-flex items-center justify-center gap-1.5 h-[42px]" onClick={() => setPickFor('nap')}>
+                    <MapPin size={14} /> Pick on Map
+                  </button>
+                </div>
+                <FormField label="PON Ports">
+                  <input className="input" type="number" value={editNap.ports ?? 8} onChange={(e) => setEditNap({ ...editNap, ports: Number(e.target.value) })} />
+                </FormField>
+              </>
+            )}
+            <div className="grid grid-cols-2 gap-3">
+              <FormField label="Latitude">
+                <input className="input font-mono text-sm" type="number" step="any" value={editNap.lat ?? ''} onChange={(e) => setEditNap({ ...editNap, lat: Number(e.target.value) })} />
+              </FormField>
+              <FormField label="Longitude">
+                <input className="input font-mono text-sm" type="number" step="any" value={editNap.lng ?? ''} onChange={(e) => setEditNap({ ...editNap, lng: Number(e.target.value) })} />
+              </FormField>
+            </div>
+            <FormField label="Address">
+              <input className="input" value={editNap.address || ''} onChange={(e) => setEditNap({ ...editNap, address: e.target.value })} />
+            </FormField>
+          </div>
+        </Modal>
+      )}
+
+      <MapLocationPicker
+        open={!!pickFor}
+        lat={pickLat}
+        lng={pickLng}
+        onClose={() => setPickFor(null)}
+        onConfirm={(lat, lng) => {
+          if (pickFor === 'server' && editServer) setEditServer({ ...editServer, lat, lng });
+          if (pickFor === 'nap' && editNap) setEditNap({ ...editNap, lat, lng });
+          setPickFor(null);
+        }}
+      />
     </Layout>
   );
 }
@@ -630,7 +961,10 @@ function TopoPanel({ title, action, children }: { title: string; action?: React.
 function TopoRow({ name, sub, right }: { name: string; sub: string; right?: React.ReactNode }) {
   return (
     <div className="flex items-center justify-between gap-2 py-2 border-b border-slate-100 last:border-0">
-      <div className="min-w-0"><div className="text-sm font-medium text-slate-800 truncate">{name}</div><div className="text-xs text-slate-400 truncate">{sub}</div></div>
+      <div className="min-w-0">
+        <div className="text-sm font-medium text-slate-800 truncate">{name}</div>
+        <div className="text-xs text-slate-400 truncate">{sub}</div>
+      </div>
       <div className="shrink-0">{right}</div>
     </div>
   );
