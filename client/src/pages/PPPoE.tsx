@@ -562,9 +562,9 @@ function ProcessPaymentModal({
           </FormField>
         </div>
 
-        <FormField label="Non-Payment Profile" hint="Profile to apply on due date.">
+        <FormField label="Profile on Expiry" hint="Applied on MikroTik when the reminder window starts (Notifications → days before due).">
           <select className="input" value={nonPaymentProfile} onChange={(e) => setNonPaymentProfile(e.target.value)}>
-            <option value="default">default</option>
+            <option value="default">default (keep billing plan)</option>
             {profiles.map((p) => <option key={p.id} value={p.name}>{p.name}</option>)}
           </select>
         </FormField>
@@ -794,9 +794,12 @@ function UserFormModal({
             <FormField label="Expiration Date">
               <input className="input" type="date" value={form.subscription_due} onChange={(e) => set({ subscription_due: e.target.value })} />
             </FormField>
-            <FormField label="Expiration Profile">
+            <FormField
+              label="Profile on Expiry"
+              hint="MikroTik PPP profile applied when the account enters the reminder window (days before due) set under Notifications. Use a limited plan such as non-payments."
+            >
               <select className="input" value={form.expiration_profile} onChange={(e) => set({ expiration_profile: e.target.value })}>
-                <option value="default">default</option>
+                <option value="default">default (keep billing plan)</option>
                 {profiles.map((p) => <option key={p.id} value={p.name}>{p.name}</option>)}
               </select>
             </FormField>

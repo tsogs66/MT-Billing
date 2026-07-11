@@ -154,6 +154,40 @@ export async function setPppSecretEnabled(conn: RouterConn, username: string, en
   });
 }
 
+/** Switch the live RouterOS PPP profile (e.g. to non-payments on expiry) without changing panel billing plan. */
+export async function setPppSecretProfile(
+  conn: RouterConn,
+  user: {
+    username: string;
+    profile: string;
+    subscription_due?: string | null;
+    account_number?: string | null;
+    expiration_profile?: string | null;
+    customer_name?: string | null;
+    address?: string | null;
+    contact?: string | null;
+    email?: string | null;
+    lat?: number | null;
+    lng?: number | null;
+    plc_port?: string | null;
+    status?: string | null;
+    service?: string | null;
+  },
+  mikrotikProfile: string
+): Promise<void> {
+  const comment = buildSecretComment(user);
+  await withRouter(conn, async (api) => {
+    const existing = await findSecret(api, user.username);
+    if (!existing) throw new Error(`PPP secret not found: ${user.username}`);
+    const id = existing['.id'] || existing.name;
+    await api.write('/ppp/secret/set', [
+      `=numbers=${id}`,
+      `=profile=${mikrotikProfile}`,
+      `=comment=${comment}`,
+    ]);
+  });
+}
+
 export async function removePppSecret(conn: RouterConn, username: string): Promise<boolean> {
   return withRouter(conn, async (api) => {
     const existing = await findSecret(api, username);

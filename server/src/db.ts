@@ -219,6 +219,7 @@ export function migrate() {
     ['plc_port', 'TEXT'],
     ['nonpayment_since', 'TEXT'],
     ['reminder_sent', 'TEXT'],
+    ['expire_applied', 'TEXT'],
   ];
   for (const [col, type] of addCols) {
     if (!columnExists('pppoe_users', col)) {

@@ -162,7 +162,7 @@ export default function Notifications() {
     setBusy(true);
     try {
       const r = await api.post('/notifications/run');
-      flash(`Automations run: ${r.data.remindersSent} reminder(s) sent, ${r.data.marked} marked non-payment, ${r.data.disabled} auto-disabled.`);
+      flash(`Automations run: ${r.data.remindersSent} reminder(s), ${r.data.expireProfilesApplied || 0} expire profile(s) applied, ${r.data.marked} marked non-payment, ${r.data.disabled} auto-disabled.`);
       loadLogs();
     } finally {
       setBusy(false);
@@ -279,6 +279,10 @@ export default function Notifications() {
               After SMTP/SMS is configured below, the panel automatically:
               <ul className="list-disc ml-5 mt-1.5 space-y-0.5 text-slate-500">
                 <li>Sends payment reminders based on each user&apos;s expiration date</li>
+                <li>
+                  Switches the MikroTik PPP profile to each user&apos;s <b>Profile on Expiry</b> starting
+                  {' '}<b>days before</b> due (same value below) until payment restores the billing plan
+                </li>
                 <li>Marks overdue accounts as non-payment</li>
                 <li>Disables the MikroTik PPP secret after the grace period you set</li>
               </ul>
@@ -288,7 +292,7 @@ export default function Notifications() {
               <Toggle label="Expiry reminders" on={!!settings.reminder_enabled} onChange={() => saveSettings({ reminder_enabled: settings.reminder_enabled ? 0 : 1 })} />
             </Row>
             <div className="flex items-center justify-between text-sm pl-7 gap-3 flex-wrap">
-              <span className="text-slate-500">Send reminder this many days before expiration</span>
+              <span className="text-slate-500">Days before expiration (reminders + apply Profile on Expiry)</span>
               <input
                 type="number"
                 min={1}

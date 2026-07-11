@@ -704,7 +704,7 @@ app.post('/api/pppoe/users/:id/toggle-enabled', async (req, res) => {
   if (disabling) {
     db.prepare("UPDATE pppoe_users SET status = 'disabled', online = 0 WHERE id = ?").run(id);
   } else {
-    db.prepare("UPDATE pppoe_users SET status = 'Active', online = 1, nonpayment_since = NULL WHERE id = ?").run(id);
+    db.prepare("UPDATE pppoe_users SET status = 'Active', online = 1, nonpayment_since = NULL, expire_applied = NULL WHERE id = ?").run(id);
   }
   const updated = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(id) as any;
   let mikrotik: { synced: boolean; error?: string } = { synced: false };
@@ -841,7 +841,7 @@ app.post('/api/pppoe/users/:id/payment', async (req, res) => {
 
   db.prepare(
     `UPDATE pppoe_users SET subscription_due = ?, profile = ?, price = ?, expiration_profile = ?,
-       status = 'Active', online = 1, nonpayment_since = NULL, reminder_sent = NULL WHERE id = ?`
+       status = 'Active', online = 1, nonpayment_since = NULL, reminder_sent = NULL, expire_applied = NULL WHERE id = ?`
   ).run(newDue, plan, unit, expirationProfile, id);
   db.prepare('INSERT INTO transactions (pppoe_user_id, customer_name, amount, type, created_at) VALUES (?, ?, ?, ?, ?)').run(
     id,

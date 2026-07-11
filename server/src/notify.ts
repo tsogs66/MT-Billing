@@ -1,5 +1,5 @@
 import { db } from './db.js';
-import { setPppSecretEnabled } from './ppp-secret.js';
+import { setPppSecretEnabled, setPppSecretProfile } from './ppp-secret.js';
 import type { RouterConn } from './mikrotik.js';
 
 export interface NotifySettings {
@@ -291,15 +291,17 @@ export async function sendManual(opts: {
   return { recipients: clients.length, sent, skipped };
 }
 
-/** Reminder (N days before expiry) + auto-disable after X hours non-payment. */
+/** Reminder (N days before expiry) + apply expire profile + auto-disable after grace period. */
 export async function runAutomations() {
   const s = getSettings();
   const now = Date.now();
-  const summary = { remindersSent: 0, marked: 0, disabled: 0 };
+  const summary = { remindersSent: 0, marked: 0, disabled: 0, expireProfilesApplied: 0 };
 
   const all = db
     .prepare(
-      `SELECT id, username, customer_name, profile, status, email, contact, subscription_due, nonpayment_since, reminder_sent, router_id, price, account_number
+      `SELECT id, username, customer_name, profile, status, email, contact, subscription_due, nonpayment_since,
+              reminder_sent, router_id, price, account_number, expiration_profile, expire_applied,
+              address, plc_port, lat, lng, service, password
        FROM pppoe_users`
     )
     .all() as (Client & {
@@ -310,6 +312,14 @@ export async function runAutomations() {
       router_id?: number;
       price?: number;
       account_number?: string;
+      expiration_profile?: string | null;
+      expire_applied?: string | null;
+      address?: string | null;
+      plc_port?: string | null;
+      lat?: number | null;
+      lng?: number | null;
+      service?: string | null;
+      password?: string | null;
     })[];
 
   const company = db.prepare('SELECT name FROM company WHERE id = 1').get() as { name?: string } | undefined;
@@ -318,18 +328,77 @@ export async function runAutomations() {
   for (const u of all) {
     const d = daysUntil(u.subscription_due);
     if (d == null) continue;
+    const due = String(u.subscription_due).slice(0, 10);
+    const expireProfile = String(u.expiration_profile || 'default').trim();
+    const hasExpireProfile = expireProfile && expireProfile !== 'default' && expireProfile !== u.profile;
+
+    // Within notification "days before" window (or already past due): apply Profile on Expiry on MikroTik.
+    // Billing plan in DB stays unchanged; only the live PPP secret profile switches.
+    if (
+      hasExpireProfile &&
+      u.status !== 'disabled' &&
+      d <= s.days_before &&
+      u.expire_applied !== due
+    ) {
+      if (u.router_id) {
+        const router = db.prepare('SELECT host, port, api_user, api_pass FROM routers WHERE id = ?').get(u.router_id) as RouterConn | undefined;
+        if (router?.host && router?.api_user) {
+          try {
+            await setPppSecretProfile(
+              router,
+              {
+                username: u.username,
+                profile: u.profile,
+                subscription_due: due,
+                account_number: u.account_number,
+                expiration_profile: expireProfile,
+                customer_name: u.customer_name,
+                address: u.address,
+                contact: u.contact,
+                email: u.email,
+                lat: u.lat,
+                lng: u.lng,
+                plc_port: u.plc_port,
+                status: d < 0 ? 'expired' : u.status,
+                service: u.service,
+              },
+              expireProfile
+            );
+            db.prepare(
+              `UPDATE pppoe_users SET expire_applied = ?, status = CASE
+                 WHEN ? < 0 AND status IN ('Active','expired') THEN 'expired'
+                 ELSE status END WHERE id = ?`
+            ).run(due, d, u.id);
+            db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+              'info',
+              'mikrotik',
+              `Applied expire profile "${expireProfile}" for ${u.username} (${d < 0 ? 'past due' : `${d}d before due`})`
+            );
+            summary.expireProfilesApplied++;
+          } catch (e: any) {
+            db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+              'warning',
+              'mikrotik',
+              `Expire profile apply failed for ${u.username}: ${e?.message || 'error'}`
+            );
+          }
+        }
+      } else {
+        db.prepare('UPDATE pppoe_users SET expire_applied = ? WHERE id = ?').run(due, u.id);
+      }
+    }
 
     // Expiry / payment reminder (N days before due date)
-    if (s.reminder_enabled && u.status === 'Active' && d >= 0 && d <= s.days_before && u.reminder_sent !== u.subscription_due) {
+    if (s.reminder_enabled && (u.status === 'Active' || u.status === 'expired') && d >= 0 && d <= s.days_before && u.reminder_sent !== due) {
       const channels: ('email' | 'sms')[] = [];
       if (s.email_enabled) channels.push('email');
       if (s.sms_enabled) channels.push('sms');
       if (channels.length) {
         const amount = Number(u.price) || 0;
         const subject = `${companyName} — Payment reminder`;
-        const msg = `Hi ${u.customer_name || u.username}, this is a friendly reminder that your ${u.profile} plan (Account #${u.account_number || u.username}) is due on ${u.subscription_due} (in ${d} day${d === 1 ? '' : 's'}). Amount due: PHP ${amount.toFixed(2)}. Please settle on or before the due date to avoid interruption of service. Thank you! — ${companyName}`;
+        const msg = `Hi ${u.customer_name || u.username}, this is a friendly reminder that your ${u.profile} plan (Account #${u.account_number || u.username}) is due on ${due} (in ${d} day${d === 1 ? '' : 's'}). Amount due: PHP ${amount.toFixed(2)}. Please settle on or before the due date to avoid interruption of service. Thank you! — ${companyName}`;
         await notifyClient(u, channels, subject, msg, 'expiry_reminder');
-        db.prepare('UPDATE pppoe_users SET reminder_sent = ? WHERE id = ?').run(u.subscription_due, u.id);
+        db.prepare('UPDATE pppoe_users SET reminder_sent = ? WHERE id = ?').run(due, u.id);
         summary.remindersSent++;
       }
     }
