@@ -218,10 +218,13 @@ interface Client {
   price?: number | null;
 }
 
-// Personalize template tokens with the recipient's own details.
-function fillTemplate(text: string, client: Client): string {
+/** Personalize template tokens with the recipient's own details (per-user on send). */
+export function fillTemplate(text: string, client: Client, extras?: Record<string, string>): string {
   if (!text) return text;
-  const amount = client.price != null ? `\u20b1${Number(client.price).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '';
+  const amount =
+    client.price != null
+      ? `\u20b1${Number(client.price).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+      : '';
   const map: Record<string, string> = {
     name: client.customer_name || client.username || '',
     account: client.account_number || '',
@@ -229,13 +232,48 @@ function fillTemplate(text: string, client: Client): string {
     amount,
     due: (client.subscription_due || '').slice(0, 10),
     username: client.username || '',
+    ...(extras || {}),
   };
-  return text.replace(/\{(name|account|plan|amount|due|username)\}/gi, (_m, k) => map[String(k).toLowerCase()] ?? '');
+  return text.replace(/\{(name|account|plan|amount|due|username|company)\}/gi, (_m, k) => map[String(k).toLowerCase()] ?? '');
+}
+
+export function companyName(): string {
+  const company = db.prepare('SELECT name FROM company WHERE id = 1').get() as { name?: string } | undefined;
+  return company?.name || 'Pa-North';
+}
+
+/** Fill subject + message for one client (used by Send preview + notifyClient). */
+export function previewForClient(
+  client: Client,
+  subject: string,
+  message: string
+): { subject: string; message: string; client: Record<string, string | number> } {
+  const extras = { company: companyName() };
+  const subjectF = fillTemplate(subject, client, extras);
+  const messageF = fillTemplate(message, client, extras);
+  const amount =
+    client.price != null
+      ? `\u20b1${Number(client.price).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+      : '';
+  return {
+    subject: subjectF,
+    message: messageF,
+    client: {
+      id: client.id,
+      name: client.customer_name || client.username || '',
+      username: client.username || '',
+      account: client.account_number || '',
+      plan: client.profile || '',
+      due: (client.subscription_due || '').slice(0, 10),
+      amount,
+    },
+  };
 }
 
 async function notifyClient(client: Client, channels: ('email' | 'sms')[], subject: string, message: string, type: string) {
-  const subjectF = fillTemplate(subject, client);
-  const messageF = fillTemplate(message, client);
+  const extras = { company: companyName() };
+  const subjectF = fillTemplate(subject, client, extras);
+  const messageF = fillTemplate(message, client, extras);
   const results: string[] = [];
   for (const ch of channels) {
     const recipient = ch === 'email' ? client.email : client.contact;

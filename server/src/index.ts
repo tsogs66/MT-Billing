@@ -23,6 +23,7 @@ import {
   runAutomations,
   listNotifications,
   startNotifyScheduler,
+  previewForClient,
 } from './notify.js';
 
 initSchema();
@@ -1506,9 +1507,28 @@ app.get('/api/interfaces/traffic', async (req, res) => {
 app.get('/api/clients', (_req, res) => {
   res.json(
     db
-      .prepare('SELECT id, username, customer_name AS customer, email, contact, service, status FROM pppoe_users ORDER BY customer_name')
+      .prepare(
+        `SELECT id, username, customer_name AS customer, email, contact, service, status,
+                account_number AS account, profile AS plan, subscription_due AS due, price
+         FROM pppoe_users ORDER BY customer_name`
+      )
       .all()
   );
+});
+
+/** Preview personalized subject/message for one client (Send tab). */
+app.post('/api/notifications/preview', (req, res) => {
+  const b = req.body || {};
+  const id = Number(b.clientId) || 0;
+  const base =
+    'SELECT id, username, customer_name, email, contact, subscription_due, account_number, profile, price FROM pppoe_users';
+  const client = (
+    id
+      ? db.prepare(`${base} WHERE id = ?`).get(id)
+      : db.prepare(`${base} ORDER BY customer_name LIMIT 1`).get()
+  ) as any;
+  if (!client) return res.status(404).json({ error: 'No clients available for preview' });
+  res.json(previewForClient(client, b.subject || '', b.message || ''));
 });
 
 app.get('/api/notifications', (_req, res) => {

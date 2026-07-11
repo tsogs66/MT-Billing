@@ -63,6 +63,128 @@ const TABS = [
   { key: 'log', label: 'Log' },
 ];
 
+type PreviewClient = {
+  id: number;
+  name: string;
+  username: string;
+  account: string;
+  plan: string;
+  due: string;
+  amount: string;
+};
+
+/** Live filled preview — same token fill used per recipient on send. */
+function MessagePreview({
+  clients,
+  selectedIds,
+  target,
+  subject,
+  message,
+  showSubject,
+}: {
+  clients: any[];
+  selectedIds: number[];
+  target: 'all' | 'selected';
+  subject: string;
+  message: string;
+  showSubject: boolean;
+}) {
+  const previewId =
+    target === 'selected' && selectedIds.length
+      ? selectedIds[0]
+      : clients[0]?.id ?? null;
+
+  const [preview, setPreview] = useState<{
+    subject: string;
+    message: string;
+    client: PreviewClient;
+  } | null>(null);
+  const [err, setErr] = useState('');
+
+  useEffect(() => {
+    if (!message.trim() && !subject.trim()) {
+      setPreview(null);
+      setErr('');
+      return;
+    }
+    if (!previewId && !clients.length) {
+      setPreview(null);
+      setErr('Add a client to preview personalization.');
+      return;
+    }
+    let cancelled = false;
+    const t = window.setTimeout(() => {
+      api
+        .post('/notifications/preview', {
+          clientId: previewId || undefined,
+          subject,
+          message,
+        })
+        .then((r) => {
+          if (!cancelled) {
+            setPreview(r.data);
+            setErr('');
+          }
+        })
+        .catch((e: any) => {
+          if (!cancelled) {
+            setPreview(null);
+            setErr(e?.response?.data?.error || e?.message || 'Preview failed');
+          }
+        });
+    }, 300);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(t);
+    };
+  }, [subject, message, previewId, clients.length]);
+
+  const label =
+    preview?.client?.name ||
+    clients.find((c) => c.id === previewId)?.customer ||
+    clients.find((c) => c.id === previewId)?.username ||
+    '—';
+
+  return (
+    <div className="rounded-xl border border-emerald-200 bg-emerald-50/70 px-3.5 py-3">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <p className="text-xs font-semibold text-emerald-900">
+          Preview — filled with this subscriber&apos;s details
+        </p>
+        <span className="rounded-md bg-white px-2 py-0.5 text-[11px] font-medium text-emerald-800 ring-1 ring-emerald-200">
+          {label}
+          {target === 'all' || selectedIds.length > 1
+            ? ' · each recipient gets their own values on send'
+            : ''}
+        </span>
+      </div>
+      {err ? (
+        <p className="text-xs text-rose-600">{err}</p>
+      ) : preview ? (
+        <div className="space-y-2 text-sm">
+          {showSubject && preview.subject ? (
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-emerald-700/70">Subject</p>
+              <p className="font-medium text-slate-800">{preview.subject}</p>
+            </div>
+          ) : null}
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-emerald-700/70">Message</p>
+            <pre className="whitespace-pre-wrap font-sans text-slate-700">{preview.message || '(empty)'}</pre>
+          </div>
+          <p className="text-[10px] text-emerald-800/80">
+            {[preview.client.account && `#${preview.client.account}`, preview.client.plan, preview.client.amount, preview.client.due && `due ${preview.client.due}`]
+              .filter(Boolean)
+              .join(' · ')}
+          </p>
+        </div>
+      ) : (
+        <p className="text-xs text-slate-500">Type a message with tokens (e.g. {'{name}'}, {'{due}'}) to see the filled result…</p>
+      )}
+    </div>
+  );
+}
+
 export default function Notifications() {
   const [settings, setSettings] = useState<any>(null);
   const [logs, setLogs] = useState<any[]>([]);
@@ -253,7 +375,9 @@ export default function Notifications() {
                 {TEMPLATES.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
               </select>
               <p className="text-xs text-slate-400 mt-1">
-                Tokens are personalized per subscriber: <code>{'{name}'}</code>, <code>{'{account}'}</code>, <code>{'{plan}'}</code>, <code>{'{amount}'}</code>, <code>{'{due}'}</code>.
+                Each recipient gets their own values. Tokens:{' '}
+                <code>{'{name}'}</code>, <code>{'{username}'}</code>, <code>{'{account}'}</code>,{' '}
+                <code>{'{plan}'}</code>, <code>{'{amount}'}</code>, <code>{'{due}'}</code>, <code>{'{company}'}</code>.
               </p>
             </FormField>
 
@@ -263,8 +387,18 @@ export default function Notifications() {
               </FormField>
             )}
             <FormField label="Message">
-              <textarea className="input min-h-[110px]" value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Type your announcement or reminder…" />
+              <textarea className="input min-h-[110px]" value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Hi {name}, your {plan} plan (Account #{account}) is due on {due}…" />
             </FormField>
+
+            <MessagePreview
+              clients={clients}
+              selectedIds={selected}
+              target={target}
+              subject={subject}
+              message={message}
+              showSubject={channel !== 'sms'}
+            />
+
             <button type="button" className="btn-primary" onClick={send} disabled={busy}>
               <Send size={16} /> {busy ? 'Sending…' : target === 'all' ? 'Send to all clients' : `Send to ${selected.length} selected`}
             </button>
