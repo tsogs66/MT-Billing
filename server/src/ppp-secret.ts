@@ -6,6 +6,16 @@ export interface PppSecretComment {
   dueDate: string;
   accountNumber: number | string;
   expireProfile: string;
+  customer?: {
+    fullName?: string;
+    address?: string;
+    contactNumber?: string;
+    email?: string;
+    latitude?: number | null;
+    longitude?: number | null;
+    plcPort?: string | null;
+    status?: string;
+  };
 }
 
 export function buildSecretComment(user: {
@@ -13,6 +23,14 @@ export function buildSecretComment(user: {
   subscription_due?: string | null;
   account_number?: string | null;
   expiration_profile?: string | null;
+  customer_name?: string | null;
+  address?: string | null;
+  contact?: string | null;
+  email?: string | null;
+  lat?: number | null;
+  lng?: number | null;
+  plc_port?: string | null;
+  status?: string | null;
 }): string {
   const raw = String(user.account_number || '').trim();
   const accountNumber = /^\d+$/.test(raw) ? Number(raw) : raw || 0;
@@ -21,11 +39,21 @@ export function buildSecretComment(user: {
     dueDate: String(user.subscription_due || '').slice(0, 10),
     accountNumber,
     expireProfile: user.expiration_profile || 'default',
+    customer: {
+      fullName: user.customer_name || undefined,
+      address: user.address || undefined,
+      contactNumber: user.contact || undefined,
+      email: user.email || undefined,
+      latitude: user.lat != null ? Number(user.lat) : null,
+      longitude: user.lng != null ? Number(user.lng) : null,
+      plcPort: user.plc_port != null ? String(user.plc_port) : null,
+      status: user.status || undefined,
+    },
   };
   return JSON.stringify(payload);
 }
 
-/** Parse RouterOS secret comment — supports flat JSON and legacy nested customer blobs. */
+/** Parse RouterOS secret comment — supports flat JSON and nested customer blobs. */
 export function parseSecretComment(comment: unknown): Partial<PppSecretComment> & { customer?: Record<string, unknown> } {
   if (!comment || typeof comment !== 'string') return {};
   const s = comment.trim();
@@ -73,6 +101,13 @@ export async function upsertPppSecret(
     expiration_profile?: string | null;
     status?: string | null;
     service?: string | null;
+    customer_name?: string | null;
+    address?: string | null;
+    contact?: string | null;
+    email?: string | null;
+    lat?: number | null;
+    lng?: number | null;
+    plc_port?: string | null;
   }
 ): Promise<{ action: 'created' | 'updated'; secretId: string }> {
   const comment = buildSecretComment(user);
@@ -151,16 +186,31 @@ export async function fetchPppoeServers(conn: RouterConn): Promise<Record<string
 
 export function secretIsDisabled(sec: Record<string, string> | null | undefined): boolean {
   if (!sec) return false;
-  return sec.disabled === 'true' || sec.disabled === true as unknown as string;
+  return sec.disabled === 'true' || (sec.disabled as unknown) === true;
 }
 
 /** Merge MikroTik secret + active session into panel user fields. */
 export function mergeMikrotikUserState(
   secret: Record<string, string> | null,
   connected: boolean
-): { profile: string; subscription_due: string; expiration_profile: string; account_number: string; status: string; online: number } | null {
+): {
+  profile: string;
+  subscription_due: string;
+  expiration_profile: string;
+  account_number: string;
+  status: string;
+  online: number;
+  customer_name?: string;
+  address?: string | null;
+  contact?: string | null;
+  email?: string | null;
+  lat?: number | null;
+  lng?: number | null;
+  plc_port?: string | null;
+} | null {
   if (!secret) return null;
   const meta = parseSecretComment(secret.comment);
+  const cust = meta.customer || {};
   const disabled = secretIsDisabled(secret);
   return {
     profile: String(meta.plan || secret.profile || '15mbps'),
@@ -171,5 +221,12 @@ export function mergeMikrotikUserState(
     account_number: meta.accountNumber != null ? String(meta.accountNumber) : '',
     status: disabled ? 'disabled' : 'Active',
     online: disabled ? 0 : connected ? 1 : 0,
+    customer_name: (cust.fullName as string) || undefined,
+    address: (cust.address as string) || null,
+    contact: (cust.contactNumber as string) || null,
+    email: (cust.email as string) || null,
+    lat: cust.latitude != null ? Number(cust.latitude) : null,
+    lng: cust.longitude != null ? Number(cust.longitude) : null,
+    plc_port: cust.plcPort != null && cust.plcPort !== '' ? String(cust.plcPort) : null,
   };
 }

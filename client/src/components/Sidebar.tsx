@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, Bot, TerminalSquare, Router, Network, Users, Share2, Map,
@@ -9,6 +9,7 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import Logo from './Logo';
 import { useLayout } from './Layout';
+import { api } from '../api';
 
 type NavItem = { to: string; label: string; icon: LucideIcon; end?: boolean };
 type NavSection = { title: string; items: NavItem[] };
@@ -61,6 +62,11 @@ const NAV_SECTIONS: NavSection[] = [
 export default function Sidebar() {
   const { sidebarOpen, setSidebarOpen } = useLayout();
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [company, setCompany] = useState<{ name?: string; logo?: string } | null>(null);
+
+  useEffect(() => {
+    api.get('/company').then((r) => setCompany(r.data)).catch(() => undefined);
+  }, []);
 
   const toggleSection = (title: string) => {
     setCollapsed((prev) => ({ ...prev, [title]: !prev[title] }));
@@ -75,9 +81,9 @@ export default function Sidebar() {
         sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0',
       ].join(' ')}
     >
-      {/* Header */}
+      {/* Header — company name from Company settings */}
       <div className="h-16 flex items-center justify-between px-4 border-b border-slate-800/80 bg-slate-950/95">
-        <Logo size="sm" variant="dark" />
+        <Logo size="sm" variant="dark" companyName={company?.name || null} companyLogo={company?.logo || null} />
         <button
           type="button"
           className="lg:hidden p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"

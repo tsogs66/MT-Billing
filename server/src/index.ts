@@ -68,6 +68,11 @@ app.get('/api/me', requireAuth, (req: AuthedRequest, res) => {
   res.json({ user: req.user });
 });
 
+// Public branding (sidebar / login) — company name & logo from Company settings
+app.get('/api/company', (_req, res) => {
+  res.json(db.prepare('SELECT id, name, address, phone, email, currency, logo FROM company WHERE id = 1').get());
+});
+
 // Public: panel hardware ID for license / password-reset activator tools
 app.get('/api/auth/panel-id', (_req, res) => {
   res.json({
@@ -243,9 +248,27 @@ app.get('/api/dashboard/queues', async (req, res) => {
   res.json(db.prepare('SELECT name, avg_rate AS avgRate FROM queues ORDER BY avg_rate DESC').all());
 });
 
-// Account status breakdown for the dashboard tiles.
-app.get('/api/dashboard/status', (req, res) => {
+// Account status breakdown for the dashboard tiles — refreshes live PPP state when router selected.
+app.get('/api/dashboard/status', async (req, res) => {
   const routerId = req.query.routerId ? Number(req.query.routerId) : null;
+  if (routerId) {
+    try {
+      const ctx = await livePppContext(routerId);
+      if (ctx) {
+        const users = db.prepare('SELECT id, username FROM pppoe_users WHERE router_id = ?').all(routerId) as any[];
+        const upd = db.prepare('UPDATE pppoe_users SET status = ?, online = ? WHERE id = ?');
+        for (const u of users) {
+          const sec = ctx.secretByName[u.username];
+          if (!sec) continue;
+          const connected = ctx.activeNames.has(u.username);
+          const disabled = secretIsDisabled(sec);
+          upd.run(disabled ? 'disabled' : 'Active', disabled ? 0 : connected ? 1 : 0, u.id);
+        }
+      }
+    } catch {
+      /* keep cached */
+    }
+  }
   const where = routerId ? 'WHERE router_id = ?' : '';
   const rows = (routerId
     ? db.prepare(`SELECT status, online FROM pppoe_users ${where}`).all(routerId)
@@ -435,7 +458,15 @@ async function refreshUserFromMikrotik(user: any, router?: any): Promise<any> {
     db.prepare(
       `UPDATE pppoe_users SET profile = @profile, subscription_due = @subscription_due,
        expiration_profile = @expiration_profile, account_number = COALESCE(NULLIF(@account_number,''), account_number),
-       status = @status, online = @online WHERE id = @id`
+       status = @status, online = @online,
+       customer_name = COALESCE(@customer_name, customer_name),
+       address = COALESCE(@address, address),
+       contact = COALESCE(@contact, contact),
+       email = COALESCE(@email, email),
+       lat = COALESCE(@lat, lat),
+       lng = COALESCE(@lng, lng),
+       plc_port = COALESCE(@plc_port, plc_port)
+       WHERE id = @id`
     ).run({
       id: user.id,
       profile: merged.profile,
@@ -444,6 +475,13 @@ async function refreshUserFromMikrotik(user: any, router?: any): Promise<any> {
       account_number: merged.account_number,
       status: merged.status,
       online: merged.online,
+      customer_name: merged.customer_name || null,
+      address: merged.address ?? null,
+      contact: merged.contact ?? null,
+      email: merged.email ?? null,
+      lat: merged.lat ?? null,
+      lng: merged.lng ?? null,
+      plc_port: merged.plc_port ?? null,
     });
     return db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(user.id) as any;
   } catch {
@@ -552,7 +590,8 @@ app.post('/api/pppoe/users', async (req, res) => {
 
   const prof = db.prepare('SELECT price FROM profiles WHERE name = ?').get(profile) as { price: number } | undefined;
   const account = generateAccountNumber();
-  const routerId = b.router_id ? Number(b.router_id) : 1;
+  const routerId = b.router_id ? Number(b.router_id) : null;
+  if (!routerId) return res.status(400).json({ error: 'Select a router in the top bar before creating a user.' });
   const info = db
     .prepare(
       `INSERT INTO pppoe_users
@@ -1378,10 +1417,7 @@ app.get('/api/logs', (_req, res) => {
   res.json(db.prepare('SELECT id, level, source, message, created_at AS date FROM logs ORDER BY id DESC LIMIT 200').all());
 });
 
-// ---- Company ----
-app.get('/api/company', (_req, res) => {
-  res.json(db.prepare('SELECT * FROM company WHERE id = 1').get());
-});
+// ---- Company (PUT requires auth; GET is public above for branding) ----
 app.put('/api/company', (req, res) => {
   const b = req.body || {};
   const c = db.prepare('SELECT * FROM company WHERE id = 1').get() as any;

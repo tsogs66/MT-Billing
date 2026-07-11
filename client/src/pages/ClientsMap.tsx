@@ -123,7 +123,7 @@ function MapDrawClicks({ active, onAdd }: { active: boolean; onAdd: (lat: number
 }
 
 const emptyNap = (): Partial<Nap> => ({
-  name: '', kind: 'nap', lat: 15.1785, lng: 120.5945, ports: 8, parentId: null,
+  name: '', kind: 'nap', lat: 13.918727824777054, lng: 120.93881797116397, ports: 8, parentId: null,
 });
 
 export default function ClientsMap() {

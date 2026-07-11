@@ -1,4 +1,6 @@
 import { db } from './db.js';
+import { setPppSecretEnabled } from './ppp-secret.js';
+import type { RouterConn } from './mikrotik.js';
 
 export interface NotifySettings {
   reminder_enabled: number;
@@ -297,10 +299,10 @@ export async function runAutomations() {
 
   const all = db
     .prepare(
-      `SELECT id, username, customer_name, profile, status, email, contact, subscription_due, nonpayment_since, reminder_sent
+      `SELECT id, username, customer_name, profile, status, email, contact, subscription_due, nonpayment_since, reminder_sent, router_id
        FROM pppoe_users`
     )
-    .all() as (Client & { status: string; profile: string; nonpayment_since: string | null; reminder_sent: string | null })[];
+    .all() as (Client & { status: string; profile: string; nonpayment_since: string | null; reminder_sent: string | null; router_id?: number })[];
 
   for (const u of all) {
     const d = daysUntil(u.subscription_due);
@@ -329,6 +331,20 @@ export async function runAutomations() {
         const hours = (now - Date.parse(u.nonpayment_since)) / 3600000;
         if (hours >= s.autodisable_hours) {
           db.prepare("UPDATE pppoe_users SET status = 'disabled', online = 0 WHERE id = ?").run(u.id);
+          if (u.router_id) {
+            const router = db.prepare('SELECT host, port, api_user, api_pass FROM routers WHERE id = ?').get(u.router_id) as RouterConn | undefined;
+            if (router?.host && router?.api_user) {
+              try {
+                await setPppSecretEnabled(router, u.username, false);
+              } catch (e: any) {
+                db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+                  'warning',
+                  'mikrotik',
+                  `Auto-disable PPP secret failed for ${u.username}: ${e?.message || 'error'}`
+                );
+              }
+            }
+          }
           const channels: ('email' | 'sms')[] = [];
           if (s.email_enabled) channels.push('email');
           if (s.sms_enabled) channels.push('sms');

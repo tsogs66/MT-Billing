@@ -96,10 +96,17 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
   const toggleEnabled = async (u: PUser) => {
     const enabling = u.status === 'disabled';
     if (!confirm(`${enabling ? 'Enable' : 'Disable'} PPP secret for ${u.username} on MikroTik?`)) return;
-    const r = await api.post(`/pppoe/users/${u.id}/toggle-enabled`);
-    showToast(`${u.username} ${r.data.status === 'disabled' ? 'disabled' : 'enabled'} in MikroTik.`);
-    loadUsers();
-    loadActive();
+    try {
+      const r = await api.post(`/pppoe/users/${u.id}/toggle-enabled`);
+      const syncNote = r.data.mikrotik?.synced === false
+        ? ` (panel updated; MikroTik: ${r.data.mikrotik.error || 'unreachable'})`
+        : '';
+      showToast(`${u.username} ${r.data.status === 'disabled' ? 'disabled' : 'enabled'} in MikroTik.${syncNote}`);
+      loadUsers();
+      loadActive();
+    } catch (e: any) {
+      showToast(e?.response?.data?.error || 'Toggle failed.');
+    }
   };
 
   useEffect(() => {
@@ -695,9 +702,18 @@ function UserFormModal({
         dueDate: form.subscription_due || '',
         accountNumber: isEdit ? accountNumber : 0,
         expireProfile: form.expiration_profile || 'default',
+        customer: {
+          fullName: form.customer_name || undefined,
+          address: form.address || undefined,
+          contactNumber: form.contact || undefined,
+          email: form.email || undefined,
+          latitude: form.lat,
+          longitude: form.lng,
+          plcPort: form.plc_port || null,
+        },
       }));
     }
-  }, [isEdit, form.profile, form.subscription_due, form.expiration_profile, form.account_number]);
+  }, [isEdit, form.profile, form.subscription_due, form.expiration_profile, form.account_number, form.customer_name, form.address, form.contact, form.email, form.lat, form.lng, form.plc_port]);
 
   const set = (patch: Partial<typeof form>) => setForm((f) => ({ ...f, ...patch }));
   const selectedNap = naps.find((n) => String(n.id) === String(form.nap_id));
@@ -722,9 +738,22 @@ function UserFormModal({
       if (isEdit) {
         const r = await api.put(`/pppoe/users/${editUser!.id}`, payload);
         if (r.data?.mikrotikComment) setMikrotikComment(r.data.mikrotikComment);
+        if (r.data?.mikrotik && !r.data.mikrotik.synced) {
+          setError(r.data.mikrotik.error ? `Saved locally, but MikroTik sync failed: ${r.data.mikrotik.error}` : 'Saved locally, but MikroTik sync failed.');
+          return;
+        }
       } else {
+        if (!routerId) {
+          setError('Select a router in the top bar before creating a user.');
+          setSaving(false);
+          return;
+        }
         const r = await api.post('/pppoe/users', payload);
         if (r.data?.mikrotikComment) setMikrotikComment(r.data.mikrotikComment);
+        if (r.data?.mikrotik && !r.data.mikrotik.synced) {
+          setError(r.data.mikrotik.error ? `User created, but MikroTik sync failed: ${r.data.mikrotik.error}` : 'User created, but MikroTik sync failed.');
+          return;
+        }
       }
       onSaved();
     } catch (e: any) {
