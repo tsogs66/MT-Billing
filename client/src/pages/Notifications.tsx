@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Mail, MessageSquare, Send, PlayCircle, Bell, Clock } from 'lucide-react';
+import { Mail, MessageSquare, Send, PlayCircle, Bell, Clock, Pencil, Plus, Trash2 } from 'lucide-react';
 import Layout from '../components/Layout';
-import { Card, StatusBadge, Toggle, TabBar, Flash, DataTable, FormField } from '../components/ui';
+import { Card, StatusBadge, Toggle, TabBar, Flash, DataTable, FormField, Modal, ModalFooter } from '../components/ui';
 import { api } from '../api';
 
 const TYPE_LABEL: Record<string, string> = {
@@ -10,58 +10,38 @@ const TYPE_LABEL: Record<string, string> = {
   auto_disable: 'Auto-disable',
 };
 
-const TEMPLATES = [
-  {
-    key: 'maintenance',
-    label: 'Scheduled Maintenance',
-    subject: 'Scheduled Network Maintenance',
-    message:
-      'Dear valued subscriber, we will be performing scheduled network maintenance in your area. A brief service interruption may occur during this window. We apologize for any inconvenience and thank you for your patience.',
-  },
-  {
-    key: 'repair',
-    label: 'Repair in Progress',
-    subject: 'Network Repair in Progress',
-    message:
-      'Dear subscriber, our technical team is currently repairing a network issue affecting your area. We are working to restore normal service as quickly as possible and will keep you updated. Thank you for your understanding.',
-  },
-  {
-    key: 'commissioning',
-    label: 'Commissioning / Activation',
-    subject: 'Service Commissioning',
-    message:
-      'Hello! Your connection is scheduled for commissioning and activation. Kindly ensure your equipment is powered on and accessible. Please contact our support team if you need any assistance.',
-  },
-  {
-    key: 'outage',
-    label: 'Internet Outage',
-    subject: 'Internet Outage Notice',
-    message:
-      'Dear subscriber, we are aware of an internet outage affecting your area and are coordinating with our upstream provider to restore service at the earliest time. We appreciate your patience and apologize for the inconvenience.',
-  },
-  {
-    key: 'payment_reminder',
-    label: 'Payment Reminder',
-    subject: 'Payment Reminder',
-    message:
-      'Hi {name}, this is a friendly reminder that your {plan} plan (Account #{account}) is due on {due}. Amount due: {amount}. Please settle on or before the due date to avoid interruption of service. Thank you!',
-  },
-  {
-    key: 'payment_confirmation',
-    label: 'Payment Confirmation',
-    subject: 'Payment Confirmation',
-    message:
-      'Hi {name}, we have received your payment of {amount} for your {plan} plan (Account #{account}). Your service is active until {due}. Thank you for your payment!',
-  },
-];
+type MsgTemplate = {
+  id: number;
+  key: string;
+  label: string;
+  subject: string;
+  message: string;
+  channel: 'email' | 'sms' | 'both';
+  sort_order: number;
+};
+
+const EMPTY_TEMPLATE = {
+  label: '',
+  subject: '',
+  message: '',
+  channel: 'both' as 'email' | 'sms' | 'both',
+};
 
 const TABS = [
   { key: 'send', label: 'Send' },
+  { key: 'templates', label: 'Templates' },
   { key: 'automation', label: 'Reminders' },
   { key: 'smtp', label: 'Email (SMTP)' },
   { key: 'sms', label: 'Bulk SMS' },
   { key: 'log', label: 'Log' },
 ];
+
+const TOKEN_HINT = (
+  <>
+    Tokens (filled per recipient): <code>{'{name}'}</code>, <code>{'{username}'}</code>, <code>{'{account}'}</code>,{' '}
+    <code>{'{plan}'}</code>, <code>{'{amount}'}</code>, <code>{'{due}'}</code>, <code>{'{company}'}</code>.
+  </>
+);
 
 type PreviewClient = {
   id: number;
@@ -189,6 +169,7 @@ export default function Notifications() {
   const [settings, setSettings] = useState<any>(null);
   const [logs, setLogs] = useState<any[]>([]);
   const [clients, setClients] = useState<any[]>([]);
+  const [templates, setTemplates] = useState<MsgTemplate[]>([]);
   const [channel, setChannel] = useState<'email' | 'sms' | 'both'>('email');
   const [target, setTarget] = useState<'all' | 'selected'>('all');
   const [selected, setSelected] = useState<number[]>([]);
@@ -201,6 +182,9 @@ export default function Notifications() {
   const [tab, setTab] = useState('send');
   const [smtpPass, setSmtpPass] = useState('');
   const [smsPass, setSmsPass] = useState('');
+  const [editing, setEditing] = useState<MsgTemplate | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [draft, setDraft] = useState(EMPTY_TEMPLATE);
   const [disableUnit, setDisableUnit] = useState<'hours' | 'days'>(() => {
     try {
       return (localStorage.getItem('mt_autodisable_unit') as 'hours' | 'days') || 'hours';
@@ -210,10 +194,12 @@ export default function Notifications() {
   });
 
   const loadLogs = () => api.get('/notifications').then((r) => setLogs(r.data));
+  const loadTemplates = () => api.get('/notifications/templates').then((r) => setTemplates(r.data));
 
   useEffect(() => {
     api.get('/notifications/settings').then((r) => setSettings(r.data));
     api.get('/clients').then((r) => setClients(r.data));
+    loadTemplates();
     loadLogs();
   }, []);
 
@@ -225,11 +211,75 @@ export default function Notifications() {
     }
   }, [disableUnit]);
 
-  const applyTemplate = (key: string) => {
-    const t = TEMPLATES.find((x) => x.key === key);
+  const sendTemplates = templates.filter(
+    (t) => t.channel === 'both' || t.channel === channel || (channel === 'both' && (t.channel === 'email' || t.channel === 'sms'))
+  );
+
+  const applyTemplate = (idOrKey: string) => {
+    const t = templates.find((x) => String(x.id) === idOrKey || x.key === idOrKey);
     if (!t) return;
-    setSubject(t.subject);
-    setMessage(t.message);
+    setSubject(t.subject || '');
+    setMessage(t.message || '');
+  };
+
+  const openCreate = () => {
+    setCreating(true);
+    setEditing(null);
+    setDraft({ ...EMPTY_TEMPLATE, channel: channel === 'both' ? 'both' : channel });
+  };
+
+  const openEdit = (t: MsgTemplate) => {
+    setEditing(t);
+    setCreating(false);
+    setDraft({
+      label: t.label,
+      subject: t.subject || '',
+      message: t.message || '',
+      channel: t.channel || 'both',
+    });
+  };
+
+  const closeEditor = () => {
+    setEditing(null);
+    setCreating(false);
+    setDraft(EMPTY_TEMPLATE);
+  };
+
+  const saveTemplate = async () => {
+    if (!draft.label.trim() || !draft.message.trim()) {
+      flash('Label and message are required.', 'error');
+      return;
+    }
+    setBusy(true);
+    try {
+      if (editing) {
+        await api.put(`/notifications/templates/${editing.id}`, draft);
+        flash('Template updated.');
+      } else {
+        await api.post('/notifications/templates', draft);
+        flash('Template added.');
+      }
+      closeEditor();
+      await loadTemplates();
+    } catch (e: any) {
+      flash(e?.response?.data?.error || e?.message || 'Save failed', 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const removeTemplate = async (t: MsgTemplate) => {
+    if (!confirm(`Delete template “${t.label}”?`)) return;
+    setBusy(true);
+    try {
+      await api.delete(`/notifications/templates/${t.id}`);
+      flash('Template deleted.');
+      await loadTemplates();
+    } catch (e: any) {
+      flash(e?.response?.data?.error || e?.message || 'Delete failed', 'error');
+    } finally {
+      setBusy(false);
+    }
   };
 
   const toggleClient = (id: number) =>
@@ -310,6 +360,8 @@ export default function Notifications() {
 
   if (!settings) return <Layout title="Notifications"><div className="text-slate-400">Loading…</div></Layout>;
 
+  const showEditor = creating || !!editing;
+
   return (
     <Layout title="Notifications">
       <Flash message={banner} type={bannerType} onDismiss={() => setBanner('')} />
@@ -370,15 +422,21 @@ export default function Notifications() {
             </FormField>
 
             <FormField label="Message template">
-              <select className="input" defaultValue="" onChange={(e) => applyTemplate(e.target.value)}>
-                <option value="">— Choose a preformatted template —</option>
-                {TEMPLATES.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
-              </select>
-              <p className="text-xs text-slate-400 mt-1">
-                Each recipient gets their own values. Tokens:{' '}
-                <code>{'{name}'}</code>, <code>{'{username}'}</code>, <code>{'{account}'}</code>,{' '}
-                <code>{'{plan}'}</code>, <code>{'{amount}'}</code>, <code>{'{due}'}</code>, <code>{'{company}'}</code>.
-              </p>
+              <div className="flex gap-2">
+                <select className="input flex-1" defaultValue="" key={templates.map((t) => t.id).join(',')} onChange={(e) => applyTemplate(e.target.value)}>
+                  <option value="">— Choose a template —</option>
+                  {sendTemplates.map((t) => (
+                    <option key={t.id} value={String(t.id)}>
+                      {t.label}
+                      {t.channel !== 'both' ? ` (${t.channel})` : ''}
+                    </option>
+                  ))}
+                </select>
+                <button type="button" className="btn-secondary shrink-0" onClick={() => { setTab('templates'); openCreate(); }}>
+                  <Plus size={15} /> New
+                </button>
+              </div>
+              <p className="text-xs text-slate-400 mt-1">{TOKEN_HINT}</p>
             </FormField>
 
             {channel !== 'sms' && (
@@ -402,6 +460,66 @@ export default function Notifications() {
             <button type="button" className="btn-primary" onClick={send} disabled={busy}>
               <Send size={16} /> {busy ? 'Sending…' : target === 'all' ? 'Send to all clients' : `Send to ${selected.length} selected`}
             </button>
+          </div>
+        </Card>
+      )}
+
+      {tab === 'templates' && (
+        <Card
+          title="SMS / Email Templates"
+          right={
+            <button type="button" className="btn-primary" onClick={openCreate}>
+              <Plus size={15} /> Add template
+            </button>
+          }
+        >
+          <p className="text-sm text-slate-500 mb-4">
+            Create and edit reusable message templates for the Send tab. {TOKEN_HINT}
+          </p>
+          <div className="space-y-2">
+            {templates.map((t) => (
+              <div
+                key={t.id}
+                className="flex flex-col sm:flex-row sm:items-start gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2 mb-1">
+                    <span className="font-medium text-slate-800">{t.label}</span>
+                    <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                      {t.channel === 'both' ? 'Email + SMS' : t.channel}
+                    </span>
+                  </div>
+                  {t.subject ? (
+                    <p className="text-xs text-slate-500 mb-1">
+                      <span className="font-medium text-slate-600">Subject:</span> {t.subject}
+                    </p>
+                  ) : null}
+                  <p className="text-sm text-slate-600 whitespace-pre-wrap line-clamp-3">{t.message}</p>
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm text-slate-600 hover:bg-slate-50 border border-slate-200"
+                    onClick={() => openEdit(t)}
+                  >
+                    <Pencil size={14} /> Edit
+                  </button>
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm text-rose-600 hover:bg-rose-50 border border-rose-100"
+                    onClick={() => removeTemplate(t)}
+                    disabled={busy}
+                  >
+                    <Trash2 size={14} /> Delete
+                  </button>
+                </div>
+              </div>
+            ))}
+            {templates.length === 0 && (
+              <div className="rounded-xl border border-dashed border-slate-200 px-4 py-8 text-center text-sm text-slate-400">
+                No templates yet. Add one to reuse on Send.
+              </div>
+            )}
           </div>
         </Card>
       )}
@@ -635,6 +753,70 @@ export default function Notifications() {
             />
           </div>
         </Card>
+      )}
+
+      {showEditor && (
+        <Modal
+          title={editing ? 'Edit template' : 'Add template'}
+          subtitle="Reusable SMS/email copy for the Send tab"
+          onClose={closeEditor}
+          maxWidth="lg"
+          footer={
+            <ModalFooter
+              onCancel={closeEditor}
+              onConfirm={saveTemplate}
+              confirmLabel={editing ? 'Save changes' : 'Add template'}
+              busy={busy}
+            />
+          }
+        >
+          <div className="space-y-3">
+            <FormField label="Label">
+              <input
+                className="input"
+                value={draft.label}
+                onChange={(e) => setDraft((d) => ({ ...d, label: e.target.value }))}
+                placeholder="e.g. Area outage notice"
+              />
+            </FormField>
+            <FormField label="Channel">
+              <div className="flex gap-2">
+                {(['both', 'email', 'sms'] as const).map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => setDraft((d) => ({ ...d, channel: c }))}
+                    className={`px-3 py-1.5 rounded-lg text-sm border ${
+                      draft.channel === c
+                        ? 'bg-brand-500 text-white border-brand-500'
+                        : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    {c === 'both' ? 'Email + SMS' : c === 'email' ? 'Email only' : 'SMS only'}
+                  </button>
+                ))}
+              </div>
+            </FormField>
+            {draft.channel !== 'sms' && (
+              <FormField label="Subject (email)">
+                <input
+                  className="input"
+                  value={draft.subject}
+                  onChange={(e) => setDraft((d) => ({ ...d, subject: e.target.value }))}
+                  placeholder="Optional for SMS-only templates"
+                />
+              </FormField>
+            )}
+            <FormField label="Message" hint={TOKEN_HINT}>
+              <textarea
+                className="input min-h-[140px]"
+                value={draft.message}
+                onChange={(e) => setDraft((d) => ({ ...d, message: e.target.value }))}
+                placeholder="Hi {name}, …"
+              />
+            </FormField>
+          </div>
+        </Modal>
       )}
     </Layout>
   );

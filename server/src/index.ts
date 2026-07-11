@@ -24,6 +24,11 @@ import {
   listNotifications,
   startNotifyScheduler,
   previewForClient,
+  listMessageTemplates,
+  createMessageTemplate,
+  updateMessageTemplate,
+  deleteMessageTemplate,
+  getMessageTemplate,
 } from './notify.js';
 
 initSchema();
@@ -1533,6 +1538,34 @@ app.post('/api/notifications/preview', (req, res) => {
 
 app.get('/api/notifications', (_req, res) => {
   res.json(listNotifications());
+});
+
+app.get('/api/notifications/templates', (_req, res) => {
+  res.json(listMessageTemplates());
+});
+
+app.post('/api/notifications/templates', (req, res) => {
+  try {
+    res.status(201).json(createMessageTemplate(req.body || {}));
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message || 'Invalid template' });
+  }
+});
+
+app.put('/api/notifications/templates/:id', (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!getMessageTemplate(id)) return res.status(404).json({ error: 'Template not found' });
+    res.json(updateMessageTemplate(id, req.body || {}));
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message || 'Invalid template' });
+  }
+});
+
+app.delete('/api/notifications/templates/:id', (req, res) => {
+  const id = Number(req.params.id);
+  if (!deleteMessageTemplate(id)) return res.status(404).json({ error: 'Template not found' });
+  res.json({ ok: true });
 });
 
 app.get('/api/notifications/settings', (_req, res) => {

@@ -279,6 +279,80 @@ export function migrate() {
   }
 
   db.prepare("UPDATE naps SET name = 'OLT Main Server' WHERE kind = 'olt' AND name = 'OLT-1'").run();
+  ensureMessageTemplates();
+}
+
+/** Editable SMS/email message templates used on the Notifications Send tab. */
+function ensureMessageTemplates() {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS message_templates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      key TEXT NOT NULL UNIQUE,
+      label TEXT NOT NULL,
+      subject TEXT DEFAULT '',
+      message TEXT NOT NULL,
+      channel TEXT DEFAULT 'both',
+      sort_order INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  if (count('message_templates') > 0) return;
+  const defaults: [string, string, string, string, string, number][] = [
+    [
+      'maintenance',
+      'Scheduled Maintenance',
+      'Scheduled Network Maintenance',
+      'Dear valued subscriber, we will be performing scheduled network maintenance in your area. A brief service interruption may occur during this window. We apologize for any inconvenience and thank you for your patience.',
+      'both',
+      10,
+    ],
+    [
+      'repair',
+      'Repair in Progress',
+      'Network Repair in Progress',
+      'Dear subscriber, our technical team is currently repairing a network issue affecting your area. We are working to restore normal service as quickly as possible and will keep you updated. Thank you for your understanding.',
+      'both',
+      20,
+    ],
+    [
+      'commissioning',
+      'Commissioning / Activation',
+      'Service Commissioning',
+      'Hello! Your connection is scheduled for commissioning and activation. Kindly ensure your equipment is powered on and accessible. Please contact our support team if you need any assistance.',
+      'both',
+      30,
+    ],
+    [
+      'outage',
+      'Internet Outage',
+      'Internet Outage Notice',
+      'Dear subscriber, we are aware of an internet outage affecting your area and are coordinating with our upstream provider to restore service at the earliest time. We appreciate your patience and apologize for the inconvenience.',
+      'both',
+      40,
+    ],
+    [
+      'payment_reminder',
+      'Payment Reminder',
+      'Payment Reminder',
+      'Hi {name}, this is a friendly reminder that your {plan} plan (Account #{account}) is due on {due}. Amount due: {amount}. Please settle on or before the due date to avoid interruption of service. Thank you!',
+      'both',
+      50,
+    ],
+    [
+      'payment_confirmation',
+      'Payment Confirmation',
+      'Payment Confirmation',
+      'Hi {name}, we have received your payment of {amount} for your {plan} plan (Account #{account}). Your service is active until {due}. Thank you for your payment!',
+      'both',
+      60,
+    ],
+  ];
+  const ins = db.prepare(
+    `INSERT INTO message_templates (key, label, subject, message, channel, sort_order)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  );
+  for (const row of defaults) ins.run(...row);
 }
 
 /** Single-row notification settings, created with sensible defaults. */

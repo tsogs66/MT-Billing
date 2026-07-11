@@ -439,7 +439,7 @@ export function EmptyState({ message, icon: Icon = Inbox }: { message: string; i
 
 /* ─── Form helpers ─── */
 
-export function FormField({ label, hint, children, required }: { label: string; hint?: string; children: ReactNode; required?: boolean }) {
+export function FormField({ label, hint, children, required }: { label: string; hint?: ReactNode; children: ReactNode; required?: boolean }) {
   return (
     <label className="block">
       <span className="text-sm font-medium text-slate-700 mb-1.5 block">

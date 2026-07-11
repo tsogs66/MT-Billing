@@ -499,3 +499,102 @@ export function listNotifications(limit = 200) {
     .prepare('SELECT id, channel, recipient, customer_name AS customer, subject, message, type, status, detail, created_at AS date FROM notifications ORDER BY id DESC LIMIT ?')
     .all(limit);
 }
+
+export interface MessageTemplate {
+  id: number;
+  key: string;
+  label: string;
+  subject: string;
+  message: string;
+  channel: 'email' | 'sms' | 'both';
+  sort_order: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+function slugifyKey(label: string): string {
+  const base = (label || 'template')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_|_$/g, '')
+    .slice(0, 48) || 'template';
+  let key = base;
+  let n = 2;
+  const exists = db.prepare('SELECT 1 FROM message_templates WHERE key = ?');
+  while (exists.get(key)) {
+    key = `${base}_${n++}`;
+  }
+  return key;
+}
+
+export function listMessageTemplates(): MessageTemplate[] {
+  return db
+    .prepare(
+      `SELECT id, key, label, subject, message, channel, sort_order, created_at, updated_at
+       FROM message_templates ORDER BY sort_order ASC, id ASC`
+    )
+    .all() as MessageTemplate[];
+}
+
+export function getMessageTemplate(id: number): MessageTemplate | undefined {
+  return db
+    .prepare(
+      `SELECT id, key, label, subject, message, channel, sort_order, created_at, updated_at
+       FROM message_templates WHERE id = ?`
+    )
+    .get(id) as MessageTemplate | undefined;
+}
+
+export function createMessageTemplate(input: {
+  label: string;
+  subject?: string;
+  message: string;
+  channel?: string;
+  key?: string;
+}): MessageTemplate {
+  const label = String(input.label || '').trim();
+  const message = String(input.message || '').trim();
+  if (!label) throw new Error('label is required');
+  if (!message) throw new Error('message is required');
+  const channel = ['email', 'sms', 'both'].includes(String(input.channel))
+    ? (input.channel as MessageTemplate['channel'])
+    : 'both';
+  const key = input.key?.trim() ? slugifyKey(input.key.trim()) : slugifyKey(label);
+  const maxSort = (db.prepare('SELECT COALESCE(MAX(sort_order), 0) AS m FROM message_templates').get() as { m: number }).m;
+  const info = db
+    .prepare(
+      `INSERT INTO message_templates (key, label, subject, message, channel, sort_order, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
+    )
+    .run(key, label, String(input.subject || '').trim(), message, channel, maxSort + 10);
+  return getMessageTemplate(Number(info.lastInsertRowid))!;
+}
+
+export function updateMessageTemplate(
+  id: number,
+  input: { label?: string; subject?: string; message?: string; channel?: string; sort_order?: number }
+): MessageTemplate {
+  const cur = getMessageTemplate(id);
+  if (!cur) throw new Error('Template not found');
+  const label = input.label != null ? String(input.label).trim() : cur.label;
+  const message = input.message != null ? String(input.message).trim() : cur.message;
+  if (!label) throw new Error('label is required');
+  if (!message) throw new Error('message is required');
+  const channel =
+    input.channel != null && ['email', 'sms', 'both'].includes(String(input.channel))
+      ? (input.channel as MessageTemplate['channel'])
+      : cur.channel;
+  const subject = input.subject != null ? String(input.subject).trim() : cur.subject;
+  const sort_order = input.sort_order != null ? Number(input.sort_order) || cur.sort_order : cur.sort_order;
+  db.prepare(
+    `UPDATE message_templates
+     SET label = ?, subject = ?, message = ?, channel = ?, sort_order = ?, updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`
+  ).run(label, subject, message, channel, sort_order, id);
+  return getMessageTemplate(id)!;
+}
+
+export function deleteMessageTemplate(id: number): boolean {
+  const r = db.prepare('DELETE FROM message_templates WHERE id = ?').run(id);
+  return r.changes > 0;
+}
