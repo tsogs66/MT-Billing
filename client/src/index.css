@@ -73,7 +73,40 @@ body {
   50% { stroke-opacity: 1; }
 }
 
-/* NAP marker — blue circle with N */
+/* Map topology markers */
+.map-marker-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  pointer-events: none;
+}
+.map-marker-wrap .map-label {
+  margin-top: 3px;
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #334155;
+  white-space: nowrap;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.14);
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.map-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.35));
+}
+.map-icon.map-node-active {
+  filter: drop-shadow(0 0 0 3px rgba(249, 115, 22, 0.55)) drop-shadow(0 2px 6px rgba(0, 0, 0, 0.35));
+  transform: scale(1.12);
+}
+
+/* Legacy pin styles kept for compatibility */
 .nap-pin {
   width: 28px;
   height: 28px;
@@ -108,7 +141,25 @@ body {
   }
 }
 
-/* ONU status markers */
+/* ONU client premise icon */
+.onu-icon {
+  display: block;
+  width: 22px;
+  height: 22px;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.4));
+}
+.onu-icon.online {
+  animation: onu-pulse-soft 1.8s ease-out infinite;
+}
+.onu-icon.selected {
+  transform: scale(1.25);
+  filter: drop-shadow(0 0 0 3px rgba(249, 115, 22, 0.5)) drop-shadow(0 2px 4px rgba(0, 0, 0, 0.35));
+}
+.onu-icon.hovered {
+  transform: scale(1.15);
+}
+
+/* ONU status markers (legacy dots) */
 .onu-dot {
   display: block;
   width: 12px;
@@ -153,6 +204,85 @@ body {
   transform: translateX(-50%);
   z-index: 600;
 }
+
+.map-page-shell {
+  display: flex;
+  flex-direction: column;
+  height: calc(100dvh - 4rem); /* below topbar (h-16) */
+  min-height: 420px;
+}
+.map-toolbar {
+  flex-shrink: 0;
+}
+.map-stage {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  border-radius: 0;
+  border: none;
+  box-shadow: none;
+}
+.map-stage .leaflet-container {
+  background: #e2e8f0;
+  font: inherit;
+  height: 100% !important;
+  width: 100% !important;
+}
+.map-equip-marker,
+.map-onu-marker {
+  background: transparent !important;
+  border: none !important;
+}
+.map-equip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  pointer-events: auto;
+  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.28));
+}
+.map-equip.is-active {
+  filter: drop-shadow(0 0 0 3px rgba(249, 115, 22, 0.55)) drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
+  transform: scale(1.08);
+}
+.map-equip-label {
+  max-width: 88px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 10px;
+  font-weight: 600;
+  color: #334155;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+  line-height: 1.3;
+}
+.map-onu {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.15s ease;
+}
+.map-onu.online {
+  animation: onu-pulse-soft 1.8s ease-out infinite;
+}
+.map-onu.is-hot {
+  transform: scale(1.12);
+}
+.map-onu.is-selected {
+  transform: scale(1.22);
+  filter: drop-shadow(0 0 0 3px rgba(249, 115, 22, 0.5));
+}
+.map-legend-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 11px;
+  color: #64748b;
+}
 @keyframes onu-pulse {
   0% {
     box-shadow: 0 0 0 0 var(--onu-glow), 0 0 2px rgba(0, 0, 0, 0.45);
@@ -163,6 +293,10 @@ body {
   100% {
     box-shadow: 0 0 0 0 transparent, 0 0 2px rgba(0, 0, 0, 0.45);
   }
+}
+@keyframes onu-pulse-soft {
+  0%, 100% { filter: drop-shadow(0 0 0 rgba(34, 197, 94, 0)); }
+  50% { filter: drop-shadow(0 0 6px rgba(34, 197, 94, 0.65)); }
 }
 
 @layer components {

@@ -16,7 +16,16 @@ export function useLayout() {
   return ctx;
 }
 
-export default function Layout({ title, children }: { title: string; children: ReactNode }) {
+export default function Layout({
+  title,
+  children,
+  fullBleed = false,
+}: {
+  title: string;
+  children: ReactNode;
+  /** Fill remaining viewport with minimal padding (e.g. Clients Map). */
+  fullBleed?: boolean;
+}) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   return (
@@ -28,7 +37,6 @@ export default function Layout({ title, children }: { title: string; children: R
       }}
     >
       <div className="flex min-h-screen bg-slate-100 bg-mesh-light">
-        {/* Mobile overlay */}
         {sidebarOpen && (
           <button
             type="button"
@@ -40,10 +48,20 @@ export default function Layout({ title, children }: { title: string; children: R
 
         <Sidebar />
 
-        <div className="flex-1 flex flex-col min-w-0 lg:pl-0">
+        <div className="flex-1 flex flex-col min-w-0 min-h-screen lg:pl-0">
           <Topbar title={title} />
-          <main className="flex-1 p-4 sm:p-6 lg:p-8 page-enter">
-            <div className="max-w-[1600px] mx-auto">{children}</div>
+          <main
+            className={
+              fullBleed
+                ? 'flex-1 flex flex-col min-h-0 p-0 page-enter'
+                : 'flex-1 p-4 sm:p-6 lg:p-8 page-enter'
+            }
+          >
+            {fullBleed ? (
+              <div className="flex-1 flex flex-col min-h-0 w-full">{children}</div>
+            ) : (
+              <div className="max-w-[1600px] mx-auto">{children}</div>
+            )}
           </main>
         </div>
       </div>
