@@ -188,7 +188,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
       if (tab === 'active') loadActive({ silent: true });
       else loadUsers({ silent: true });
     };
-    const id = setInterval(tick, 3000);
+    const id = setInterval(tick, 1000);
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, current?.id, service]);

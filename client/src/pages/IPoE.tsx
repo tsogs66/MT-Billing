@@ -114,7 +114,7 @@ export default function IPoE() {
   useEffect(() => {
     if (!current?.id) return;
     if (tab !== 'users' && tab !== 'offline' && tab !== 'active') return;
-    const id = setInterval(() => loadLeases(undefined, { silent: true }), 3000);
+    const id = setInterval(() => loadLeases(undefined, { silent: true }), 1000);
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, current?.id]);
