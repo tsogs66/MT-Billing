@@ -26,6 +26,13 @@ import {
   removePppProfile,
   setPppSecretEnabled,
   fetchPppoeServers,
+  fetchDhcpLeases,
+  fetchDhcpServers,
+  addDhcpServer,
+  updateDhcpServer,
+  removeDhcpServer,
+  setDhcpLeaseBlocked,
+  fetchPppActiveTraffic,
 } from './mikrotik.js';
 import { getUptime, getUptimeSummary, runUptimeChecks, startUptime } from './uptime.js';
 import { getInterfaceNames, getTrafficSnapshot } from './interfaces.js';
@@ -1058,20 +1065,33 @@ app.get('/api/pppoe/active', async (req, res) => {
       )
       .all(service, router.id) as any[];
     const byUser = new Map(users.map((u) => [u.username, u]));
-    const out = sessions
-      .filter((s) => !service || s.service === 'any' || !s.service || s.service.includes(service) || service === 'pppoe')
-      .map((s) => {
-        const u = byUser.get(s.name);
-        return {
-          username: s.name,
-          customer: u?.customer || s.name,
-          profile: s.profile !== '-' ? s.profile : u?.profile || '-',
-          address: s.address,
-          uptime: s.uptime,
-          caller: s.caller && s.caller !== '-' ? s.caller : '—',
-          service: s.service,
-        };
-      });
+    const filtered = sessions.filter(
+      (s) => !service || s.service === 'any' || !s.service || s.service.includes(service) || service === 'pppoe'
+    );
+    let traffic: Record<string, { download: number; upload: number }> = {};
+    try {
+      traffic = await fetchPppActiveTraffic(
+        router,
+        filtered.map((s) => s.name)
+      );
+    } catch {
+      /* traffic optional */
+    }
+    const out = filtered.map((s) => {
+      const u = byUser.get(s.name);
+      const t = traffic[s.name];
+      return {
+        username: s.name,
+        customer: u?.customer || s.name,
+        profile: s.profile !== '-' ? s.profile : u?.profile || '-',
+        address: s.address,
+        uptime: s.uptime,
+        caller: s.caller && s.caller !== '-' ? s.caller : '—',
+        service: s.service,
+        downloadBps: t?.download ?? 0,
+        uploadBps: t?.upload ?? 0,
+      };
+    });
     res.json({ sessions: out, live: true, routerId: router.id, routerName: router.name });
   } catch (e: any) {
     res.status(502).json({
@@ -1163,6 +1183,328 @@ app.delete('/api/billing-plans/:id', (req, res) => {
     return res.status(400).json({ error: `Plan "${existing.name}" is used by ${inUse.c} user(s).` });
   }
   db.prepare('DELETE FROM profiles WHERE id = ?').run(id);
+  res.json({ ok: true });
+});
+
+// ---- IPoE (DHCP leases / servers / profiles / billing plans) ----
+function normalizeMac(mac: string): string {
+  return String(mac || '')
+    .toUpperCase()
+    .replace(/[^A-F0-9]/g, '')
+    .replace(/(.{2})(?=.)/g, '$1:');
+}
+
+function formatSpeedMbps(down: number, up: number): string {
+  const d = Number(down) || 0;
+  const u = Number(up) || 0;
+  return `${d}↓ / ${u}↑ Mbps`;
+}
+
+app.get('/api/ipoe/leases', async (req, res) => {
+  const routerId = req.query.routerId ? Number(req.query.routerId) : null;
+  const filter = String(req.query.filter || 'all'); // all | online | offline
+  const router = getRouterById(routerId);
+  if (!router) return res.status(400).json({ error: 'Select a router in the top bar.', leases: [], live: false });
+  if (!router.host || !router.api_user) {
+    return res.status(400).json({ error: 'Router API credentials not configured.', leases: [], live: false });
+  }
+  try {
+    const leases = await fetchDhcpLeases(router);
+    const plans = db.prepare('SELECT * FROM ipoe_plans').all() as any[];
+    const profiles = db.prepare('SELECT * FROM ipoe_profiles').all() as any[];
+    const metaRows = db.prepare('SELECT * FROM ipoe_lease_meta').all() as any[];
+    const metaByMac = new Map(metaRows.map((m) => [normalizeMac(m.mac), m]));
+    const planByName = new Map(plans.map((p) => [p.name, p]));
+    const profileByName = new Map(profiles.map((p) => [p.name, p]));
+
+    const mapped = leases.map((l) => {
+      const mac = normalizeMac(l.macAddress || l.activeMac);
+      const meta = metaByMac.get(mac);
+      const planName = meta?.plan_name || plans[0]?.name || '';
+      const plan = planByName.get(planName);
+      const profile = plan?.profile_name ? profileByName.get(plan.profile_name) : null;
+      const online = /bound|waiting/i.test(l.status) ? /bound/i.test(l.status) : !!l.activeAddress;
+      const down = plan?.download_mbps ?? profile?.download_mbps ?? 0;
+      const up = plan?.upload_mbps ?? profile?.upload_mbps ?? 0;
+      return {
+        id: l.id,
+        name: meta?.name || l.hostName || mac || l.address || '—',
+        address: l.activeAddress || l.address || '—',
+        mac,
+        host: l.hostName || meta?.name || '—',
+        plan: planName,
+        speed: formatSpeedMbps(down, up),
+        downloadMbps: down,
+        uploadMbps: up,
+        due: meta?.due_at || '',
+        payment: meta?.payment_status || 'Active',
+        status: l.blocked ? 'Blocked' : online ? 'Online' : 'Offline',
+        online,
+        server: l.activeServer || l.server || '—',
+        expires: l.expiresAfter || '—',
+        lastSeen: l.lastSeen || '—',
+        blocked: l.blocked,
+        comment: l.comment || meta?.comment || '',
+      };
+    });
+
+    const filtered =
+      filter === 'online' ? mapped.filter((x) => x.online && !x.blocked) : filter === 'offline' ? mapped.filter((x) => !x.online || x.blocked) : mapped;
+
+    res.json({ leases: filtered, live: true, routerId: router.id, routerName: router.name, plans, profiles });
+  } catch (e: any) {
+    res.status(502).json({
+      error: e?.message || 'Could not fetch DHCP leases from MikroTik',
+      leases: [],
+      live: false,
+    });
+  }
+});
+
+app.put('/api/ipoe/leases/:mac', async (req, res) => {
+  const mac = normalizeMac(decodeURIComponent(req.params.mac));
+  const b = req.body || {};
+  const routerId = b.routerId ? Number(b.routerId) : null;
+  db.prepare(
+    `INSERT INTO ipoe_lease_meta (mac, name, plan_name, due_at, payment_status, comment)
+     VALUES (@mac, @name, @plan_name, @due_at, @payment_status, @comment)
+     ON CONFLICT(mac) DO UPDATE SET
+       name=COALESCE(@name, name),
+       plan_name=COALESCE(@plan_name, plan_name),
+       due_at=COALESCE(@due_at, due_at),
+       payment_status=COALESCE(@payment_status, payment_status),
+       comment=COALESCE(@comment, comment)`
+  ).run({
+    mac,
+    name: b.name ?? null,
+    plan_name: b.plan ?? b.plan_name ?? null,
+    due_at: b.due ?? b.due_at ?? null,
+    payment_status: b.payment ?? b.payment_status ?? null,
+    comment: b.comment ?? null,
+  });
+
+  if (b.blocked != null && routerId) {
+    const router = getRouterById(routerId);
+    if (router?.host && router?.api_user && b.id) {
+      try {
+        await setDhcpLeaseBlocked(router, String(b.id), !!b.blocked);
+      } catch (e: any) {
+        return res.status(502).json({ error: e?.message || 'Could not update lease on MikroTik' });
+      }
+    }
+  }
+  res.json({ ok: true, mac });
+});
+
+app.post('/api/ipoe/leases/:mac/toggle-block', async (req, res) => {
+  const mac = normalizeMac(decodeURIComponent(req.params.mac));
+  const routerId = Number(req.body?.routerId || req.query.routerId || 0);
+  const leaseId = String(req.body?.id || '');
+  const blocked = !!req.body?.blocked;
+  const router = getRouterById(routerId);
+  if (!router?.host || !router?.api_user) return res.status(400).json({ error: 'Router API credentials not configured.' });
+  if (!leaseId) return res.status(400).json({ error: 'Lease id is required' });
+  try {
+    await setDhcpLeaseBlocked(router, leaseId, blocked);
+    res.json({ ok: true, mac, blocked });
+  } catch (e: any) {
+    res.status(502).json({ error: e?.message || 'Could not block/unblock lease on MikroTik' });
+  }
+});
+
+app.get('/api/ipoe/servers', async (req, res) => {
+  const routerId = req.query.routerId ? Number(req.query.routerId) : null;
+  const router = getRouterById(routerId);
+  if (!router) return res.status(400).json({ error: 'Select a router in the top bar.', servers: [], live: false });
+  if (!router.host || !router.api_user) {
+    return res.status(400).json({ error: 'Router API credentials not configured.', servers: [], live: false });
+  }
+  try {
+    const servers = await fetchDhcpServers(router);
+    res.json({
+      servers: servers.map((s) => ({
+        id: s.id,
+        name: s.name,
+        interface: s.interface,
+        pool: s.addressPool,
+        lease: s.leaseTime,
+        status: s.disabled ? 'Disabled' : 'Enabled',
+        disabled: s.disabled,
+      })),
+      live: true,
+      routerId: router.id,
+      routerName: router.name,
+    });
+  } catch (e: any) {
+    res.status(502).json({ error: e?.message || 'Could not fetch DHCP servers', servers: [], live: false });
+  }
+});
+
+app.post('/api/ipoe/servers', async (req, res) => {
+  const b = req.body || {};
+  const router = getRouterById(Number(b.routerId || 0));
+  if (!router?.host || !router?.api_user) return res.status(400).json({ error: 'Router API credentials not configured.' });
+  if (!b.name || !b.interface || !b.pool) return res.status(400).json({ error: 'name, interface and pool are required' });
+  try {
+    await addDhcpServer(router, {
+      name: String(b.name),
+      interface: String(b.interface),
+      addressPool: String(b.pool),
+      leaseTime: b.lease ? String(b.lease) : undefined,
+    });
+    res.status(201).json({ ok: true });
+  } catch (e: any) {
+    res.status(502).json({ error: e?.message || 'Could not add DHCP server' });
+  }
+});
+
+app.put('/api/ipoe/servers/:id', async (req, res) => {
+  const b = req.body || {};
+  const router = getRouterById(Number(b.routerId || 0));
+  if (!router?.host || !router?.api_user) return res.status(400).json({ error: 'Router API credentials not configured.' });
+  try {
+    await updateDhcpServer(router, req.params.id, {
+      name: b.name,
+      interface: b.interface,
+      addressPool: b.pool,
+      leaseTime: b.lease,
+      disabled: b.disabled,
+    });
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(502).json({ error: e?.message || 'Could not update DHCP server' });
+  }
+});
+
+app.delete('/api/ipoe/servers/:id', async (req, res) => {
+  const routerId = Number(req.query.routerId || req.body?.routerId || 0);
+  const router = getRouterById(routerId);
+  if (!router?.host || !router?.api_user) return res.status(400).json({ error: 'Router API credentials not configured.' });
+  try {
+    await removeDhcpServer(router, req.params.id);
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(502).json({ error: e?.message || 'Could not delete DHCP server' });
+  }
+});
+
+app.get('/api/ipoe/profiles', (_req, res) => {
+  res.json(
+    db
+      .prepare(
+        `SELECT id, name, download_mbps AS downloadMbps, upload_mbps AS uploadMbps, max_limit AS maxLimit FROM ipoe_profiles ORDER BY name`
+      )
+      .all()
+  );
+});
+
+app.post('/api/ipoe/profiles', (req, res) => {
+  const b = req.body || {};
+  const name = String(b.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'name is required' });
+  const down = Number(b.downloadMbps ?? b.download_mbps) || 0;
+  const up = Number(b.uploadMbps ?? b.upload_mbps) || 0;
+  const maxLimit = String(b.maxLimit || b.max_limit || `${down}M/${up}M`);
+  try {
+    const info = db
+      .prepare('INSERT INTO ipoe_profiles (name, download_mbps, upload_mbps, max_limit) VALUES (?, ?, ?, ?)')
+      .run(name, down, up, maxLimit);
+    res.status(201).json(db.prepare('SELECT id, name, download_mbps AS downloadMbps, upload_mbps AS uploadMbps, max_limit AS maxLimit FROM ipoe_profiles WHERE id = ?').get(info.lastInsertRowid));
+  } catch {
+    res.status(409).json({ error: 'Profile name already exists' });
+  }
+});
+
+app.put('/api/ipoe/profiles/:id', (req, res) => {
+  const id = Number(req.params.id);
+  const existing = db.prepare('SELECT * FROM ipoe_profiles WHERE id = ?').get(id) as any;
+  if (!existing) return res.status(404).json({ error: 'not found' });
+  const b = req.body || {};
+  const name = String(b.name ?? existing.name).trim();
+  const down = b.downloadMbps != null ? Number(b.downloadMbps) : existing.download_mbps;
+  const up = b.uploadMbps != null ? Number(b.uploadMbps) : existing.upload_mbps;
+  const maxLimit = String(b.maxLimit ?? existing.max_limit ?? `${down}M/${up}M`);
+  db.prepare('UPDATE ipoe_profiles SET name=?, download_mbps=?, upload_mbps=?, max_limit=? WHERE id=?').run(name, down, up, maxLimit, id);
+  res.json(db.prepare('SELECT id, name, download_mbps AS downloadMbps, upload_mbps AS uploadMbps, max_limit AS maxLimit FROM ipoe_profiles WHERE id = ?').get(id));
+});
+
+app.delete('/api/ipoe/profiles/:id', (req, res) => {
+  const id = Number(req.params.id);
+  const existing = db.prepare('SELECT * FROM ipoe_profiles WHERE id = ?').get(id) as any;
+  if (!existing) return res.status(404).json({ error: 'not found' });
+  const inUse = db.prepare('SELECT COUNT(*) AS c FROM ipoe_plans WHERE profile_name = ?').get(existing.name) as { c: number };
+  if (inUse.c > 0) return res.status(400).json({ error: `Profile is used by ${inUse.c} billing plan(s).` });
+  db.prepare('DELETE FROM ipoe_profiles WHERE id = ?').run(id);
+  res.json({ ok: true });
+});
+
+app.get('/api/ipoe/plans', (_req, res) => {
+  res.json(
+    db
+      .prepare(
+        `SELECT id, name, price, cycle, profile_name AS profile, download_mbps AS downloadMbps, upload_mbps AS uploadMbps FROM ipoe_plans ORDER BY name`
+      )
+      .all()
+      .map((p: any) => ({
+        ...p,
+        speed: formatSpeedMbps(p.downloadMbps, p.uploadMbps),
+      }))
+  );
+});
+
+app.post('/api/ipoe/plans', (req, res) => {
+  const b = req.body || {};
+  const name = String(b.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'name is required' });
+  const profile = String(b.profile || b.profile_name || '').trim();
+  let down = Number(b.downloadMbps) || 0;
+  let up = Number(b.uploadMbps) || 0;
+  if (profile) {
+    const pr = db.prepare('SELECT * FROM ipoe_profiles WHERE name = ?').get(profile) as any;
+    if (pr) {
+      down = down || pr.download_mbps;
+      up = up || pr.upload_mbps;
+    }
+  }
+  try {
+    const info = db
+      .prepare(
+        'INSERT INTO ipoe_plans (name, price, cycle, profile_name, download_mbps, upload_mbps) VALUES (?, ?, ?, ?, ?, ?)'
+      )
+      .run(name, Number(b.price) || 0, String(b.cycle || 'Monthly'), profile || null, down, up);
+    const row = db.prepare('SELECT id, name, price, cycle, profile_name AS profile, download_mbps AS downloadMbps, upload_mbps AS uploadMbps FROM ipoe_plans WHERE id = ?').get(info.lastInsertRowid) as any;
+    res.status(201).json({ ...row, speed: formatSpeedMbps(row.downloadMbps, row.uploadMbps) });
+  } catch {
+    res.status(409).json({ error: 'Plan name already exists' });
+  }
+});
+
+app.put('/api/ipoe/plans/:id', (req, res) => {
+  const id = Number(req.params.id);
+  const existing = db.prepare('SELECT * FROM ipoe_plans WHERE id = ?').get(id) as any;
+  if (!existing) return res.status(404).json({ error: 'not found' });
+  const b = req.body || {};
+  const name = String(b.name ?? existing.name).trim();
+  const profile = String(b.profile ?? existing.profile_name ?? '').trim();
+  let down = b.downloadMbps != null ? Number(b.downloadMbps) : existing.download_mbps;
+  let up = b.uploadMbps != null ? Number(b.uploadMbps) : existing.upload_mbps;
+  if (profile && (b.profile != null || b.profile_name != null)) {
+    const pr = db.prepare('SELECT * FROM ipoe_profiles WHERE name = ?').get(profile) as any;
+    if (pr && b.downloadMbps == null) {
+      down = pr.download_mbps;
+      up = pr.upload_mbps;
+    }
+  }
+  db.prepare(
+    'UPDATE ipoe_plans SET name=?, price=?, cycle=?, profile_name=?, download_mbps=?, upload_mbps=? WHERE id=?'
+  ).run(name, b.price != null ? Number(b.price) : existing.price, String(b.cycle ?? existing.cycle), profile || null, down, up, id);
+  const row = db.prepare('SELECT id, name, price, cycle, profile_name AS profile, download_mbps AS downloadMbps, upload_mbps AS uploadMbps FROM ipoe_plans WHERE id = ?').get(id) as any;
+  res.json({ ...row, speed: formatSpeedMbps(row.downloadMbps, row.uploadMbps) });
+});
+
+app.delete('/api/ipoe/plans/:id', (req, res) => {
+  const id = Number(req.params.id);
+  db.prepare('DELETE FROM ipoe_plans WHERE id = ?').run(id);
   res.json({ ok: true });
 });
 

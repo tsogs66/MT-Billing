@@ -351,6 +351,13 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                 ]}
                 rows={listUsers.map((u) => ({
                   key: u.id,
+                  sortValues: {
+                    user: u.username,
+                    account: u.account,
+                    profile: u.mikrotikProfile || u.profile,
+                    status: userStatusLabel(u),
+                    due: u.subscriptionDue,
+                  },
                   cells: [
                     <input
                       key="cb"
@@ -397,9 +404,12 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                 </span>
               }
               right={
-                <button type="button" className="btn-secondary" onClick={loadActive} disabled={tabBusy || !current}>
-                  <RefreshCw size={16} className={tabBusy ? 'animate-spin' : ''} /> Refresh
-                </button>
+                <>
+                  <SearchInput value={search} onChange={setSearch} placeholder="Search user / IP / MAC…" className="w-64" />
+                  <button type="button" className="btn-secondary" onClick={loadActive} disabled={tabBusy || !current}>
+                    <RefreshCw size={16} className={tabBusy ? 'animate-spin' : ''} /> Refresh
+                  </button>
+                </>
               }
             />
             <div className="p-4 pt-0 space-y-3">
@@ -415,20 +425,56 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                   { key: 'customer', label: 'Customer' },
                   { key: 'profile', label: 'Profile' },
                   { key: 'addr', label: 'Address' },
+                  { key: 'traffic', label: 'Traffic ↓/↑' },
                   { key: 'uptime', label: 'Uptime' },
                   { key: 'caller', label: 'Caller ID (MAC)' },
                 ]}
-                rows={active.map((a, i) => ({
-                  key: i,
-                  cells: [
-                    <span className="font-semibold text-slate-800">{a.username}</span>,
-                    a.customer,
-                    a.profile,
-                    <span className="font-mono text-xs">{a.address}</span>,
-                    a.uptime,
-                    <span className="font-mono text-sm text-sky-700">{a.caller}</span>,
-                  ],
-                }))}
+                rows={active
+                  .filter((a) => {
+                    const q = search.trim().toLowerCase();
+                    if (!q) return true;
+                    return (
+                      String(a.username || '').toLowerCase().includes(q) ||
+                      String(a.customer || '').toLowerCase().includes(q) ||
+                      String(a.address || '').toLowerCase().includes(q) ||
+                      String(a.caller || '').toLowerCase().includes(q) ||
+                      String(a.profile || '').toLowerCase().includes(q)
+                    );
+                  })
+                  .map((a, i) => {
+                    const down = Number(a.downloadBps) || 0;
+                    const up = Number(a.uploadBps) || 0;
+                    const fmt = (bps: number) => {
+                      const mbps = bps / 1_000_000;
+                      if (mbps >= 10) return `${Math.round(mbps)} Mbps`;
+                      if (mbps >= 0.1) return `${mbps.toFixed(1)} Mbps`;
+                      const kbps = bps / 1000;
+                      return kbps >= 1 ? `${Math.round(kbps)} Kbps` : `${Math.round(bps)} bps`;
+                    };
+                    return {
+                      key: i,
+                      sortValues: {
+                        user: a.username,
+                        customer: a.customer,
+                        profile: a.profile,
+                        addr: a.address,
+                        traffic: down + up,
+                        uptime: a.uptime,
+                        caller: a.caller,
+                      },
+                      cells: [
+                        <span className="font-semibold text-slate-800">{a.username}</span>,
+                        a.customer,
+                        a.profile,
+                        <span className="font-mono text-xs">{a.address}</span>,
+                        <span className="text-xs font-medium text-slate-700 whitespace-nowrap">
+                          {fmt(down)} ↓ / {fmt(up)} ↑
+                        </span>,
+                        a.uptime,
+                        <span className="font-mono text-sm text-sky-700">{a.caller}</span>,
+                      ],
+                    };
+                  })}
                 emptyMessage={current ? 'No active PPP sessions on this router.' : 'Select a router to view active connections.'}
               />
             </div>

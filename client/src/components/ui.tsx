@@ -1,7 +1,9 @@
-import type { ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import type { LucideIcon } from 'lucide-react';
 import {
   Construction, Sparkles, X, Loader2, CheckCircle2, AlertCircle, Inbox, Search,
+  ArrowUp, ArrowDown, ArrowUpDown,
 } from 'lucide-react';
 
 /* ─── Card ─── */
@@ -67,16 +69,19 @@ const STATUS_STYLES: Record<string, string> = {
   Active: 'bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200/60',
   active: 'bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200/60',
   running: 'bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200/60',
-  online: 'bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200/60',
-  Active: 'bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200/60',
-  running: 'bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200/60',
+  online: 'bg-sky-100 text-sky-700 ring-1 ring-sky-200/60',
+  Online: 'bg-sky-100 text-sky-700 ring-1 ring-sky-200/60',
+  Enabled: 'bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200/60',
   live: 'bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200/60',
   unused: 'bg-sky-100 text-sky-700 ring-1 ring-sky-200/60',
   inactive: 'bg-slate-100 text-slate-500 ring-1 ring-slate-200/60',
   expired: 'bg-rose-100 text-rose-600 ring-1 ring-rose-200/60',
   'non-payment': 'bg-amber-100 text-amber-700 ring-1 ring-amber-200/60',
   disabled: 'bg-rose-100 text-rose-700 ring-1 ring-rose-200/60',
-  offline: 'bg-amber-100 text-amber-700 ring-1 ring-amber-200/60',
+  Disabled: 'bg-rose-100 text-rose-700 ring-1 ring-rose-200/60',
+  offline: 'bg-slate-100 text-slate-500 ring-1 ring-slate-200/60',
+  Offline: 'bg-slate-100 text-slate-500 ring-1 ring-slate-200/60',
+  Blocked: 'bg-rose-100 text-rose-700 ring-1 ring-rose-200/60',
   sent: 'bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200/60',
   failed: 'bg-rose-100 text-rose-600 ring-1 ring-rose-200/60',
   'Low Stock': 'bg-amber-100 text-amber-700 ring-1 ring-amber-200/60',
@@ -321,16 +326,26 @@ export function Modal({
   maxWidth?: 'sm' | 'md' | 'lg' | 'xl';
 }) {
   const widths = { sm: 'max-w-sm', md: 'max-w-md', lg: 'max-w-lg', xl: 'max-w-xl' };
-  return (
+
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, []);
+
+  return createPortal(
     <div
-      className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-[1000] p-4 animate-fade-in"
+      className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-[2000] p-4 animate-fade-in"
+      style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0 }}
       onClick={onClose}
     >
       <div
-        className={`bg-white rounded-2xl shadow-2xl w-full ${wide ? 'max-w-2xl' : widths[maxWidth]} max-h-[92vh] flex flex-col animate-scale-in border border-slate-200/80`}
+        className={`bg-white rounded-2xl shadow-2xl w-full ${wide ? 'max-w-2xl' : widths[maxWidth]} max-h-[90vh] flex flex-col animate-scale-in border border-slate-200/80`}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-start justify-between px-5 py-4 border-b border-slate-100">
+        <div className="flex items-start justify-between px-5 py-4 border-b border-slate-100 shrink-0">
           <div>
             <h3 className="font-bold text-slate-900 text-lg tracking-tight">{title}</h3>
             {subtitle && <p className="text-sm text-slate-400 mt-0.5">{subtitle}</p>}
@@ -339,10 +354,11 @@ export function Modal({
             <X size={18} />
           </button>
         </div>
-        <div className="p-5 overflow-y-auto flex-1">{children}</div>
-        {footer && <div className="flex justify-end gap-2 px-5 py-3 border-t border-slate-100 bg-slate-50/80 rounded-b-2xl">{footer}</div>}
+        <div className="p-5 overflow-y-auto flex-1 min-h-0">{children}</div>
+        {footer && <div className="flex justify-end gap-2 px-5 py-3 border-t border-slate-100 bg-slate-50/80 rounded-b-2xl shrink-0">{footer}</div>}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
@@ -372,55 +388,119 @@ export function DataTable({
   rows,
   emptyMessage = 'No records found.',
   stickyHeader,
+  sortable = true,
 }: {
-  columns: { key: string; label: ReactNode; align?: 'left' | 'right' | 'center'; className?: string }[];
-  rows: { key: string | number; cells: ReactNode[] }[];
+  columns: {
+    key: string;
+    label: ReactNode;
+    align?: 'left' | 'right' | 'center';
+    className?: string;
+    sortable?: boolean;
+  }[];
+  rows: {
+    key: string | number;
+    cells: ReactNode[];
+    /** Optional values used for sorting when header is clicked */
+    sortValues?: Record<string, string | number | null | undefined>;
+  }[];
   emptyMessage?: string;
   stickyHeader?: boolean;
+  /** Enable click-to-sort on headers (default true). Per-column override via columns[].sortable */
+  sortable?: boolean;
 }) {
+  const [sortKey, setSortKey] = useState<string | null>(null);
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+
+  const sortedRows = useMemo(() => {
+    if (!sortKey) return rows;
+    const colIdx = columns.findIndex((c) => c.key === sortKey);
+    const copy = [...rows];
+    copy.sort((a, b) => {
+      const av = a.sortValues?.[sortKey];
+      const bv = b.sortValues?.[sortKey];
+      let cmp = 0;
+      if (av == null && bv == null) cmp = 0;
+      else if (av == null) cmp = 1;
+      else if (bv == null) cmp = -1;
+      else if (typeof av === 'number' && typeof bv === 'number') cmp = av - bv;
+      else cmp = String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: 'base' });
+      return sortDir === 'asc' ? cmp : -cmp;
+    });
+    // Keep colIdx referenced so unused-lint stays quiet if sortValues missing
+    void colIdx;
+    return copy;
+  }, [rows, columns, sortKey, sortDir]);
+
+  const onHeaderClick = (key: string, colSortable?: boolean) => {
+    if (!sortable || colSortable === false) return;
+    if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else {
+      setSortKey(key);
+      setSortDir('asc');
+    }
+  };
+
   return (
     <div className="overflow-x-auto rounded-xl border border-slate-100/80">
       <table className="data-table w-full text-sm">
         <thead className={stickyHeader ? 'sticky top-0 z-10' : ''}>
           <tr>
-            {columns.map((c) => (
-              <th
-                key={c.key}
-                className={[
-                  c.align === 'right' ? 'text-right' : c.align === 'center' ? 'text-center' : 'text-left',
-                  c.className,
-                ].filter(Boolean).join(' ')}
-              >
-                {c.label}
-              </th>
-            ))}
+            {columns.map((c) => {
+              const canSort = sortable && c.sortable !== false;
+              const active = sortKey === c.key;
+              return (
+                <th
+                  key={c.key}
+                  className={[
+                    c.align === 'right' ? 'text-right' : c.align === 'center' ? 'text-center' : 'text-left',
+                    c.className,
+                    canSort ? 'cursor-pointer select-none hover:text-slate-800' : '',
+                  ].filter(Boolean).join(' ')}
+                  onClick={() => onHeaderClick(c.key, c.sortable)}
+                  title={canSort ? 'Click to sort' : undefined}
+                >
+                  <span className={`inline-flex items-center gap-1 ${c.align === 'right' ? 'justify-end w-full' : ''}`}>
+                    {c.label}
+                    {canSort && (
+                      active ? (
+                        sortDir === 'asc' ? <ArrowUp size={12} className="text-brand-500" /> : <ArrowDown size={12} className="text-brand-500" />
+                      ) : (
+                        <ArrowUpDown size={12} className="opacity-30" />
+                      )
+                    )}
+                  </span>
+                </th>
+              );
+            })}
           </tr>
         </thead>
         <tbody>
-          {rows.map((r) => (
-            <tr key={r.key}>
-              {r.cells.map((cell, j) => (
-                <td
-                  key={j}
-                  className={columns[j]?.align === 'right' ? 'text-right' : columns[j]?.align === 'center' ? 'text-center' : ''}
-                >
-                  {cell}
-                </td>
-              ))}
-            </tr>
-          ))}
-          {rows.length === 0 && (
+          {sortedRows.length === 0 ? (
             <tr>
-              <td colSpan={columns.length}>
-                <EmptyState message={emptyMessage} />
+              <td colSpan={columns.length} className="text-center text-slate-400 py-10">
+                {emptyMessage}
               </td>
             </tr>
+          ) : (
+            sortedRows.map((r) => (
+              <tr key={r.key}>
+                {r.cells.map((cell, j) => (
+                  <td
+                    key={j}
+                    className={columns[j]?.align === 'right' ? 'text-right' : columns[j]?.align === 'center' ? 'text-center' : ''}
+                  >
+                    {cell}
+                  </td>
+                ))}
+              </tr>
+            ))
           )}
         </tbody>
       </table>
     </div>
   );
 }
+
 
 export function EmptyState({ message, icon: Icon = Inbox }: { message: string; icon?: LucideIcon }) {
   return (

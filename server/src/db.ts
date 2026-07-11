@@ -193,6 +193,33 @@ export function initSchema() {
       router_id INTEGER,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE TABLE IF NOT EXISTS ipoe_profiles (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT UNIQUE NOT NULL,
+      download_mbps REAL DEFAULT 0,
+      upload_mbps REAL DEFAULT 0,
+      max_limit TEXT DEFAULT ''
+    );
+
+    CREATE TABLE IF NOT EXISTS ipoe_plans (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT UNIQUE NOT NULL,
+      price REAL DEFAULT 0,
+      cycle TEXT DEFAULT 'Monthly',
+      profile_name TEXT,
+      download_mbps REAL DEFAULT 0,
+      upload_mbps REAL DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS ipoe_lease_meta (
+      mac TEXT PRIMARY KEY,
+      name TEXT,
+      plan_name TEXT,
+      due_at TEXT,
+      payment_status TEXT DEFAULT 'Active',
+      comment TEXT
+    );
   `);
 }
 
@@ -474,5 +501,19 @@ export function seed() {
     ins.run('info', 'pppoe', 'Synced 72 PPPoE secrets from PPPoE MT Router');
     ins.run('warning', 'router', 'IPoE MT Router API latency high (240ms)');
     ins.run('info', 'billing', 'Generated 54 invoices for the current cycle');
+  }
+
+  if (count('ipoe_profiles') === 0) {
+    db.prepare('INSERT INTO ipoe_profiles (name, download_mbps, upload_mbps, max_limit) VALUES (?, ?, ?, ?)').run(
+      '100MBPS U limited',
+      100,
+      100,
+      '100M/100M'
+    );
+  }
+  if (count('ipoe_plans') === 0) {
+    db.prepare(
+      'INSERT INTO ipoe_plans (name, price, cycle, profile_name, download_mbps, upload_mbps) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run('UNLI100', 1200, 'Monthly', '100MBPS U limited', 100, 100);
   }
 }

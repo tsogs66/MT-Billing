@@ -210,7 +210,7 @@ body {
     @apply absolute inset-0 bg-gradient-to-br from-white to-slate-50/50 pointer-events-none;
   }
   .page-enter {
-    @apply animate-fade-in-up;
+    animation: fade-in-up 0.45s ease-out both;
   }
   .stagger-1 { animation-delay: 0.05s; opacity: 0; }
   .stagger-2 { animation-delay: 0.1s; opacity: 0; }

@@ -654,3 +654,143 @@ export async function fetchPppoeServers(conn: RouterConn): Promise<PppoeServerRo
     });
   });
 }
+
+// ---------------- DHCP / IPoE ----------------
+
+export interface DhcpLeaseRow {
+  id: string;
+  address: string;
+  macAddress: string;
+  hostName: string;
+  server: string;
+  status: string;
+  expiresAfter: string;
+  lastSeen: string;
+  comment: string;
+  dynamic: boolean;
+  blocked: boolean;
+  activeAddress: string;
+  activeMac: string;
+  activeServer: string;
+}
+
+export interface DhcpServerRow {
+  id: string;
+  name: string;
+  interface: string;
+  addressPool: string;
+  leaseTime: string;
+  disabled: boolean;
+  authoritative: string;
+}
+
+export async function fetchDhcpLeases(conn: RouterConn): Promise<DhcpLeaseRow[]> {
+  return withRouter(conn, async (api) => {
+    const rows = (await api.write('/ip/dhcp-server/lease/print')) as Record<string, string>[];
+    return (rows || []).map((l) => ({
+      id: l['.id'] || '',
+      address: l.address || l['active-address'] || '',
+      macAddress: (l['mac-address'] || l['active-mac-address'] || '').toUpperCase(),
+      hostName: l['host-name'] || '',
+      server: l.server || l['active-server'] || '',
+      status: l.status || (rosBool(l.blocked) ? 'blocked' : 'unknown'),
+      expiresAfter: l['expires-after'] || '',
+      lastSeen: l['last-seen'] || '',
+      comment: l.comment || '',
+      dynamic: rosBool(l.dynamic),
+      blocked: rosBool(l.blocked),
+      activeAddress: l['active-address'] || '',
+      activeMac: (l['active-mac-address'] || '').toUpperCase(),
+      activeServer: l['active-server'] || '',
+    }));
+  });
+}
+
+export async function setDhcpLeaseBlocked(conn: RouterConn, id: string, blocked: boolean): Promise<void> {
+  await withRouter(conn, (api) =>
+    api.write('/ip/dhcp-server/lease/set', [`=.id=${id}`, `=blocked=${blocked ? 'yes' : 'no'}`])
+  );
+}
+
+export async function fetchDhcpServers(conn: RouterConn): Promise<DhcpServerRow[]> {
+  return withRouter(conn, async (api) => {
+    const rows = (await api.write('/ip/dhcp-server/print')) as Record<string, string>[];
+    return (rows || []).map((s) => ({
+      id: s['.id'] || '',
+      name: s.name || '',
+      interface: s.interface || '',
+      addressPool: s['address-pool'] || '',
+      leaseTime: s['lease-time'] || '',
+      disabled: rosBool(s.disabled),
+      authoritative: s.authoritative || '',
+    }));
+  });
+}
+
+export async function addDhcpServer(
+  conn: RouterConn,
+  fields: { name: string; interface: string; addressPool: string; leaseTime?: string }
+): Promise<void> {
+  const args = [
+    `=name=${fields.name}`,
+    `=interface=${fields.interface}`,
+    `=address-pool=${fields.addressPool}`,
+  ];
+  if (fields.leaseTime) args.push(`=lease-time=${fields.leaseTime}`);
+  await withRouter(conn, (api) => api.write('/ip/dhcp-server/add', args));
+}
+
+export async function updateDhcpServer(
+  conn: RouterConn,
+  id: string,
+  fields: { name?: string; interface?: string; addressPool?: string; leaseTime?: string; disabled?: boolean }
+): Promise<void> {
+  const args = [`=.id=${id}`];
+  if (fields.name) args.push(`=name=${fields.name}`);
+  if (fields.interface) args.push(`=interface=${fields.interface}`);
+  if (fields.addressPool) args.push(`=address-pool=${fields.addressPool}`);
+  if (fields.leaseTime) args.push(`=lease-time=${fields.leaseTime}`);
+  if (fields.disabled != null) args.push(`=disabled=${fields.disabled ? 'yes' : 'no'}`);
+  await withRouter(conn, (api) => api.write('/ip/dhcp-server/set', args));
+}
+
+export async function removeDhcpServer(conn: RouterConn, id: string): Promise<void> {
+  await withRouter(conn, (api) => api.write('/ip/dhcp-server/remove', [`=numbers=${id}`]));
+}
+
+/** Live rx/tx bits-per-second for PPP active sessions via their dynamic interfaces. */
+export async function fetchPppActiveTraffic(
+  conn: RouterConn,
+  usernames: string[]
+): Promise<Record<string, { download: number; upload: number }>> {
+  if (!usernames.length) return {};
+  return withRouter(conn, async (api) => {
+    const ifaces = (await api.write('/interface/print')) as Record<string, string>[];
+    const byUser = new Map<string, string>();
+    for (const iface of ifaces || []) {
+      const name = iface.name || '';
+      // <pppoe-username> or similar
+      const m = name.match(/^<pppoe-(.+)>$/i) || name.match(/^pppoe-(.+)$/i);
+      if (m) byUser.set(m[1], name);
+    }
+    const out: Record<string, { download: number; upload: number }> = {};
+    for (const user of usernames) {
+      const iface = byUser.get(user);
+      if (!iface) continue;
+      try {
+        const rows = (await api.write('/interface/monitor-traffic', [
+          `=interface=${iface}`,
+          '=once=',
+        ])) as Record<string, string>[];
+        const r = rows?.[0] || {};
+        out[user] = {
+          download: Number(r['rx-bits-per-second']) || 0,
+          upload: Number(r['tx-bits-per-second']) || 0,
+        };
+      } catch {
+        /* skip */
+      }
+    }
+    return out;
+  });
+}

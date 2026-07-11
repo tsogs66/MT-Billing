@@ -5,6 +5,7 @@ import { PageStub } from './components/ui';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import PPPoE from './pages/PPPoE';
+import IPoE from './pages/IPoE';
 import ClientsMap from './pages/ClientsMap';
 import SalesReport from './pages/SalesReport';
 import Routers from './pages/Routers';
@@ -61,7 +62,7 @@ export default function App() {
             <Routes>
               <Route path="/" element={<Dashboard />} />
               <Route path="/pppoe" element={<PPPoE service="pppoe" title="PPPoE Management" />} />
-              <Route path="/ipoe" element={<PPPoE service="ipoe" title="IPoE Management" />} />
+              <Route path="/ipoe" element={<IPoE />} />
               <Route path="/map" element={<ClientsMap />} />
               <Route path="/sales" element={<SalesReport />} />
               <Route path="/routers" element={<Routers />} />
