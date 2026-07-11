@@ -25,6 +25,8 @@
       .out .v { font-family: ui-monospace, monospace; font-size: 15px; font-weight: 700; color: #0f172a; letter-spacing: 0.5px; word-break: break-all; }
       .copy { margin-top: 8px; background: #0ea5e9; width: auto; padding: 8px 12px; font-size: 12px; }
       .copy:hover { background: #0284c7; }
+      .copy.ok { background: #059669; }
+      .copy.ok:hover { background: #047857; }
       .note { font-size: 11px; color: #94a3b8; margin-top: 16px; line-height: 1.45; }
       .tabs { display: flex; gap: 8px; margin-top: 8px; }
       .tab { flex: 1; background: #f1f5f9; color: #475569; margin-top: 0; }
@@ -139,12 +141,47 @@
         out.classList.add('show');
       }
 
+      async function copyToClipboard(text) {
+        const value = String(text || '');
+        if (!value || value === '—') return false;
+        try {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(value);
+            return true;
+          }
+        } catch (_) { /* fall through */ }
+        try {
+          const ta = document.createElement('textarea');
+          ta.value = value;
+          ta.setAttribute('readonly', '');
+          ta.style.position = 'fixed';
+          ta.style.left = '-9999px';
+          document.body.appendChild(ta);
+          ta.select();
+          ta.setSelectionRange(0, value.length);
+          const ok = document.execCommand('copy');
+          document.body.removeChild(ta);
+          return ok;
+        } catch (_) {
+          return false;
+        }
+      }
+
       document.getElementById('gen').addEventListener('click', run);
       document.getElementById('hwid').addEventListener('keydown', (e) => { if (e.key === 'Enter') run(); });
       document.querySelectorAll('[data-copy]').forEach((btn) => {
-        btn.addEventListener('click', () => {
+        const label = btn.textContent;
+        btn.addEventListener('click', async () => {
           const el = document.getElementById(btn.getAttribute('data-copy'));
-          if (el && navigator.clipboard) navigator.clipboard.writeText(el.textContent);
+          if (!el) return;
+          const ok = await copyToClipboard(el.textContent);
+          if (!ok) return;
+          btn.textContent = 'Copied';
+          btn.classList.add('ok');
+          setTimeout(() => {
+            btn.textContent = label;
+            btn.classList.remove('ok');
+          }, 2000);
         });
       });
     </script>

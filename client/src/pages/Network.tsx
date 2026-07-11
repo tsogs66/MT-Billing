@@ -5,6 +5,7 @@ import { Card, StatusBadge, TabBar, DataTable, Toggle } from '../components/ui';
 import { api } from '../api';
 import { useRouterDevice } from '../context/RouterContext';
 import { RoutersPanel } from './Routers';
+import { copyText } from '../lib/clipboard';
 
 const TABS = [
   { key: 'routers', label: 'Routers', icon: RouterIcon },
@@ -637,7 +638,8 @@ function MultiWan({ routerId }: { routerId: number }) {
 
   const copy = async () => {
     if (!script) return;
-    await navigator.clipboard?.writeText(script);
+    const ok = await copyText(script);
+    if (!ok) return;
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   };

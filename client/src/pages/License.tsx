@@ -4,6 +4,7 @@ import Layout from '../components/Layout';
 import { Card, Flash, FormField, LoadingPage, PageHeader } from '../components/ui';
 import { api } from '../api';
 import { useAuth } from '../context/AuthContext';
+import { copyText } from '../lib/clipboard';
 
 export default function License() {
   const { refresh } = useAuth();
@@ -18,8 +19,13 @@ export default function License() {
     load();
   }, []);
 
-  const copyHwid = () => {
-    navigator.clipboard?.writeText(info.hardwareId);
+  const copyHwid = async () => {
+    if (!info?.hardwareId) return;
+    const ok = await copyText(info.hardwareId);
+    if (!ok) {
+      setError('Could not copy Hardware ID — select the code and copy manually.');
+      return;
+    }
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };

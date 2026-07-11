@@ -6,6 +6,7 @@ import {
 import Layout from '../components/Layout';
 import { Card, Flash, LoadingPage, PageHeader, StatusBadge, TabBar } from '../components/ui';
 import { api } from '../api';
+import { copyText } from '../lib/clipboard';
 
 const TABS = [
   { key: 'setup', label: 'Setup', icon: Settings2 },
@@ -338,7 +339,8 @@ function GenerateTab({ cfg, flash }: { cfg: AiConfig; flash: (m: string, isErr?:
   };
 
   const copy = async () => {
-    await navigator.clipboard.writeText(script);
+    const ok = await copyText(script);
+    if (!ok) return;
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };

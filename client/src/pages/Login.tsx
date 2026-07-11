@@ -5,6 +5,7 @@ import { useAuth } from '../context/AuthContext';
 import { Loader2, Lock, User, ArrowRight, Shield, Copy, CheckCircle2, KeyRound, ArrowLeft } from 'lucide-react';
 import { FormField } from '../components/ui';
 import { BRAND_SHORT, BRAND_TAGLINE, DEFAULT_LOGO, PRODUCT_TITLE } from '../branding';
+import { copyText } from '../lib/clipboard';
 
 const publicApi = axios.create({ baseURL: '/api' });
 
@@ -196,8 +197,10 @@ function ForgotPasswordForm({ onBack, onSuccess }: { onBack: () => void; onSucce
       });
   }, []);
 
-  const copyId = () => {
-    navigator.clipboard?.writeText(panelId);
+  const copyId = async () => {
+    if (!panelId) return;
+    const ok = await copyText(panelId);
+    if (!ok) return;
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };

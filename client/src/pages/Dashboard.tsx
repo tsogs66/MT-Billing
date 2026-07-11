@@ -11,6 +11,7 @@ import { api, peso } from '../api';
 import { useRouterDevice } from '../context/RouterContext';
 import { useAuth } from '../context/AuthContext';
 import InterfaceTraffic from '../components/InterfaceTraffic';
+import { copyText } from '../lib/clipboard';
 
 interface Host {
   hostname?: string;
@@ -105,9 +106,10 @@ function SystemOverviewUnlicensed() {
     api.get(`/dashboard/router/${current.id}`).then((r) => setRouter(r.data)).catch(() => setRouter(null));
   }, [current?.id]);
 
-  const copyHwid = () => {
+  const copyHwid = async () => {
     if (!license?.hardwareId) return;
-    navigator.clipboard?.writeText(license.hardwareId);
+    const ok = await copyText(license.hardwareId);
+    if (!ok) return;
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
