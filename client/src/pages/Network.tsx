@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Share2, Shield, Route, Bot, RefreshCw, Plus, Trash2, Copy, Check, Router as RouterIcon } from 'lucide-react';
+import { Share2, Shield, Route, Bot, RefreshCw, Plus, Trash2, Copy, Check, Router as RouterIcon, Radio } from 'lucide-react';
 import Layout from '../components/Layout';
 import { Card, StatusBadge, TabBar, DataTable, Toggle } from '../components/ui';
 import { api } from '../api';
 import { useRouterDevice } from '../context/RouterContext';
 import { RoutersPanel } from './Routers';
+import { OltsPanel } from './Olts';
 import { copyText } from '../lib/clipboard';
 
 const TABS = [
   { key: 'routers', label: 'Routers', icon: RouterIcon },
+  { key: 'olt', label: 'OLT', icon: Radio },
   { key: 'wan', label: 'WAN & Failover', icon: Share2 },
   { key: 'firewall', label: 'Firewall', icon: Shield },
   { key: 'routes', label: 'Routes & VLANs', icon: Route },
@@ -30,7 +32,7 @@ function formatBytes(n: number): string {
 export default function Network() {
   const [tab, setTab] = useState(() => {
     const q = new URLSearchParams(window.location.search).get('tab');
-    return q === 'routers' || q === 'wan' || q === 'firewall' || q === 'routes' || q === 'multiwan' ? q : 'routers';
+    return q === 'routers' || q === 'olt' || q === 'wan' || q === 'firewall' || q === 'routes' || q === 'multiwan' ? q : 'routers';
   });
   const { current } = useRouterDevice();
 
@@ -38,7 +40,7 @@ export default function Network() {
     <Layout title="Network Management">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
         <TabBar tabs={[...TABS]} active={tab} onChange={setTab} />
-        {tab !== 'routers' && (
+        {tab !== 'routers' && tab !== 'olt' && (
           <span className="text-xs text-slate-500">
             {current ? (
               <>
@@ -53,14 +55,14 @@ export default function Network() {
       </div>
 
       {tab === 'routers' && <RoutersPanel />}
-
-      {tab !== 'routers' && !current ? (
+      {tab === 'olt' && <OltsPanel />}
+      {tab !== 'routers' && tab !== 'olt' && !current ? (
         <div className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 max-w-4xl">
           Select a MikroTik router with API credentials in the top bar. Network data is loaded live from that device — nothing is shown from sample/mock data.
         </div>
       ) : null}
 
-      {tab !== 'routers' && current ? (
+      {tab !== 'routers' && tab !== 'olt' && current ? (
         <>
           {tab === 'wan' && <WanFailover routerId={current.id} routerName={current.name} />}
           {tab === 'firewall' && <Firewall routerId={current.id} />}

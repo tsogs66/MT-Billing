@@ -303,6 +303,15 @@ export function migrate() {
     ['address', 'TEXT'],
     ['splitter_ratio', 'TEXT'],
     ['pon_port', 'INTEGER'],
+    ['host', 'TEXT'],
+    ['snmp_port', 'INTEGER DEFAULT 161'],
+    ['snmp_community', "TEXT DEFAULT 'public'"],
+    ['vendor', 'TEXT'],
+    ['model', 'TEXT'],
+    ['sys_name', 'TEXT'],
+    ['firmware', 'TEXT'],
+    ['last_probe_at', 'TEXT'],
+    ['probe_error', 'TEXT'],
   ];
   for (const [col, type] of napMapCols) {
     if (!columnExists('naps', col)) db.exec(`ALTER TABLE naps ADD COLUMN ${col} ${type}`);

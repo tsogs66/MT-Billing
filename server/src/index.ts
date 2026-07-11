@@ -34,6 +34,7 @@ import {
   setDhcpLeaseBlocked,
   fetchPppActiveTraffic,
 } from './mikrotik.js';
+import { probeOlt } from './olt.js';
 import { getUptime, getUptimeSummary, runUptimeChecks, startUptime } from './uptime.js';
 import { getInterfaceNames, getTrafficSnapshot } from './interfaces.js';
 import { settingsRouter } from './settings.js';
@@ -1619,7 +1620,9 @@ app.get('/api/map', async (req, res) => {
   const routerId = req.query.routerId ? Number(req.query.routerId) : null;
   const naps = db.prepare(
     `SELECT id, name, kind, lat, lng, ports, parent_id AS parentId,
-            code, status, address, splitter_ratio AS splitterRatio, pon_port AS ponPort
+            code, status, address, splitter_ratio AS splitterRatio, pon_port AS ponPort,
+            host, snmp_port AS snmpPort, snmp_community AS snmpCommunity,
+            vendor, model, sys_name AS sysName, firmware, last_probe_at AS lastProbeAt, probe_error AS probeError
      FROM naps`
   ).all();
   const clientSql = `
@@ -1728,6 +1731,179 @@ app.get('/api/map', async (req, res) => {
   });
 });
 
+// ---- OLTs (Network tab: device by IP + probe) ----
+const OLT_SELECT = `SELECT id, name, kind, lat, lng, ports, parent_id AS parentId,
+  code, status, address, splitter_ratio AS splitterRatio, pon_port AS ponPort,
+  host, snmp_port AS snmpPort, snmp_community AS snmpCommunity,
+  vendor, model, sys_name AS sysName, firmware, last_probe_at AS lastProbeAt, probe_error AS probeError
+  FROM naps WHERE kind = 'olt'`;
+
+function applyOltProbe(id: number, probe: Awaited<ReturnType<typeof probeOlt>>) {
+  const status = probe.online ? 'online' : 'offline';
+  db.prepare(
+    `UPDATE naps SET status=?, vendor=COALESCE(?, vendor), model=COALESCE(?, model),
+      sys_name=COALESCE(?, sys_name), firmware=COALESCE(?, firmware),
+      last_probe_at=?, probe_error=? WHERE id=?`
+  ).run(
+    status,
+    probe.vendor,
+    probe.model,
+    probe.sysName,
+    probe.firmware,
+    new Date().toISOString(),
+    probe.error || null,
+    id
+  );
+  return status;
+}
+
+app.get('/api/olts', async (_req, res) => {
+  const rows = db.prepare(`${OLT_SELECT} ORDER BY id`).all() as any[];
+  const out = [];
+  for (const row of rows) {
+    if (row.host) {
+      try {
+        const probe = await probeOlt({
+          host: row.host,
+          snmpPort: row.snmpPort || 161,
+          snmpCommunity: row.snmpCommunity || 'public',
+        });
+        applyOltProbe(row.id, probe);
+        out.push({
+          ...row,
+          status: probe.online ? 'online' : 'offline',
+          vendor: probe.vendor || row.vendor,
+          model: probe.model || row.model,
+          sysName: probe.sysName || row.sysName,
+          firmware: probe.firmware || row.firmware,
+          lastProbeAt: new Date().toISOString(),
+          probeError: probe.error || null,
+          live: true,
+          online: probe.online,
+        });
+        continue;
+      } catch (e: any) {
+        out.push({ ...row, status: 'offline', online: false, live: false, probeError: e?.message || 'probe failed' });
+        continue;
+      }
+    }
+    out.push({ ...row, online: row.status === 'online', live: false });
+  }
+  res.json(out);
+});
+
+app.post('/api/olts/test', async (req, res) => {
+  const b = req.body || {};
+  const host = String(b.host || '').trim();
+  if (!host) return res.status(400).json({ error: 'host / IP is required' });
+  const probe = await probeOlt({
+    host,
+    snmpPort: b.snmpPort != null ? Number(b.snmpPort) : 161,
+    snmpCommunity: b.snmpCommunity ? String(b.snmpCommunity) : 'public',
+  });
+  res.json(probe);
+});
+
+app.post('/api/olts', async (req, res) => {
+  const b = req.body || {};
+  const name = String(b.name || '').trim();
+  const host = String(b.host || '').trim();
+  if (!name) return res.status(400).json({ error: 'name is required' });
+  if (!host) return res.status(400).json({ error: 'IP address / host is required' });
+
+  const snmpPort = b.snmpPort != null ? Number(b.snmpPort) : 161;
+  const snmpCommunity = b.snmpCommunity ? String(b.snmpCommunity).trim() : 'public';
+  const ports = Number(b.ports) || 8;
+  const lat = b.lat != null ? Number(b.lat) : 15.1785;
+  const lng = b.lng != null ? Number(b.lng) : 120.5945;
+
+  const probe = await probeOlt({ host, snmpPort, snmpCommunity });
+  const status = probe.online ? 'online' : 'offline';
+  const info = db
+    .prepare(
+      `INSERT INTO naps (name, kind, lat, lng, ports, parent_id, code, status, address, host, snmp_port, snmp_community,
+        vendor, model, sys_name, firmware, last_probe_at, probe_error)
+       VALUES (?, 'olt', ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      name,
+      lat,
+      lng,
+      ports,
+      b.code ? String(b.code).trim() : null,
+      status,
+      b.address ? String(b.address).trim() : null,
+      host,
+      snmpPort,
+      snmpCommunity,
+      probe.vendor || (b.vendor ? String(b.vendor) : null),
+      probe.model || (b.model ? String(b.model) : null),
+      probe.sysName,
+      probe.firmware,
+      new Date().toISOString(),
+      probe.error || null
+    );
+
+  const row = db.prepare(`${OLT_SELECT} AND id = ?`).get(info.lastInsertRowid) as any;
+  res.status(201).json({ ...row, online: probe.online, live: true, probe });
+});
+
+app.put('/api/olts/:id', async (req, res) => {
+  const id = Number(req.params.id);
+  const ex = db.prepare("SELECT * FROM naps WHERE id = ? AND kind = 'olt'").get(id) as any;
+  if (!ex) return res.status(404).json({ error: 'not found' });
+  const b = req.body || {};
+  const host = b.host !== undefined ? String(b.host || '').trim() : ex.host;
+  const snmpPort = b.snmpPort != null ? Number(b.snmpPort) : ex.snmp_port || 161;
+  const snmpCommunity =
+    b.snmpCommunity !== undefined ? String(b.snmpCommunity || 'public').trim() : ex.snmp_community || 'public';
+
+  let probe: Awaited<ReturnType<typeof probeOlt>> | null = null;
+  let status = ex.status || 'offline';
+  if (host) {
+    probe = await probeOlt({ host, snmpPort, snmpCommunity });
+    status = probe.online ? 'online' : 'offline';
+  }
+
+  db.prepare(
+    `UPDATE naps SET name=?, lat=?, lng=?, ports=?, code=?, status=?, address=?, host=?, snmp_port=?, snmp_community=?,
+      vendor=?, model=?, sys_name=?, firmware=?, last_probe_at=?, probe_error=? WHERE id=?`
+  ).run(
+    b.name != null ? String(b.name).trim() : ex.name,
+    b.lat != null ? Number(b.lat) : ex.lat,
+    b.lng != null ? Number(b.lng) : ex.lng,
+    b.ports != null ? Number(b.ports) : ex.ports,
+    b.code !== undefined ? (b.code ? String(b.code).trim() : null) : ex.code,
+    status,
+    b.address !== undefined ? (b.address ? String(b.address).trim() : null) : ex.address,
+    host || null,
+    snmpPort,
+    snmpCommunity,
+    probe?.vendor || (b.vendor !== undefined ? b.vendor || null : ex.vendor),
+    probe?.model || (b.model !== undefined ? b.model || null : ex.model),
+    probe?.sysName || ex.sys_name,
+    probe?.firmware || ex.firmware,
+    probe ? new Date().toISOString() : ex.last_probe_at,
+    probe?.error || null,
+    id
+  );
+
+  const row = db.prepare(`${OLT_SELECT} AND id = ?`).get(id) as any;
+  res.json({ ...row, online: status === 'online', live: !!probe, probe });
+});
+
+app.delete('/api/olts/:id', (req, res) => {
+  const id = Number(req.params.id);
+  const ex = db.prepare("SELECT * FROM naps WHERE id = ? AND kind = 'olt'").get(id) as any;
+  if (!ex) return res.status(404).json({ error: 'not found' });
+  const children = (db.prepare('SELECT COUNT(*) AS c FROM naps WHERE parent_id = ?').get(id) as any).c;
+  if (children > 0) return res.status(400).json({ error: 'Remove child NAPs first.' });
+  db.prepare('DELETE FROM naps WHERE id = ?').run(id);
+  db.prepare('DELETE FROM map_connectors WHERE kind = ? AND (from_id = ? OR to_id = ?)').run('server-olt', id, id);
+  db.prepare('DELETE FROM map_connectors WHERE kind = ? AND (from_id = ? OR to_id = ?)').run('olt-nap', id, id);
+  res.json({ ok: true });
+});
+
 // ---- NAPs (for the Add-User NAP/PLC selector) ----
 app.get('/api/naps', (req, res) => {
   const all = req.query.all === '1';
@@ -1748,8 +1924,8 @@ app.post('/api/naps', (req, res) => {
   if (!b.name?.trim()) return res.status(400).json({ error: 'name is required' });
   const info = db
     .prepare(
-      `INSERT INTO naps (name, kind, lat, lng, ports, parent_id, code, status, address, splitter_ratio, pon_port)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO naps (name, kind, lat, lng, ports, parent_id, code, status, address, splitter_ratio, pon_port, host, snmp_port, snmp_community)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       String(b.name).trim(),
@@ -1762,13 +1938,18 @@ app.post('/api/naps', (req, res) => {
       b.status || 'active',
       b.address ? String(b.address).trim() : null,
       b.splitterRatio ? String(b.splitterRatio).trim() : null,
-      b.ponPort != null && b.ponPort !== '' ? Number(b.ponPort) : null
+      b.ponPort != null && b.ponPort !== '' ? Number(b.ponPort) : null,
+      b.host ? String(b.host).trim() : null,
+      b.snmpPort != null ? Number(b.snmpPort) : 161,
+      b.snmpCommunity ? String(b.snmpCommunity).trim() : 'public'
     );
   res.status(201).json(
     db
       .prepare(
         `SELECT id, name, kind, lat, lng, ports, parent_id AS parentId, code, status, address,
-                splitter_ratio AS splitterRatio, pon_port AS ponPort FROM naps WHERE id = ?`
+                splitter_ratio AS splitterRatio, pon_port AS ponPort, host, snmp_port AS snmpPort,
+                snmp_community AS snmpCommunity, vendor, model, sys_name AS sysName, firmware,
+                last_probe_at AS lastProbeAt, probe_error AS probeError FROM naps WHERE id = ?`
       )
       .get(info.lastInsertRowid)
   );
@@ -1780,7 +1961,8 @@ app.put('/api/naps/:id', (req, res) => {
   if (!ex) return res.status(404).json({ error: 'not found' });
   const b = req.body || {};
   db.prepare(
-    `UPDATE naps SET name=?, kind=?, lat=?, lng=?, ports=?, parent_id=?, code=?, status=?, address=?, splitter_ratio=?, pon_port=? WHERE id=?`
+    `UPDATE naps SET name=?, kind=?, lat=?, lng=?, ports=?, parent_id=?, code=?, status=?, address=?, splitter_ratio=?, pon_port=?,
+      host=?, snmp_port=?, snmp_community=? WHERE id=?`
   ).run(
     b.name ?? ex.name,
     b.kind ?? ex.kind,
@@ -1801,13 +1983,18 @@ app.put('/api/naps/:id', (req, res) => {
         ? Number(b.ponPort)
         : null
       : ex.pon_port,
+    b.host !== undefined ? (b.host ? String(b.host).trim() : null) : ex.host,
+    b.snmpPort != null ? Number(b.snmpPort) : ex.snmp_port ?? 161,
+    b.snmpCommunity !== undefined ? String(b.snmpCommunity || 'public').trim() : ex.snmp_community ?? 'public',
     id
   );
   res.json(
     db
       .prepare(
         `SELECT id, name, kind, lat, lng, ports, parent_id AS parentId, code, status, address,
-                splitter_ratio AS splitterRatio, pon_port AS ponPort FROM naps WHERE id = ?`
+                splitter_ratio AS splitterRatio, pon_port AS ponPort, host, snmp_port AS snmpPort,
+                snmp_community AS snmpCommunity, vendor, model, sys_name AS sysName, firmware,
+                last_probe_at AS lastProbeAt, probe_error AS probeError FROM naps WHERE id = ?`
       )
       .get(id)
   );

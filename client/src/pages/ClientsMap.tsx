@@ -15,6 +15,8 @@ interface Nap {
   id: number; name: string; kind: string; lat: number; lng: number; ports: number;
   parentId: number | null; code?: string | null; status?: string; address?: string | null;
   splitterRatio?: string | null; ponPort?: number | null;
+  host?: string | null; vendor?: string | null; model?: string | null; sysName?: string | null;
+  firmware?: string | null; lastProbeAt?: string | null; probeError?: string | null;
 }
 interface Connector { id: number; kind: string; fromId: number; toId: number; points: [number, number][] }
 interface Client {
@@ -48,7 +50,7 @@ function clientState(c: Client): ClientState {
 
 const CLIENT_COLORS: Record<ClientState, { fill: string; glow: string }> = {
   online: { fill: '#22c55e', glow: 'rgba(34,197,94,0.55)' },
-  offline: { fill: '#f97316', glow: 'rgba(249,115,22,0.45)' },
+  offline: { fill: '#ef4444', glow: 'rgba(239,68,68,0.45)' },
   disabled: { fill: '#ef4444', glow: 'rgba(239,68,68,0.35)' },
 };
 
@@ -90,11 +92,15 @@ function serverIcon(name: string, active = false) {
 }
 
 /** OLT — violet square badge */
-function oltIcon(name: string, active = false) {
+function oltIcon(name: string, active = false, online?: boolean | null) {
+  const statusDot =
+    online == null
+      ? ''
+      : `<span class="map-status-dot ${online ? 'is-online' : 'is-offline'}"></span>`;
   return L.divIcon({
     className: 'map-equip-marker',
     html: `<div class="map-equip-row ${active ? 'is-active' : ''}">
-      <span class="map-badge map-badge-olt">OLT</span>
+      <span class="map-badge map-badge-olt">OLT${statusDot}</span>
       <span class="map-equip-label">${escapeHtml(name)}</span>
     </div>`,
     iconSize: [120, 28],
@@ -136,8 +142,8 @@ function onuIcon(state: ClientState, hovered = false, selected = false) {
   });
 }
 
-function equipIcon(name: string, kind: string, active = false) {
-  if (kind === 'olt') return oltIcon(name, active);
+function equipIcon(name: string, kind: string, active = false, online?: boolean | null) {
+  if (kind === 'olt') return oltIcon(name, active, online);
   return napIcon(name, active);
 }
 
@@ -481,7 +487,7 @@ export default function ClientsMap() {
               />
             </div>
             <span className="hidden lg:inline text-xs text-slate-400 max-w-xs">
-              Clients: Online green · Offline orange · Disabled red · Lines: Server → OLT → NAP → Client
+              Clients: Online green · Offline/Inactive red · Lines: Server → OLT → NAP → Client
             </span>
           </div>
         </div>
@@ -522,19 +528,27 @@ export default function ClientsMap() {
                 {olts.length === 0 ? (
                   <p className="text-sm text-slate-400 py-4 text-center">No OLT configured.</p>
                 ) : (
-                  olts.map((o) => (
+                  olts.map((o) => {
+                    const live = o.host ? (o.status === 'online' ? 'online' : o.status === 'offline' ? 'offline' : o.status || '—') : (o.status || 'active');
+                    return (
                     <TopoRow
                       key={o.id}
                       name={o.name}
-                      sub={`PONs: ${o.ports} · ${o.status || 'active'}`}
+                      sub={`${o.host ? `${o.host} · ` : ''}PONs: ${o.ports} · ${live}${o.vendor ? ` · ${o.vendor}` : ''}`}
                       right={
-                        <div className="flex gap-2">
+                        <div className="flex gap-2 items-center">
+                          {o.host && (
+                            <span className={`text-[10px] font-semibold uppercase ${o.status === 'online' ? 'text-emerald-600' : 'text-rose-600'}`}>
+                              {o.status === 'online' ? 'Online' : 'Offline'}
+                            </span>
+                          )}
                           <button type="button" className="text-xs text-sky-600" onClick={() => setEditNap({ ...o })}>Edit</button>
                           <button type="button" className="text-xs text-rose-600" onClick={() => deleteNap(o.id)}>Delete</button>
                         </div>
                       }
                     />
-                  ))
+                    );
+                  })
                 )}
               </TopoPanel>
               <TopoPanel
@@ -727,10 +741,19 @@ export default function ClientsMap() {
                 icon={equipIcon(
                   n.code || n.name,
                   n.kind,
-                  highlightChain?.napId === n.id || (n.kind === 'olt' && highlightChain?.oltId === n.id)
+                  highlightChain?.oltId === n.id || highlightChain?.napId === n.id,
+                  n.kind === 'olt' && n.host ? n.status === 'online' : null
                 )}
               >
-                <Popup><b>{n.name}</b> ({n.kind.toUpperCase()})</Popup>
+                <Popup>
+                  <b>{n.name}</b><br />
+                  {n.kind === 'olt' ? 'OLT' : 'NAP'}
+                  {n.host ? <><br />IP: {n.host}</> : null}
+                  {n.kind === 'olt' && n.host ? (
+                    <><br />Status: <b style={{ color: n.status === 'online' ? '#16a34a' : '#dc2626' }}>{n.status === 'online' ? 'Online' : 'Offline'}</b></>
+                  ) : null}
+                  {n.vendor || n.model ? <><br />{[n.vendor, n.model].filter(Boolean).join(' · ')}</> : null}
+                </Popup>
               </Marker>
             ))}
 
@@ -863,10 +886,15 @@ export default function ClientsMap() {
                 <FormField label="Name" required>
                   <input className="input" value={editNap.name || ''} onChange={(e) => setEditNap({ ...editNap, name: e.target.value })} />
                 </FormField>
+                <FormField label="IP Address / Host" hint="Optional — set in Network → OLT for live status probe.">
+                  <input className="input font-mono" value={editNap.host || ''} onChange={(e) => setEditNap({ ...editNap, host: e.target.value })} placeholder="192.168.1.10" />
+                </FormField>
                 <div className="grid grid-cols-2 gap-3 items-end">
                   <FormField label="Status">
                     <select className="input" value={editNap.status || 'active'} onChange={(e) => setEditNap({ ...editNap, status: e.target.value })}>
                       <option value="active">active</option>
+                      <option value="online">online</option>
+                      <option value="offline">offline</option>
                       <option value="inactive">inactive</option>
                     </select>
                   </FormField>

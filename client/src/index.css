@@ -479,6 +479,22 @@ body {
   font-size: 8px;
   background: #7c3aed;
   box-shadow: 0 1px 4px rgba(124, 58, 237, 0.45);
+  position: relative;
+}
+.map-status-dot {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
+  border: 1.5px solid #fff;
+}
+.map-status-dot.is-online {
+  background: #22c55e;
+}
+.map-status-dot.is-offline {
+  background: #ef4444;
 }
 .map-badge-server {
   width: 22px;
