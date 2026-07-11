@@ -2,21 +2,25 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
+import { useCompany } from '../context/CompanyContext';
 import { Loader2, Lock, User, ArrowRight, Shield, Copy, CheckCircle2, KeyRound, ArrowLeft } from 'lucide-react';
 import { FormField } from '../components/ui';
-import { BRAND_SHORT, BRAND_TAGLINE, DEFAULT_LOGO, PRODUCT_TITLE } from '../branding';
+import Logo from '../components/Logo';
+import { BRAND_SHORT, PRODUCT_TITLE } from '../branding';
 import { copyText } from '../lib/clipboard';
 
 const publicApi = axios.create({ baseURL: '/api' });
 
 export default function Login() {
   const { login } = useAuth();
+  const { company } = useCompany();
   const nav = useNavigate();
   const [username, setUsername] = useState('admin');
   const [password, setPassword] = useState('admin123');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [forgotOpen, setForgotOpen] = useState(false);
+  const businessName = company?.name?.trim() || BRAND_SHORT;
 
   useEffect(() => {
     document.title = PRODUCT_TITLE;
@@ -48,15 +52,7 @@ export default function Login() {
 
       <div className="relative z-10 flex flex-1 flex-col lg:flex-row min-h-screen">
         <div className="hidden lg:flex flex-1 flex-col justify-between p-12 xl:p-16">
-          <div className="flex flex-col items-start gap-4">
-            <div className="w-28 h-28 rounded-2xl bg-white/95 flex items-center justify-center overflow-hidden shadow-glow ring-1 ring-white/20">
-              <img src={DEFAULT_LOGO} alt={BRAND_SHORT} className="h-full w-full object-contain object-center p-2" />
-            </div>
-            <div>
-              <div className="text-3xl font-bold text-white tracking-tight">{BRAND_SHORT}</div>
-              <div className="text-slate-400 text-sm mt-1">{BRAND_TAGLINE}</div>
-            </div>
-          </div>
+          <Logo size="hero" brandMode variant="dark" className="items-center gap-4" />
           <div className="max-w-lg animate-fade-in-up">
             <h1 className="text-4xl xl:text-5xl font-bold text-white tracking-tight leading-tight mb-4">
               ISP Business,<br />
@@ -84,22 +80,21 @@ export default function Login() {
 
         <div className="flex flex-1 items-center justify-center p-6 sm:p-8">
           <div className="w-full max-w-md animate-scale-in">
-            <div className="lg:hidden mb-8 flex flex-col items-center text-center gap-3">
-              <div className="w-24 h-24 rounded-2xl bg-white/95 flex items-center justify-center overflow-hidden shadow-glow">
-                <img src={DEFAULT_LOGO} alt={BRAND_SHORT} className="h-full w-full object-contain object-center p-2" />
-              </div>
-              <div>
-                <div className="text-2xl font-bold text-white">{BRAND_SHORT}</div>
-                <div className="text-slate-400 text-sm">{BRAND_TAGLINE}</div>
-              </div>
+            <div className="lg:hidden mb-8 flex justify-center">
+              <Logo size="hero" brandMode variant="dark" className="items-center gap-3 max-w-full" />
             </div>
 
             <div className="theme-modal bg-white/95 backdrop-blur-xl rounded-3xl shadow-2xl border border-white/20 p-8 sm:p-10">
               {!forgotOpen ? (
                 <>
-                  <div className="mb-8">
-                    <h2 className="text-2xl font-bold text-slate-900 tracking-tight">{BRAND_SHORT}</h2>
-                    <p className="text-slate-500 text-sm mt-1">{BRAND_TAGLINE}</p>
+                  <div className="mb-8 min-w-0">
+                    <h2
+                      className="font-bold text-slate-900 tracking-tight leading-tight break-words [overflow-wrap:anywhere] text-[clamp(1.15rem,0.85rem+2.2vw,1.75rem)]"
+                      title={businessName}
+                    >
+                      {businessName}
+                    </h2>
+                    <p className="text-slate-500 text-sm mt-1">Sign in to continue</p>
                   </div>
 
                   <form onSubmit={submit} className="space-y-5">

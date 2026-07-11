@@ -19,7 +19,7 @@ const SIZES = {
   sm: { box: 'w-9 h-9', title: 'text-sm', sub: 'text-[10px]', img: 'h-full w-full' },
   md: { box: 'w-11 h-11', title: 'text-base', sub: 'text-[11px]', img: 'h-full w-full' },
   lg: { box: 'w-14 h-14', title: 'text-lg', sub: 'text-xs', img: 'h-full w-full' },
-  hero: { box: 'w-24 h-24 sm:w-28 sm:h-28', title: 'text-2xl', sub: 'text-sm', img: 'h-full w-full' },
+  hero: { box: 'w-24 h-24 sm:w-28 sm:h-28', title: 'text-2xl sm:text-3xl', sub: 'text-sm', img: 'h-full w-full' },
 };
 
 export default function Logo({
@@ -54,8 +54,10 @@ export default function Logo({
       </div>
       {showText && (
         <div className="min-w-0">
-          <div className={`font-bold tracking-tight leading-tight truncate ${s.title} ${textMain}`}>{name}</div>
-          <div className={`${s.sub} ${textSub} truncate`} title={subtitle}>
+          <div className={`font-bold tracking-tight leading-tight ${s.title} ${textMain} ${brandMode || size === 'hero' ? 'break-words' : 'truncate'}`}>
+            {name}
+          </div>
+          <div className={`${s.sub} ${textSub} ${brandMode ? '' : 'truncate'}`} title={subtitle}>
             {brandMode ? subtitle : size === 'sm' ? 'v1.0.0 · ts0gs' : subtitle}
           </div>
         </div>
