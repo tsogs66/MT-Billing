@@ -323,7 +323,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
         <UserFormModal
           service={service}
           profiles={profiles}
-          naps={undefined}
+          routerId={current?.id}
           editUser={null}
           onClose={() => setShowAdd(false)}
           onSaved={() => {
@@ -338,7 +338,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
         <UserFormModal
           service={service}
           profiles={profiles}
-          naps={undefined}
+          routerId={current?.id}
           editUser={editFor}
           onClose={() => setEditFor(null)}
           onSaved={() => {
@@ -522,13 +522,14 @@ function SimpleTable({ columns, rows }: { columns: string[]; rows: React.ReactNo
 function UserFormModal({
   service,
   profiles,
+  routerId,
   editUser,
   onClose,
   onSaved,
 }: {
   service: string;
   profiles: any[];
-  naps?: any;
+  routerId?: number;
   editUser?: PUser | null;
   onClose: () => void;
   onSaved: () => void;
@@ -541,6 +542,7 @@ function UserFormModal({
     profile: defaultPlan,
     subscription_due: '',
     expiration_profile: 'default',
+    account_number: '',
     customer_name: '',
     address: '',
     contact: '',
@@ -550,6 +552,7 @@ function UserFormModal({
     lat: DEFAULT_PIN[0] as number | null,
     lng: DEFAULT_PIN[1] as number | null,
   });
+  const [mikrotikComment, setMikrotikComment] = useState('');
   const [showPass, setShowPass] = useState(false);
   const [naps, setNaps] = useState<any[]>([]);
   const [showLoc, setShowLoc] = useState(false);
@@ -567,6 +570,7 @@ function UserFormModal({
           profile: u.profile || defaultPlan,
           subscription_due: (u.subscription_due || '').slice(0, 10),
           expiration_profile: u.expiration_profile || 'default',
+          account_number: u.account_number || '',
           customer_name: u.customer_name || '',
           address: u.address || '',
           contact: u.contact || '',
@@ -576,10 +580,24 @@ function UserFormModal({
           lat: u.lat ?? null,
           lng: u.lng ?? null,
         });
+        setMikrotikComment(u.mikrotikComment || '');
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    const raw = form.account_number;
+    const accountNumber = /^\d+$/.test(raw) ? Number(raw) : raw || 0;
+    if (!isEdit || form.account_number) {
+      setMikrotikComment(JSON.stringify({
+        plan: form.profile,
+        dueDate: form.subscription_due || '',
+        accountNumber: isEdit ? accountNumber : 0,
+        expireProfile: form.expiration_profile || 'default',
+      }));
+    }
+  }, [isEdit, form.profile, form.subscription_due, form.expiration_profile, form.account_number]);
 
   const set = (patch: Partial<typeof form>) => setForm((f) => ({ ...f, ...patch }));
   const selectedNap = naps.find((n) => String(n.id) === String(form.nap_id));
@@ -595,11 +613,18 @@ function UserFormModal({
     setSaving(true);
     setError('');
     try {
-      const payload = { ...form, nap_id: form.nap_id ? Number(form.nap_id) : null, service };
+      const payload = {
+        ...form,
+        nap_id: form.nap_id ? Number(form.nap_id) : null,
+        router_id: routerId || undefined,
+        service,
+      };
       if (isEdit) {
-        await api.put(`/pppoe/users/${editUser!.id}`, payload);
+        const r = await api.put(`/pppoe/users/${editUser!.id}`, payload);
+        if (r.data?.mikrotikComment) setMikrotikComment(r.data.mikrotikComment);
       } else {
-        await api.post('/pppoe/users', payload);
+        const r = await api.post('/pppoe/users', payload);
+        if (r.data?.mikrotikComment) setMikrotikComment(r.data.mikrotikComment);
       }
       onSaved();
     } catch (e: any) {
@@ -663,6 +688,19 @@ function UserFormModal({
               </select>
             </FormField>
           </div>
+
+          {isEdit && (
+            <FormField label="Account Number (Read-only)">
+              <input className="input bg-slate-50 text-slate-600" value={form.account_number} readOnly />
+            </FormField>
+          )}
+
+          <FormField label="MikroTik PPP Secret Comment">
+            <div className="input bg-slate-50 text-slate-600 font-mono text-xs break-all min-h-[2.5rem] py-2">
+              {mikrotikComment || '—'}
+            </div>
+            <p className="text-xs text-slate-400 mt-1">Synced to RouterOS <code className="text-[11px]">/ppp/secret</code> comment on save.</p>
+          </FormField>
 
           <div className="pt-1 border-t border-slate-100" />
           <h4 className="font-semibold text-slate-800">Customer Information (Optional)</h4>
