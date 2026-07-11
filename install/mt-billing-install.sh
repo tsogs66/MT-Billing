@@ -122,6 +122,8 @@ WantedBy=multi-user.target
 EOF
 cat >/etc/sudoers.d/mt-billing <<EOF
 Defaults:${SVC_USER_FOR_SUDO} !requiretty
+${SVC_USER_FOR_SUDO} ALL=(root) NOPASSWD: /bin/true
+${SVC_USER_FOR_SUDO} ALL=(root) NOPASSWD: /usr/bin/true
 ${SVC_USER_FOR_SUDO} ALL=(root) NOPASSWD: /bin/systemctl start mt-billing-panel-update.service
 ${SVC_USER_FOR_SUDO} ALL=(root) NOPASSWD: /bin/systemctl start --no-block mt-billing-panel-update.service
 ${SVC_USER_FOR_SUDO} ALL=(root) NOPASSWD: /usr/bin/systemctl start mt-billing-panel-update.service

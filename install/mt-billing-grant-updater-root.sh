@@ -79,11 +79,14 @@ StandardError=journal
 WantedBy=multi-user.target
 EOF
 
-# Passwordless sudo for the API service user — start oneshot OR run update script
+# Passwordless sudo for the API service user — start oneshot OR run update script.
+# /bin/true is included so older panel builds that probed `sudo -n true` still work.
 cat >"$SUDOERS_FILE" <<EOF
 # MT-Billing — Application Updater root privilege
 # Managed by install/mt-billing-grant-updater-root.sh — do not edit by hand
 Defaults:${svc_user} !requiretty
+${svc_user} ALL=(root) NOPASSWD: /bin/true
+${svc_user} ALL=(root) NOPASSWD: /usr/bin/true
 ${svc_user} ALL=(root) NOPASSWD: /bin/systemctl start mt-billing-panel-update.service
 ${svc_user} ALL=(root) NOPASSWD: /bin/systemctl start --no-block mt-billing-panel-update.service
 ${svc_user} ALL=(root) NOPASSWD: /usr/bin/systemctl start mt-billing-panel-update.service

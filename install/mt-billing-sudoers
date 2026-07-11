@@ -1,7 +1,10 @@
 # Allow the MT-Billing API service user to trigger a root oneshot update.
 # Installed to /etc/sudoers.d/mt-billing by grant/install/update scripts.
 # Placeholders: service user is rewritten for the actual User= in mt-billing-api.service.
+# /bin/true is allowed so older panel builds that probed `sudo -n true` still work.
 Defaults:mtbilling !requiretty
+mtbilling ALL=(root) NOPASSWD: /bin/true
+mtbilling ALL=(root) NOPASSWD: /usr/bin/true
 mtbilling ALL=(root) NOPASSWD: /bin/systemctl start mt-billing-panel-update.service
 mtbilling ALL=(root) NOPASSWD: /bin/systemctl start --no-block mt-billing-panel-update.service
 mtbilling ALL=(root) NOPASSWD: /usr/bin/systemctl start mt-billing-panel-update.service

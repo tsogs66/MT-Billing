@@ -314,26 +314,25 @@ export async function applyUpdate(): Promise<{
   };
 
   /** Prefer root oneshot via sudo+systemctl so the API user can update. */
-  const trySystemdUpdate = (): boolean => {
+  const trySystemdUpdate = async (): Promise<boolean> => {
+    const unitFile = '/etc/systemd/system/mt-billing-panel-update.service';
+    if (!fs.existsSync(unitFile)) return false;
     try {
-      const child = spawn(
-        'sudo',
-        ['-n', 'systemctl', 'start', '--no-block', unit],
-        {
-          detached: true,
-          stdio: 'ignore',
-          env: {
-            ...process.env,
-            INSTALL_DIR: installDir,
-            REPO_URL: UPDATE_REPO.gitUrl,
-            REPO_BRANCH: UPDATE_REPO.branch,
-            var_install_dir: installDir,
-            var_repo_url: UPDATE_REPO.gitUrl,
-            var_repo_branch: UPDATE_REPO.branch,
-          },
-        }
-      );
-      child.unref();
+      // Must use the exact commands allowed in install/mt-billing-sudoers /
+      // mt-billing-grant-updater-root.sh — do NOT probe with `sudo -n true`
+      // (that is not permitted and falsely reports “needs root”).
+      await execFileAsync('sudo', ['-n', 'systemctl', 'start', '--no-block', unit], {
+        timeout: 20_000,
+        env: {
+          ...process.env,
+          INSTALL_DIR: installDir,
+          REPO_URL: UPDATE_REPO.gitUrl,
+          REPO_BRANCH: UPDATE_REPO.branch,
+          var_install_dir: installDir,
+          var_repo_url: UPDATE_REPO.gitUrl,
+          var_repo_branch: UPDATE_REPO.branch,
+        },
+      });
       return true;
     } catch {
       return false;
@@ -341,7 +340,7 @@ export async function applyUpdate(): Promise<{
   };
 
   /** Fallback: sudo the update script directly (needs sudoers or root). */
-  const trySudoScript = (): boolean => {
+  const trySudoScript = async (): Promise<boolean> => {
     if (!script) return false;
     try {
       fs.mkdirSync(path.dirname(logFile), { recursive: true });
@@ -361,6 +360,27 @@ export async function applyUpdate(): Promise<{
           UPDATE_STARTED_AT: job.startedAt || new Date().toISOString(),
         },
       });
+
+      // If sudo rejects the command it exits almost immediately with non-zero.
+      const early = await new Promise<'ok' | 'fail'>((resolve) => {
+        let settled = false;
+        const done = (v: 'ok' | 'fail') => {
+          if (settled) return;
+          settled = true;
+          resolve(v);
+        };
+        const timer = setTimeout(() => done('ok'), 1500);
+        child.once('error', () => {
+          clearTimeout(timer);
+          done('fail');
+        });
+        child.once('exit', (code) => {
+          clearTimeout(timer);
+          done(code === 0 ? 'ok' : 'fail');
+        });
+      });
+
+      if (early === 'fail') return false;
       child.unref();
       return true;
     } catch {
@@ -369,16 +389,7 @@ export async function applyUpdate(): Promise<{
   };
 
   if (script || fs.existsSync('/etc/systemd/system/mt-billing-panel-update.service')) {
-    // Probe passwordless sudo for the API service user
-    let sudoOk = false;
-    try {
-      await execFileAsync('sudo', ['-n', 'true'], { timeout: 5000 });
-      sudoOk = true;
-    } catch {
-      sudoOk = false;
-    }
-
-    if (sudoOk && trySystemdUpdate()) {
+    if (await trySystemdUpdate()) {
       return {
         ok: true,
         queued: true,
@@ -389,7 +400,7 @@ export async function applyUpdate(): Promise<{
       };
     }
 
-    if (sudoOk && trySudoScript()) {
+    if (await trySudoScript()) {
       return {
         ok: true,
         queued: true,
