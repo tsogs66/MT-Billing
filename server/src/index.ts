@@ -50,6 +50,8 @@ import {
   markPaymentLinkPaid,
   listPaymentLinks,
   ensureFreshPayLink,
+  resolvePublicBaseUrl,
+  normalizeBaseUrl,
 } from './billing.js';
 import {
   startUsageScheduler,
@@ -987,7 +989,43 @@ app.post('/api/pppoe/users/:id/payment', async (req, res) => {
 
 // ---- Payment links ----
 app.get('/api/payment-links', (_req, res) => {
-  res.json({ links: listPaymentLinks(200) });
+  const resolved = resolvePublicBaseUrl();
+  res.json({
+    links: listPaymentLinks(200),
+    publicBaseUrl: resolved.baseUrl || null,
+    source: resolved.source,
+    warning: resolved.warning || null,
+  });
+});
+
+app.get('/api/payment-links/config', (_req, res) => {
+  const app = db.prepare('SELECT public_base_url, ngrok_url, ngrok_status FROM app_settings WHERE id = 1').get() as any;
+  const resolved = resolvePublicBaseUrl();
+  res.json({
+    publicBaseUrl: app?.public_base_url || '',
+    envPublicBaseUrl: process.env.PUBLIC_BASE_URL || null,
+    ngrokUrl: app?.ngrok_status === 'running' ? app?.ngrok_url || null : null,
+    effective: resolved.baseUrl || null,
+    source: resolved.source,
+    warning: resolved.warning || null,
+  });
+});
+
+app.put('/api/payment-links/config', (req, res) => {
+  const raw = req.body?.publicBaseUrl ?? req.body?.public_base_url;
+  const normalized = raw === '' || raw == null ? null : normalizeBaseUrl(String(raw));
+  if (raw && String(raw).trim() && !normalized) {
+    return res.status(400).json({ error: 'Invalid public URL. Example: https://billing.example.com' });
+  }
+  db.prepare('UPDATE app_settings SET public_base_url = ? WHERE id = 1').run(normalized);
+  const resolved = resolvePublicBaseUrl();
+  res.json({
+    ok: true,
+    publicBaseUrl: normalized || '',
+    effective: resolved.baseUrl || null,
+    source: resolved.source,
+    warning: resolved.warning || null,
+  });
 });
 
 app.post('/api/payment-links', (req, res) => {
@@ -995,14 +1033,13 @@ app.post('/api/payment-links', (req, res) => {
     const b = req.body || {};
     const userId = Number(b.userId || b.pppoe_user_id);
     if (!userId) return res.status(400).json({ error: 'userId required' });
-    const appSettings = db.prepare('SELECT ngrok_url FROM app_settings WHERE id = 1').get() as { ngrok_url?: string } | undefined;
-    const baseUrl = String(b.baseUrl || process.env.PUBLIC_BASE_URL || appSettings?.ngrok_url || '').trim() || undefined;
+    // Optional client hint (panel origin) — ignored when a public URL is configured
     const link = createPaymentLink({
       pppoeUserId: userId,
       months: b.months,
       amount: b.amount,
       ttlHours: b.ttlHours,
-      baseUrl,
+      baseUrl: b.baseUrl || b.fallbackOrigin || undefined,
     });
     res.status(201).json(link);
   } catch (e: any) {
@@ -1012,9 +1049,10 @@ app.post('/api/payment-links', (req, res) => {
 
 app.post('/api/payment-links/for-user/:id', (req, res) => {
   try {
-    const appSettings = db.prepare('SELECT ngrok_url FROM app_settings WHERE id = 1').get() as { ngrok_url?: string } | undefined;
-    const baseUrl = String(req.body?.baseUrl || process.env.PUBLIC_BASE_URL || appSettings?.ngrok_url || '').trim() || undefined;
-    const link = ensureFreshPayLink(Number(req.params.id), baseUrl);
+    const link = ensureFreshPayLink(
+      Number(req.params.id),
+      req.body?.baseUrl || req.body?.fallbackOrigin || undefined
+    );
     res.json(link);
   } catch (e: any) {
     res.status(400).json({ error: e?.message || 'Could not create link' });

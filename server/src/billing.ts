@@ -2,6 +2,87 @@ import crypto from 'crypto';
 import { db } from './db.js';
 import { updatePppSecret, setPppSecretEnabled, buildPppSecretComment } from './mikrotik.js';
 
+/** Normalize a base URL (trim, no trailing slash, ensure scheme). */
+export function normalizeBaseUrl(raw?: string | null): string | undefined {
+  let s = String(raw || '').trim().replace(/\/$/, '');
+  if (!s) return undefined;
+  if (!/^https?:\/\//i.test(s)) s = `https://${s}`;
+  try {
+    const u = new URL(s);
+    if (!u.hostname) return undefined;
+    return `${u.protocol}//${u.host}`;
+  } catch {
+    return undefined;
+  }
+}
+
+/** True for localhost / RFC1918 hosts — not reachable by subscribers on the internet. */
+export function isPrivateBaseUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    if (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host.endsWith('.local')) return true;
+    if (/^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)) return true;
+    if (/^192\.168\.\d{1,3}\.\d{1,3}$/.test(host)) return true;
+    if (/^172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}$/.test(host)) return true;
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Public base URL for subscriber pay links (SMS/email/share).
+ * Prefer configured public URL over LAN panel origin.
+ */
+export function resolvePublicBaseUrl(preferred?: string | null): {
+  baseUrl?: string;
+  source: 'public_base_url' | 'env' | 'ngrok' | 'preferred' | 'none';
+  warning?: string;
+} {
+  const app = db
+    .prepare('SELECT public_base_url, ngrok_url, ngrok_status FROM app_settings WHERE id = 1')
+    .get() as { public_base_url?: string; ngrok_url?: string; ngrok_status?: string } | undefined;
+
+  const ordered: { url?: string; source: 'public_base_url' | 'env' | 'ngrok' | 'preferred' }[] = [
+    { url: normalizeBaseUrl(app?.public_base_url), source: 'public_base_url' },
+    { url: normalizeBaseUrl(process.env.PUBLIC_BASE_URL), source: 'env' },
+    {
+      url:
+        app?.ngrok_status === 'running' ? normalizeBaseUrl(app?.ngrok_url) : undefined,
+      source: 'ngrok',
+    },
+    { url: normalizeBaseUrl(preferred), source: 'preferred' },
+  ];
+
+  const publicHit = ordered.find((c) => c.url && !isPrivateBaseUrl(c.url!));
+  if (publicHit?.url) return { baseUrl: publicHit.url, source: publicHit.source };
+
+  const anyHit = ordered.find((c) => c.url);
+  if (anyHit?.url) {
+    return {
+      baseUrl: anyHit.url,
+      source: anyHit.source,
+      warning:
+        'Pay links use a local/private address. Set a public URL (domain, Cloudflare Tunnel, or ngrok) so subscribers can open them from anywhere.',
+    };
+  }
+  return {
+    baseUrl: undefined,
+    source: 'none',
+    warning: 'No public pay portal URL configured. Set one under Payment Links or System Settings.',
+  };
+}
+
+export function absolutePayUrl(pathOrToken: string, preferred?: string | null): string {
+  const path = pathOrToken.startsWith('/pay/')
+    ? pathOrToken
+    : pathOrToken.startsWith('/')
+      ? pathOrToken
+      : `/pay/${pathOrToken}`;
+  const { baseUrl } = resolvePublicBaseUrl(preferred);
+  return baseUrl ? `${baseUrl}${path}` : path;
+}
+
 export function addMonthsPreserveDay(iso: string, months: number): string {
   const raw = String(iso || '').slice(0, 10);
   const [y, m, d] = raw.split('-').map(Number);
@@ -183,12 +264,16 @@ export function createPaymentLink(opts: {
   ).run(opts.pppoeUserId, token, amount, months, expiresAt);
 
   const path = `/pay/${token}`;
-  const url = opts.baseUrl ? `${opts.baseUrl.replace(/\/$/, '')}${path}` : path;
+  const resolved = resolvePublicBaseUrl(opts.baseUrl);
+  const url = resolved.baseUrl ? `${resolved.baseUrl}${path}` : path;
   return {
     id: Number(info.lastInsertRowid),
     token,
     path,
     url,
+    baseUrl: resolved.baseUrl || null,
+    source: resolved.source,
+    warning: resolved.warning || null,
     amount,
     months,
     expiresAt,
@@ -256,7 +341,8 @@ export async function markPaymentLinkPaid(token: string, externalRef?: string) {
 }
 
 export function listPaymentLinks(limit = 100) {
-  return db
+  const resolved = resolvePublicBaseUrl();
+  const rows = db
     .prepare(
       `SELECT pl.id, pl.token, pl.amount, pl.months, pl.status, pl.expires_at AS expiresAt, pl.paid_at AS paidAt,
               pl.created_at AS createdAt, pl.external_ref AS externalRef,
@@ -265,7 +351,16 @@ export function listPaymentLinks(limit = 100) {
        JOIN pppoe_users u ON u.id = pl.pppoe_user_id
        ORDER BY pl.id DESC LIMIT ?`
     )
-    .all(limit);
+    .all(limit) as any[];
+  return rows.map((r) => {
+    const path = `/pay/${r.token}`;
+    return {
+      ...r,
+      path,
+      url: resolved.baseUrl ? `${resolved.baseUrl}${path}` : path,
+      baseUrl: resolved.baseUrl || null,
+    };
+  });
 }
 
 /** Ensure a fresh pending pay link exists for reminder messages. */
@@ -278,10 +373,14 @@ export function ensureFreshPayLink(userId: number, baseUrl?: string) {
     .get(userId) as any;
   if (existing) {
     const path = `/pay/${existing.token}`;
+    const resolved = resolvePublicBaseUrl(baseUrl);
     return {
       token: existing.token,
       path,
-      url: baseUrl ? `${baseUrl.replace(/\/$/, '')}${path}` : path,
+      url: resolved.baseUrl ? `${resolved.baseUrl}${path}` : path,
+      baseUrl: resolved.baseUrl || null,
+      source: resolved.source,
+      warning: resolved.warning || null,
       amount: existing.amount,
       months: existing.months,
     };

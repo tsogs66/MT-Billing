@@ -164,7 +164,8 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
 
   const copyPayLink = async (u: PUser) => {
     try {
-      const r = await api.post(`/payment-links/for-user/${u.id}`, { baseUrl: window.location.origin });
+      // Server prefers configured public URL over the panel's LAN origin
+      const r = await api.post(`/payment-links/for-user/${u.id}`, { fallbackOrigin: window.location.origin });
       const path = r.data.path || (r.data.token ? `/pay/${r.data.token}` : r.data.url);
       const full =
         typeof r.data.url === 'string' && /^https?:\/\//i.test(r.data.url)
@@ -174,6 +175,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
         showToast('Pay link was created but URL is empty.');
         return;
       }
+      if (r.data.warning) showToast(r.data.warning);
       const ok = await copyTextOrPrompt(full, `Pay link for ${u.username} — copy:`);
       showToast(ok ? `Pay link copied for ${u.username}` : `Pay link ready — copy from the dialog`);
     } catch (e: any) {

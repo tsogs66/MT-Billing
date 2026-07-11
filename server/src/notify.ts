@@ -306,13 +306,9 @@ export async function runAutomations() {
   const now = Date.now();
   const summary = { remindersSent: 0, marked: 0, profileSwitched: 0, disabled: 0, routerErrors: 0 };
 
-  // Lazy import to avoid circular deps at module load.
-  const { syncUserToRouter, ensureFreshPayLink } = await import('./billing.js');
+  const { resolvePublicBaseUrl, ensureFreshPayLink, syncUserToRouter } = await import('./billing.js');
 
-  const baseUrl =
-    process.env.PUBLIC_BASE_URL ||
-    (db.prepare('SELECT ngrok_url FROM app_settings WHERE id = 1').get() as { ngrok_url?: string } | undefined)?.ngrok_url ||
-    '';
+  const { baseUrl } = resolvePublicBaseUrl();
 
   const all = db
     .prepare(

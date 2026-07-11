@@ -121,6 +121,18 @@ function PanelSettings({ app, setA, save }: any) {
             <option value="EUR">EUR (€)</option>
           </select>
         </label>
+        <label className="block">
+          <span className="text-sm font-semibold text-slate-700 mb-1 block">Public pay portal URL</span>
+          <input
+            className="input font-mono text-sm"
+            placeholder="https://billing.yourisp.com"
+            value={app.public_base_url || ''}
+            onChange={(e) => setA({ public_base_url: e.target.value })}
+          />
+          <span className="text-xs text-slate-400 mt-1 block">
+            Globally reachable URL for subscriber payment links (domain, Cloudflare Tunnel, or ngrok). Also editable under Payment Links.
+          </span>
+        </label>
         <div className="flex justify-end">
           <button type="button" className="btn-primary" onClick={() => save({ theme: app.theme || theme })}>Save Panel Settings</button>
         </div>

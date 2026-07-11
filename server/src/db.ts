@@ -181,7 +181,8 @@ export function initSchema() {
       cursor_model TEXT DEFAULT 'composer-2',
       cursor_repo_url TEXT,
       tz TEXT DEFAULT 'Asia/Manila',
-      ntp_server TEXT DEFAULT 'time.cloudflare.com'
+      ntp_server TEXT DEFAULT 'time.cloudflare.com',
+      public_base_url TEXT
     );
 
     CREATE TABLE IF NOT EXISTS ai_scripts (
@@ -282,6 +283,7 @@ export function migrate() {
     ['cursor_api_key', 'TEXT'],
     ['cursor_model', "TEXT DEFAULT 'composer-2'"],
     ['cursor_repo_url', 'TEXT'],
+    ['public_base_url', 'TEXT'],
   ];
   for (const [col, type] of appCols) {
     if (!columnExists('app_settings', col)) db.exec(`ALTER TABLE app_settings ADD COLUMN ${col} ${type}`);
