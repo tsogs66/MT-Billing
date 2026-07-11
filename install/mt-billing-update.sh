@@ -80,9 +80,17 @@ write_state() {
   local status="$1"
   local from="$2"
   local to="$3"
+  local message="${4:-}"
   mkdir -p "$STATE_DIR"
+  local finished_json="null"
+  if [[ "$status" != "running" ]]; then
+    finished_json="\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\""
+  fi
+  local started="${UPDATE_STARTED_AT:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+  local msg_json
+  msg_json=$(printf '%s' "$message" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))' 2>/dev/null || echo '""')
   cat >"$STATE_FILE" <<EOF
-{"status":"${status}","branch":"${REPO_BRANCH}","from":"${from}","to":"${to}","at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
+{"status":"${status}","branch":"${REPO_BRANCH}","from":"${from}","to":"${to}","at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","startedAt":"${started}","finishedAt":${finished_json},"message":${msg_json}}
 EOF
 }
 
@@ -98,6 +106,7 @@ fi
 
 SVC_USER="$(service_user)"
 SVC_USER="${SVC_USER:-mtbilling}"
+UPDATE_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 log_info "Checking ${REPO_URL} (${REPO_BRANCH})"
 BEFORE="$(local_sha)"
@@ -105,7 +114,7 @@ REMOTE="$(remote_sha)"
 
 if [[ "$BEFORE" == "$REMOTE" ]]; then
   log_ok "Already up to date (${BEFORE:0:12})"
-  write_state "current" "$BEFORE" "$REMOTE"
+  write_state "current" "$BEFORE" "$REMOTE" "Already up to date."
   if [[ "$CHECK_ONLY" == "1" ]]; then
     exit 1
   fi
@@ -120,6 +129,9 @@ fi
 if [[ "$AUTO_ONLY" == "1" ]]; then
   log_info "New commits on origin — applying update ${BEFORE:0:12} → ${REMOTE:0:12}"
 fi
+
+write_state "running" "$BEFORE" "$REMOTE" "Update in progress…"
+trap 'write_state "failed" "${BEFORE:-}" "${AFTER:-${REMOTE:-}}" "Update failed."' ERR
 
 log_info "Stopping MT-Billing API"
 run systemctl stop mt-billing-api
@@ -147,5 +159,6 @@ run systemctl start mt-billing-api
 run systemctl reload nginx 2>/dev/null || true
 log_ok "Services started"
 
-write_state "updated" "$BEFORE" "$AFTER"
+trap - ERR
+write_state "updated" "$BEFORE" "$AFTER" "Update complete."
 log_ok "Update complete (${BEFORE:0:12} → ${AFTER:0:12})"

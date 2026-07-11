@@ -21,6 +21,19 @@ export const UPDATE_REPO = {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+export type UpdateJobStatus = 'idle' | 'running' | 'updated' | 'current' | 'failed';
+
+export interface UpdateJob {
+  status: UpdateJobStatus;
+  branch: string;
+  from: string | null;
+  to: string | null;
+  at: string;
+  message?: string | null;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+}
+
 /** Resolve install root (git checkout). Prefer env, then /opt/mt-billing, then repo root. */
 export function resolveInstallDir(): string {
   if (process.env.INSTALL_DIR && fs.existsSync(path.join(process.env.INSTALL_DIR, '.git'))) {
@@ -31,6 +44,61 @@ export function resolveInstallDir(): string {
   const root = path.resolve(__dirname, '../..');
   if (fs.existsSync(path.join(root, '.git'))) return root;
   return root;
+}
+
+function jobStatePath(installDir?: string): string {
+  const root = installDir || resolveInstallDir();
+  return path.join(root, 'server/data/.last-update.json');
+}
+
+export function readUpdateJob(installDir?: string): UpdateJob | null {
+  try {
+    const p = jobStatePath(installDir);
+    if (!fs.existsSync(p)) return null;
+    const raw = JSON.parse(fs.readFileSync(p, 'utf8'));
+    return {
+      status: (raw.status || 'idle') as UpdateJobStatus,
+      branch: String(raw.branch || UPDATE_REPO.branch),
+      from: raw.from ? String(raw.from) : null,
+      to: raw.to ? String(raw.to) : null,
+      at: String(raw.at || raw.finishedAt || raw.startedAt || new Date().toISOString()),
+      message: raw.message != null ? String(raw.message) : null,
+      startedAt: raw.startedAt ? String(raw.startedAt) : null,
+      finishedAt: raw.finishedAt ? String(raw.finishedAt) : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function writeUpdateJob(job: Partial<UpdateJob> & { status: UpdateJobStatus }, installDir?: string): UpdateJob {
+  const root = installDir || resolveInstallDir();
+  const dir = path.join(root, 'server/data');
+  fs.mkdirSync(dir, { recursive: true });
+  const prev = readUpdateJob(root);
+  const now = new Date().toISOString();
+  const next: UpdateJob = {
+    status: job.status,
+    branch: job.branch || prev?.branch || UPDATE_REPO.branch,
+    from: job.from !== undefined ? job.from : prev?.from || null,
+    to: job.to !== undefined ? job.to : prev?.to || null,
+    at: job.at || now,
+    message: job.message !== undefined ? job.message : prev?.message || null,
+    startedAt:
+      job.startedAt !== undefined
+        ? job.startedAt
+        : job.status === 'running'
+          ? now
+          : prev?.startedAt || null,
+    finishedAt:
+      job.finishedAt !== undefined
+        ? job.finishedAt
+        : job.status === 'running'
+          ? null
+          : now,
+  };
+  fs.writeFileSync(jobStatePath(root), JSON.stringify(next, null, 0));
+  return next;
 }
 
 function readPackageVersion(installDir: string): string {
@@ -87,6 +155,7 @@ export interface UpdaterStatus {
   installDir: string;
   source: 'github' | 'local-git' | 'unknown';
   error?: string | null;
+  job: UpdateJob | null;
 }
 
 export async function getUpdaterStatus(): Promise<UpdaterStatus> {
@@ -94,6 +163,7 @@ export async function getUpdaterStatus(): Promise<UpdaterStatus> {
   const version = readPackageVersion(installDir);
   const currentSha = await localHead(installDir);
   const lastChecked = new Date().toISOString();
+  const job = readUpdateJob(installDir);
 
   const remote = await fetchGithubJson(UPDATE_REPO.apiCommits());
   const latestSha = remote?.sha ? String(remote.sha) : null;
@@ -123,7 +193,6 @@ export async function getUpdaterStatus(): Promise<UpdaterStatus> {
         changelog = ['Already on the latest commit from GitHub.'];
       }
     } else {
-      // No local git — treat remote tip as available update info
       updateAvailable = true;
       changelog = latestMsg
         ? [latestMsg, 'Local install has no .git — apply will use the guest update script if present.']
@@ -152,21 +221,59 @@ export async function getUpdaterStatus(): Promise<UpdaterStatus> {
     installDir,
     source,
     error,
+    job,
   };
 }
 
-export async function applyUpdate(): Promise<{ ok: boolean; message: string; queued?: boolean }> {
+export async function applyUpdate(): Promise<{
+  ok: boolean;
+  message: string;
+  queued?: boolean;
+  job?: UpdateJob;
+  targetSha?: string | null;
+  fromSha?: string | null;
+}> {
   const installDir = resolveInstallDir();
+  const fromSha = await localHead(installDir);
+  const remote = await fetchGithubJson(UPDATE_REPO.apiCommits());
+  const targetSha = remote?.sha ? String(remote.sha) : null;
+
+  const existing = readUpdateJob(installDir);
+  if (existing?.status === 'running') {
+    const started = existing.startedAt || existing.at;
+    const age = started ? Date.now() - Date.parse(started) : 0;
+    if (age > 0 && age < 20 * 60 * 1000) {
+      return {
+        ok: false,
+        message: 'An update is already in progress. Wait for it to finish.',
+        job: existing,
+      };
+    }
+  }
+
+  const job = writeUpdateJob(
+    {
+      status: 'running',
+      branch: UPDATE_REPO.branch,
+      from: fromSha,
+      to: targetSha,
+      message: `Updating from ${UPDATE_REPO.url} (${UPDATE_REPO.branch})…`,
+      startedAt: new Date().toISOString(),
+      finishedAt: null,
+    },
+    installDir
+  );
+
+  dbLog(`Update from ${UPDATE_REPO.url} (${UPDATE_REPO.branch}) requested`);
+
   const scriptCandidates = [
     path.join(installDir, 'install/mt-billing-update.sh'),
     '/opt/mt-billing/install/mt-billing-update.sh',
   ];
   const script = scriptCandidates.find((p) => fs.existsSync(p));
 
-  dbLog(`Update from ${UPDATE_REPO.url} (${UPDATE_REPO.branch}) requested`);
-
   if (script) {
-    // Fire-and-forget — script stops the API service
+    // Fire-and-forget — script stops the API service and writes job status
     const child = spawn('bash', [script], {
       env: {
         ...process.env,
@@ -176,26 +283,41 @@ export async function applyUpdate(): Promise<{ ok: boolean; message: string; que
         var_install_dir: installDir,
         var_repo_url: UPDATE_REPO.gitUrl,
         var_repo_branch: UPDATE_REPO.branch,
+        UPDATE_STARTED_AT: job.startedAt || new Date().toISOString(),
       },
       detached: true,
       stdio: 'ignore',
+      cwd: installDir,
     });
     child.unref();
     return {
       ok: true,
       queued: true,
-      message: `Update started from ${UPDATE_REPO.url} (${UPDATE_REPO.branch}). The panel will restart shortly.`,
+      job,
+      fromSha,
+      targetSha,
+      message: `Update started from ${UPDATE_REPO.url} (${UPDATE_REPO.branch}). Keep this page open until it finishes.`,
+    };
+  }
+
+  if (!fs.existsSync(path.join(installDir, '.git'))) {
+    writeUpdateJob(
+      {
+        status: 'failed',
+        from: fromSha,
+        to: targetSha,
+        message: `No update script and no git checkout at ${installDir}.`,
+      },
+      installDir
+    );
+    return {
+      ok: false,
+      message: `No update script and no git checkout at ${installDir}. Clone from ${UPDATE_REPO.gitUrl}.`,
+      job: readUpdateJob(installDir) || undefined,
     };
   }
 
   // Dev / non-systemd fallback: git pull + rebuild in background
-  if (!fs.existsSync(path.join(installDir, '.git'))) {
-    return {
-      ok: false,
-      message: `No update script and no git checkout at ${installDir}. Clone from ${UPDATE_REPO.gitUrl}.`,
-    };
-  }
-
   setTimeout(async () => {
     try {
       await git(installDir, ['remote', 'set-url', 'origin', UPDATE_REPO.gitUrl]);
@@ -208,10 +330,28 @@ export async function applyUpdate(): Promise<{ ok: boolean; message: string; que
         cwd: installDir,
         timeout: 300_000,
       });
+      const after = await localHead(installDir);
+      writeUpdateJob(
+        {
+          status: 'updated',
+          from: fromSha,
+          to: after || targetSha,
+          message: 'Update complete. Restarting API…',
+        },
+        installDir
+      );
       dbLog(`Update pull complete from ${UPDATE_REPO.url}`);
-      // Soft restart signal used elsewhere in the app
       process.emit('mt-billing-restart' as any);
     } catch (e: any) {
+      writeUpdateJob(
+        {
+          status: 'failed',
+          from: fromSha,
+          to: targetSha,
+          message: e?.message || String(e),
+        },
+        installDir
+      );
       dbLog(`Update failed: ${e?.message || e}`);
     }
   }, 500);
@@ -219,16 +359,20 @@ export async function applyUpdate(): Promise<{ ok: boolean; message: string; que
   return {
     ok: true,
     queued: true,
-    message: `Pulling latest from ${UPDATE_REPO.url}. Panel will rebuild and restart.`,
+    job,
+    fromSha,
+    targetSha,
+    message: `Pulling latest from ${UPDATE_REPO.url}. Keep this page open until it finishes.`,
   };
 }
 
 function dbLog(message: string) {
   try {
-    // Lazy import to keep this module usable in isolation
-    import('./db.js').then(({ db }) => {
-      db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run('info', 'updater', message);
-    }).catch(() => undefined);
+    import('./db.js')
+      .then(({ db }) => {
+        db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run('info', 'updater', message);
+      })
+      .catch(() => undefined);
   } catch {
     /* ignore */
   }

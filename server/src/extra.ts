@@ -26,7 +26,7 @@ import {
   addVlan,
   removeVlan,
 } from './mikrotik.js';
-import { getUpdaterStatus, applyUpdate, UPDATE_REPO } from './updater.js';
+import { getUpdaterStatus, applyUpdate, UPDATE_REPO, readUpdateJob } from './updater.js';
 
 export const extraRouter = express.Router();
 
@@ -759,8 +759,13 @@ extraRouter.get('/updater', async (_req, res) => {
       repo: UPDATE_REPO.url,
       branch: UPDATE_REPO.branch,
       error: e?.message || 'Updater failed',
+      job: null,
     });
   }
+});
+
+extraRouter.get('/updater/job', (_req, res) => {
+  res.json({ job: readUpdateJob() });
 });
 
 extraRouter.post('/updater/check', async (_req, res) => {
@@ -776,6 +781,7 @@ extraRouter.post('/updater/check', async (_req, res) => {
       latestSha: status.latestSha,
       changelog: status.changelog,
       error: status.error,
+      job: status.job,
     });
   } catch (e: any) {
     res.status(502).json({ error: e?.message || 'Could not check GitHub for updates', repo: UPDATE_REPO.url });
@@ -785,7 +791,7 @@ extraRouter.post('/updater/check', async (_req, res) => {
 extraRouter.post('/updater/apply', async (_req, res) => {
   try {
     const result = await applyUpdate();
-    if (!result.ok) return res.status(400).json(result);
+    if (!result.ok) return res.status(409).json(result);
     res.json(result);
   } catch (e: any) {
     res.status(500).json({ ok: false, message: e?.message || 'Update failed', repo: UPDATE_REPO.url });
