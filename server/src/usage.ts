@@ -4,6 +4,7 @@ import {
   fetchPppActiveTraffic,
   fetchPppInterfaceBytes,
   fetchDnsCacheNames,
+  fetchConnectionDestinations,
   parseRosRate,
 } from './mikrotik.js';
 import { notifyClientChannels } from './notify.js';
@@ -111,6 +112,13 @@ export async function pollUsageAndFairUse() {
   const nowIso = new Date().toISOString();
 
   for (const router of routers) {
+    // Platforms tab: always sample DNS / connections even when nobody is online.
+    try {
+      services += await samplePlatformUsage(router, day);
+    } catch (e) {
+      console.error('[usage] platforms', router.id, e);
+    }
+
     try {
       const sessions = await fetchPppActive(router);
       const names = sessions.map((s) => s.name).filter(Boolean);
@@ -215,34 +223,57 @@ export async function pollUsageAndFairUse() {
           overCapSince.delete(key);
         }
       }
-
-      // DNS popularity — live snapshot of cache contents (not cumulative fake totals)
-      try {
-        const namesDns = await fetchDnsCacheNames(router);
-        const counts = new Map<string, { name: string; category: string; hits: number }>();
-        for (const host of namesDns) {
-          const c = classifyHost(host);
-          const prev = counts.get(c.id) || { name: c.name, category: c.category, hits: 0 };
-          prev.hits++;
-          counts.set(c.id, prev);
-        }
-        db.prepare('DELETE FROM usage_services WHERE day = ? AND router_id = ?').run(day, router.id);
-        for (const [sid, v] of counts) {
-          db.prepare(
-            `INSERT INTO usage_services (day, service_id, service_name, category, hits, router_id)
-             VALUES (?, ?, ?, ?, ?, ?)`
-          ).run(day, sid, v.name, v.category, v.hits, router.id);
-          services++;
-        }
-      } catch {
-        /* optional */
-      }
     } catch (e) {
       console.error('[usage] router', router.id, e);
     }
   }
 
   return { samples, alerts, services, bytesDelta, routers: routers.length, accounting: 'delta' };
+}
+
+/** Classify DNS / connection names into platform buckets for the Websites tab. */
+async function samplePlatformUsage(router: any, day: string): Promise<number> {
+  let hosts: string[] = [];
+  try {
+    hosts = await fetchDnsCacheNames(router);
+  } catch {
+    hosts = [];
+  }
+
+  // Fallback when DNS cache is empty (clients using public DNS): sample connection destinations.
+  if (!hosts.length) {
+    try {
+      const dests = await fetchConnectionDestinations(router, 1000);
+      hosts = dests.map((d) => d.dst).filter(Boolean);
+    } catch {
+      /* optional */
+    }
+  }
+
+  if (!hosts.length) return 0;
+
+  const counts = new Map<string, { name: string; category: string; hits: number }>();
+  for (const host of hosts) {
+    const c = classifyHost(host);
+    // Skip raw IPs in the "Other" bucket — they add noise without platform signal
+    if (c.id === 'other' && /^\d{1,3}(\.\d{1,3}){3}$/.test(String(host).split(':')[0])) continue;
+    const prev = counts.get(c.id) || { name: c.name, category: c.category, hits: 0 };
+    prev.hits++;
+    counts.set(c.id, prev);
+  }
+
+  if (!counts.size) return 0;
+
+  db.prepare('DELETE FROM usage_services WHERE day = ? AND router_id = ?').run(day, router.id);
+  let n = 0;
+  for (const [sid, v] of counts) {
+    db.prepare(
+      `INSERT INTO usage_services (day, service_id, service_name, category, hits, router_id)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).run(day, sid, v.name, v.category, v.hits, router.id);
+    n++;
+  }
+  return n;
 }
 
 export function ensureUsageTables() {
@@ -475,7 +506,7 @@ export function getUsageSummary(days = 7) {
     days,
     accounting: 'delta',
     sampleCount,
-    note: 'Per-user download/upload are real byte deltas from MikroTik <pppoe-*> interfaces. Platforms tab is a DNS-cache popularity snapshot, not bytes per site.',
+    note: 'Per-user download/upload are real byte deltas from MikroTik <pppoe-*> interfaces. Platforms tab uses DNS-cache popularity (falls back to connection destinations when the cache is empty).',
   };
 }
 

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Users, WifiOff, Activity, Layers, Server, ReceiptText, Plus, Pencil, Trash2, KeyRound, Eye, EyeOff, MapPin, DownloadCloud, RefreshCw, Link2, ShieldOff, ShieldCheck, Loader2 } from 'lucide-react';
+import { Users, WifiOff, Activity, Layers, Server, ReceiptText, Plus, Pencil, Trash2, KeyRound, Eye, EyeOff, MapPin, DownloadCloud, RefreshCw, Link2, ShieldOff, ShieldCheck, Loader2, ClipboardCheck } from 'lucide-react';
 import Layout from '../components/Layout';
 import {
   StatusBadge, TabBar, Toolbar, SearchInput, DataTable, IconAction, Toast,
@@ -78,6 +78,14 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
     customer?: string;
     detail: string;
   } | null>(null);
+  const [recheckBusy, setRecheckBusy] = useState(false);
+  const [recheckPreview, setRecheckPreview] = useState<{
+    toExpire: any[];
+    toDisable: any[];
+    graceHours: number;
+    autodisableEnabled: boolean;
+  } | null>(null);
+  const [recheckResult, setRecheckResult] = useState<any | null>(null);
   const { current } = useRouterDevice();
 
   const routerQ = current?.id ? `&routerId=${current.id}` : '';
@@ -157,6 +165,37 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
       showToast(e?.response?.data?.error || 'Fetch from MikroTik failed.');
     } finally {
       setFetching(false);
+    }
+  };
+
+  const openBillingRecheck = async () => {
+    setRecheckBusy(true);
+    setRecheckResult(null);
+    try {
+      const r = await api.get('/pppoe/billing-recheck', { params: { service } });
+      setRecheckPreview(r.data);
+      if (!(r.data.toExpire?.length || r.data.toDisable?.length)) {
+        showToast('No overdue or past-grace accounts found.');
+        setRecheckPreview(null);
+      }
+    } catch (e: any) {
+      showToast(e?.response?.data?.error || 'Recheck failed.');
+    } finally {
+      setRecheckBusy(false);
+    }
+  };
+
+  const confirmBillingRecheck = async () => {
+    setRecheckBusy(true);
+    try {
+      const r = await api.post('/pppoe/billing-recheck', { service });
+      setRecheckPreview(null);
+      setRecheckResult(r.data);
+      loadUsers();
+    } catch (e: any) {
+      showToast(e?.response?.data?.error || 'Could not apply expiry protocols.');
+    } finally {
+      setRecheckBusy(false);
     }
   };
 
@@ -379,6 +418,16 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                   />
                   <button type="button" className="btn-secondary" onClick={() => loadUsers()} title="Refresh users">
                     <RefreshCw size={16} /> Refresh
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary text-amber-800 border-amber-200 hover:bg-amber-50"
+                    onClick={openBillingRecheck}
+                    disabled={recheckBusy}
+                    title="Recheck overdue and past-grace accounts"
+                  >
+                    <ClipboardCheck size={16} className={recheckBusy ? 'animate-pulse' : ''} />
+                    {recheckBusy ? 'Checking…' : 'Recheck expiry'}
                   </button>
                   <button
                     type="button"
@@ -855,6 +904,98 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
               {toggleResult.action === 'disabled' ? <ShieldOff size={22} /> : <ShieldCheck size={22} />}
             </div>
             <p className="text-sm text-slate-600 leading-relaxed">{toggleResult.detail}</p>
+          </div>
+        </Modal>
+      )}
+
+      {recheckPreview && (
+        <Modal
+          title="Confirm expiry protocols"
+          subtitle={`${service.toUpperCase()} · grace ${recheckPreview.graceHours}h after non-payment`}
+          onClose={() => !recheckBusy && setRecheckPreview(null)}
+          footer={
+            <>
+              <button type="button" className="btn-secondary" onClick={() => setRecheckPreview(null)} disabled={recheckBusy}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn-primary bg-amber-600 hover:bg-amber-700 from-amber-600 to-amber-700"
+                onClick={confirmBillingRecheck}
+                disabled={recheckBusy}
+              >
+                {recheckBusy ? <><Loader2 size={16} className="animate-spin" /> Applying…</> : 'Execute protocols'}
+              </button>
+            </>
+          }
+        >
+          <div className="space-y-4 text-sm text-slate-600">
+            <p>
+              Found accounts past due. Confirm to apply non-payment expiry (expire profile) and disable accounts that are past the grace period.
+            </p>
+            {!!recheckPreview.toExpire.length && (
+              <div>
+                <div className="font-semibold text-amber-800 mb-1">
+                  Move to non-payment / expire profile ({recheckPreview.toExpire.length})
+                </div>
+                <ul className="max-h-40 overflow-auto rounded-xl border border-amber-100 bg-amber-50/50 divide-y divide-amber-100">
+                  {recheckPreview.toExpire.map((u: any) => (
+                    <li key={u.id} className="px-3 py-2 flex justify-between gap-2">
+                      <span>
+                        <b className="text-slate-800">{u.username}</b>
+                        <span className="text-slate-500"> · {u.customer}</span>
+                      </span>
+                      <span className="text-xs text-amber-700 whitespace-nowrap">{u.daysOverdue}d overdue · due {u.due}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {!!recheckPreview.toDisable.length && (
+              <div>
+                <div className="font-semibold text-rose-800 mb-1">
+                  Disable past grace ({recheckPreview.toDisable.length})
+                </div>
+                <ul className="max-h-40 overflow-auto rounded-xl border border-rose-100 bg-rose-50/50 divide-y divide-rose-100">
+                  {recheckPreview.toDisable.map((u: any) => (
+                    <li key={u.id} className="px-3 py-2 flex justify-between gap-2">
+                      <span>
+                        <b className="text-slate-800">{u.username}</b>
+                        <span className="text-slate-500"> · {u.customer}</span>
+                      </span>
+                      <span className="text-xs text-rose-700 whitespace-nowrap">
+                        {u.hoursInNonPayment ?? '—'}h in non-payment · due {u.due}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        </Modal>
+      )}
+
+      {recheckResult && (
+        <Modal
+          title="Expiry protocols complete"
+          subtitle={recheckResult.message || 'Done'}
+          onClose={() => setRecheckResult(null)}
+          footer={
+            <button type="button" className="btn-primary" onClick={() => setRecheckResult(null)}>
+              OK
+            </button>
+          }
+        >
+          <div className="text-sm text-slate-600 space-y-2">
+            <p>
+              Non-payment / expire: <b>{recheckResult.result?.markedNonPayment ?? 0}</b>
+              {' · '}
+              Disabled: <b>{recheckResult.result?.disabled ?? 0}</b>
+              {(recheckResult.result?.routerErrors ?? 0) > 0 && (
+                <> · Router errors: <b className="text-rose-600">{recheckResult.result.routerErrors}</b></>
+              )}
+            </p>
+            <p className="text-xs text-slate-400">MikroTik secrets were synced where router API credentials are configured.</p>
           </div>
         </Modal>
       )}

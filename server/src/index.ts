@@ -74,8 +74,11 @@ import {
   updateSettings as updateNotifySettings,
   sendManual,
   runAutomations,
+  previewBillingEnforcement,
+  executeBillingEnforcement,
   listNotifications,
   startNotifyScheduler,
+  getSettings as getNotifySettingsRaw,
 } from './notify.js';
 
 initSchema();
@@ -1551,6 +1554,144 @@ function formatSpeedMbps(down: number, up: number): string {
   return `${d}↓ / ${u}↑ Mbps`;
 }
 
+type IpoeBillingCandidate = {
+  mac: string;
+  name: string;
+  due: string;
+  payment: string;
+  daysOverdue: number;
+  hoursOverdue: number;
+  leaseId: string | null;
+  blocked: boolean;
+  action: 'expire' | 'disable';
+};
+
+async function loadIpoeLeaseBillingState(routerId: number | null) {
+  const s = getNotifySettingsRaw();
+  const graceHours = Number(s.autodisable_hours) || 24;
+  const metaRows = db.prepare('SELECT * FROM ipoe_lease_meta').all() as any[];
+  const now = Date.now();
+
+  let liveByMac = new Map<string, { id: string; blocked: boolean }>();
+  const router = getRouterById(routerId);
+  if (router?.host && router?.api_user) {
+    try {
+      const leases = await fetchDhcpLeases(router);
+      liveByMac = new Map(
+        leases.map((l) => [
+          normalizeMac(l.macAddress || l.activeMac),
+          { id: l.id, blocked: !!l.blocked },
+        ])
+      );
+    } catch {
+      /* preview without live ids still useful */
+    }
+  }
+
+  const toExpire: IpoeBillingCandidate[] = [];
+  const toDisable: IpoeBillingCandidate[] = [];
+
+  for (const m of metaRows) {
+    const due = String(m.due_at || '').slice(0, 10);
+    if (!due || !/^\d{4}-\d{2}-\d{2}$/.test(due)) continue;
+    const dueMs = Date.parse(`${due}T00:00:00Z`);
+    if (!Number.isFinite(dueMs)) continue;
+    const hoursOverdue = (now - dueMs) / 3600000;
+    if (hoursOverdue < 0) continue;
+
+    const mac = normalizeMac(m.mac);
+    const live = liveByMac.get(mac);
+    const payment = String(m.payment_status || 'Active');
+    const payLow = payment.toLowerCase();
+    const daysOverdue = Math.floor(hoursOverdue / 24);
+    const candidate: IpoeBillingCandidate = {
+      mac,
+      name: m.name || mac,
+      due,
+      payment,
+      daysOverdue,
+      hoursOverdue: Math.round(hoursOverdue * 10) / 10,
+      leaseId: live?.id || null,
+      blocked: !!live?.blocked,
+      action: 'expire',
+    };
+
+    if (live?.blocked) continue;
+
+    if (hoursOverdue >= graceHours) {
+      toDisable.push({ ...candidate, action: 'disable' });
+    } else if (!/non.?pay|disabled|blocked/i.test(payLow)) {
+      toExpire.push({ ...candidate, action: 'expire' });
+    }
+  }
+
+  return {
+    toExpire,
+    toDisable,
+    graceHours,
+    autodisableEnabled: !!s.autodisable_enabled,
+    routerId,
+  };
+}
+
+async function previewIpoeBillingEnforcement(routerId: number | null) {
+  return loadIpoeLeaseBillingState(routerId);
+}
+
+async function executeIpoeBillingEnforcement(routerId: number | null) {
+  const preview = await loadIpoeLeaseBillingState(routerId);
+  const router = getRouterById(routerId);
+  let markedNonPayment = 0;
+  let blocked = 0;
+  let routerErrors = 0;
+  const expired: IpoeBillingCandidate[] = [];
+  const disabledLeases: IpoeBillingCandidate[] = [];
+
+  for (const c of preview.toExpire) {
+    db.prepare(
+      `UPDATE ipoe_lease_meta SET payment_status = 'Non-payment' WHERE mac = ?`
+    ).run(c.mac);
+    markedNonPayment++;
+    expired.push({ ...c, payment: 'Non-payment' });
+  }
+
+  for (const c of preview.toDisable) {
+    db.prepare(
+      `UPDATE ipoe_lease_meta SET payment_status = 'Disabled' WHERE mac = ?`
+    ).run(c.mac);
+    if (router?.host && router?.api_user && c.leaseId) {
+      try {
+        await setDhcpLeaseBlocked(router, c.leaseId, true);
+        blocked++;
+        disabledLeases.push({ ...c, payment: 'Disabled', blocked: true });
+      } catch {
+        routerErrors++;
+      }
+    } else {
+      // No live lease id — still mark disabled in panel meta
+      blocked++;
+      disabledLeases.push({ ...c, payment: 'Disabled' });
+    }
+  }
+
+  if (markedNonPayment || blocked) {
+    db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+      'warning',
+      'billing',
+      `IPoE recheck: ${markedNonPayment} non-payment, ${blocked} blocked (grace ${preview.graceHours}h)`
+    );
+  }
+
+  return {
+    markedNonPayment,
+    blocked,
+    routerErrors,
+    expired,
+    disabledLeases,
+    graceHours: preview.graceHours,
+  };
+}
+
 app.get('/api/ipoe/leases', async (req, res) => {
   const routerId = req.query.routerId ? Number(req.query.routerId) : null;
   const filter = String(req.query.filter || 'all'); // all | online | offline
@@ -2545,6 +2686,58 @@ app.post('/api/notifications/send', async (req, res) => {
 app.post('/api/notifications/run', async (_req, res) => {
   const summary = await runAutomations();
   res.json(summary);
+});
+
+// Preview / execute overdue + past-grace expiry protocols (PPPoE / PPP IPoE users).
+app.get('/api/pppoe/billing-recheck', (req, res) => {
+  const service = req.query.service ? String(req.query.service) : undefined;
+  res.json(previewBillingEnforcement({ service }));
+});
+
+app.post('/api/pppoe/billing-recheck', async (req, res) => {
+  const service = req.body?.service || req.query.service ? String(req.body?.service || req.query.service) : undefined;
+  const preview = previewBillingEnforcement({ service });
+  if (!preview.toExpire.length && !preview.toDisable.length) {
+    return res.json({
+      ok: true,
+      message: 'No overdue or past-grace accounts found.',
+      ...preview,
+      result: null,
+    });
+  }
+  const result = await executeBillingEnforcement({ service, forceDisable: true });
+  res.json({
+    ok: true,
+    message: `Applied expiry to ${result.markedNonPayment} account(s); disabled ${result.disabled} past grace.`,
+    preview,
+    result,
+  });
+});
+
+// IPoE DHCP lease overdue / past-grace recheck (block on MikroTik after grace).
+app.get('/api/ipoe/billing-recheck', async (req, res) => {
+  const routerId = req.query.routerId ? Number(req.query.routerId) : null;
+  res.json(await previewIpoeBillingEnforcement(routerId));
+});
+
+app.post('/api/ipoe/billing-recheck', async (req, res) => {
+  const routerId = Number(req.body?.routerId || req.query.routerId || 0) || null;
+  const preview = await previewIpoeBillingEnforcement(routerId);
+  if (!preview.toExpire.length && !preview.toDisable.length) {
+    return res.json({
+      ok: true,
+      message: 'No overdue or past-grace IPoE leases found.',
+      ...preview,
+      result: null,
+    });
+  }
+  const result = await executeIpoeBillingEnforcement(routerId);
+  res.json({
+    ok: true,
+    message: `Marked ${result.markedNonPayment} lease(s) non-payment; blocked ${result.blocked} past grace.`,
+    preview,
+    result,
+  });
 });
 
 app.use('/api', settingsRouter);

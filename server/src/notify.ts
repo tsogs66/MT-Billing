@@ -301,33 +301,143 @@ export async function sendManual(opts: {
 }
 
 /** Reminder (N days before expiry) + expire-profile switch + auto-disable on MikroTik. */
-export async function runAutomations() {
+export async function runAutomations(opts?: { service?: string }) {
+  const result = await executeBillingEnforcement({ service: opts?.service });
+  return {
+    remindersSent: result.remindersSent,
+    marked: result.markedNonPayment,
+    profileSwitched: result.profileSwitched,
+    disabled: result.disabled,
+    routerErrors: result.routerErrors,
+  };
+}
+
+export type BillingCandidate = {
+  id: number;
+  username: string;
+  customer: string;
+  service: string;
+  status: string;
+  due: string | null;
+  daysOverdue: number;
+  hoursInNonPayment: number | null;
+  profile: string;
+  action: 'expire' | 'disable';
+};
+
+/** Preview overdue / past-grace accounts without mutating. */
+export function previewBillingEnforcement(opts?: { service?: string }): {
+  toExpire: BillingCandidate[];
+  toDisable: BillingCandidate[];
+  graceHours: number;
+  autodisableEnabled: boolean;
+} {
   const s = getSettings();
   const now = Date.now();
-  const summary = { remindersSent: 0, marked: 0, profileSwitched: 0, disabled: 0, routerErrors: 0 };
+  const graceHours = Number(s.autodisable_hours) || 24;
+  const service = opts?.service ? String(opts.service).toLowerCase() : null;
+  const all = (
+    service
+      ? db.prepare(`SELECT * FROM pppoe_users WHERE lower(service) = ?`).all(service)
+      : db.prepare(`SELECT * FROM pppoe_users`).all()
+  ) as any[];
+
+  const toExpire: BillingCandidate[] = [];
+  const toDisable: BillingCandidate[] = [];
+
+  for (const u of all) {
+    const d = daysUntil(u.subscription_due);
+    if (d == null || d >= 0) continue;
+    const status = String(u.status || '').toLowerCase();
+    if (status === 'disabled') continue;
+
+    const hoursInNp = u.nonpayment_since
+      ? (now - Date.parse(u.nonpayment_since)) / 3600000
+      : null;
+
+    const base: BillingCandidate = {
+      id: u.id,
+      username: u.username,
+      customer: u.customer_name || u.username,
+      service: u.service || 'pppoe',
+      status: u.status,
+      due: u.subscription_due || null,
+      daysOverdue: Math.abs(d),
+      hoursInNonPayment: hoursInNp != null && Number.isFinite(hoursInNp) ? Math.round(hoursInNp * 10) / 10 : null,
+      profile: u.profile || '',
+      action: 'expire',
+    };
+
+    // Past due, not yet on non-payment protocol → expire / non-payment profile
+    if (!u.nonpayment_since) {
+      toExpire.push({ ...base, action: 'expire' });
+      continue;
+    }
+
+    // Already non-payment / expired and past grace → disable
+    if (hoursInNp != null && hoursInNp >= graceHours) {
+      toDisable.push({ ...base, action: 'disable' });
+    }
+  }
+
+  return {
+    toExpire,
+    toDisable,
+    graceHours,
+    autodisableEnabled: !!s.autodisable_enabled,
+  };
+}
+
+/** Execute expiry + auto-disable protocols (same rules as the scheduler). */
+export async function executeBillingEnforcement(opts?: {
+  service?: string;
+  /** Manual recheck: disable past-grace even if autodisable_enabled is off */
+  forceDisable?: boolean;
+}): Promise<{
+  remindersSent: number;
+  markedNonPayment: number;
+  profileSwitched: number;
+  disabled: number;
+  routerErrors: number;
+  expired: BillingCandidate[];
+  disabledUsers: BillingCandidate[];
+}> {
+  const s = getSettings();
+  const now = Date.now();
+  const forceDisable = !!opts?.forceDisable;
+  const summary = {
+    remindersSent: 0,
+    markedNonPayment: 0,
+    profileSwitched: 0,
+    disabled: 0,
+    routerErrors: 0,
+    expired: [] as BillingCandidate[],
+    disabledUsers: [] as BillingCandidate[],
+  };
 
   const { resolvePublicBaseUrl, ensureFreshPayLink, syncUserToRouter } = await import('./billing.js');
-
   const { baseUrl } = resolvePublicBaseUrl();
+  const service = opts?.service ? String(opts.service).toLowerCase() : null;
 
-  const all = db
-    .prepare(
-      `SELECT * FROM pppoe_users`
-    )
-    .all() as (Client & {
-      status: string;
-      profile: string;
-      password?: string;
-      expiration_profile?: string;
-      router_id?: number;
-      nonpayment_since: string | null;
-      reminder_sent: string | null;
-      address?: string;
-      nap_id?: number;
-      plc_port?: string;
-      lat?: number;
-      lng?: number;
-    })[];
+  const all = (
+    service
+      ? db.prepare(`SELECT * FROM pppoe_users WHERE lower(service) = ?`).all(service)
+      : db.prepare(`SELECT * FROM pppoe_users`).all()
+  ) as (Client & {
+    status: string;
+    profile: string;
+    password?: string;
+    expiration_profile?: string;
+    router_id?: number;
+    nonpayment_since: string | null;
+    reminder_sent: string | null;
+    address?: string;
+    nap_id?: number;
+    plc_port?: string;
+    lat?: number;
+    lng?: number;
+    service?: string;
+  })[];
 
   for (const u of all) {
     const d = daysUntil(u.subscription_due);
@@ -361,11 +471,24 @@ export async function runAutomations() {
           new Date(now).toISOString(),
           u.id
         );
-        summary.marked++;
+        summary.markedNonPayment++;
         const full = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(u.id) as any;
         const sync = await syncUserToRouter(full, 'expire');
         if (sync.ok) summary.profileSwitched++;
         else summary.routerErrors++;
+
+        summary.expired.push({
+          id: u.id,
+          username: u.username,
+          customer: u.customer_name || u.username,
+          service: u.service || 'pppoe',
+          status: 'non-payment',
+          due: u.subscription_due || null,
+          daysOverdue: Math.abs(d),
+          hoursInNonPayment: 0,
+          profile: u.profile || '',
+          action: 'expire',
+        });
 
         const channels: ('email' | 'sms')[] = [];
         if (s.email_enabled) channels.push('email');
@@ -381,13 +504,27 @@ export async function runAutomations() {
           const msg = `Hi ${u.customer_name || u.username}, your subscription is overdue (due ${u.subscription_due}). Your account was moved to the non-payment profile. Pay now to restore full speed.${payUrl ? ` ${payUrl}` : ''}`;
           await notifyClient(u, channels, 'Payment overdue — limited access', msg, 'nonpayment_notice');
         }
-      } else if (s.autodisable_enabled) {
+      } else if (s.autodisable_enabled || forceDisable) {
         const hours = (now - Date.parse(u.nonpayment_since)) / 3600000;
         if (hours >= s.autodisable_hours && u.status !== 'disabled') {
           db.prepare("UPDATE pppoe_users SET status = 'disabled', online = 0 WHERE id = ?").run(u.id);
           const full = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(u.id) as any;
           const sync = await syncUserToRouter(full, 'disable');
           if (!sync.ok) summary.routerErrors++;
+
+          summary.disabled++;
+          summary.disabledUsers.push({
+            id: u.id,
+            username: u.username,
+            customer: u.customer_name || u.username,
+            service: u.service || 'pppoe',
+            status: 'disabled',
+            due: u.subscription_due || null,
+            daysOverdue: Math.abs(d),
+            hoursInNonPayment: Math.round(hours * 10) / 10,
+            profile: u.profile || '',
+            action: 'disable',
+          });
 
           const channels: ('email' | 'sms')[] = [];
           if (s.email_enabled) channels.push('email');
@@ -406,7 +543,6 @@ export async function runAutomations() {
             'billing',
             `Auto-disabled ${u.username} after ${Math.round(hours)}h non-payment${sync.ok ? ' (MikroTik synced)' : ` (router: ${sync.error})`}`
           );
-          summary.disabled++;
         }
       }
     }

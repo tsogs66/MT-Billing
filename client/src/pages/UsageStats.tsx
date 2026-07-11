@@ -267,13 +267,13 @@ export default function UsageStats() {
         {tab === 'services' && (
           <div className="p-4 pt-0 space-y-3">
             <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
-              This tab is a <b>DNS cache popularity snapshot</b> from MikroTik — not exact bytes per website. Click a
-              column header to sort.
+              This tab is a <b>DNS cache / connection popularity snapshot</b> from MikroTik — not exact bytes per website.
+              Click <b>Sample now</b> to refresh. Click a column header to sort.
             </div>
             <DataTable
               columns={serviceColumns}
               rows={serviceRows}
-              emptyMessage="No DNS cache entries classified yet. Enable DNS cache on the router, then Sample now."
+              emptyMessage="No platform data yet. Sample now (works even with no PPPoE sessions). Prefer router DNS so the cache fills with real hostnames."
             />
           </div>
         )}

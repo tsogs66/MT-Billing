@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   Users, WifiOff, Activity, Layers, Server, ReceiptText, Plus, Pencil, Trash2,
-  RefreshCw, Lock, Unlock, Banknote, Loader2,
+  RefreshCw, Lock, Unlock, Banknote, Loader2, ClipboardCheck,
 } from 'lucide-react';
 import Layout from '../components/Layout';
 import {
@@ -47,6 +47,9 @@ export default function IPoE() {
     mac: string;
     detail: string;
   } | null>(null);
+  const [recheckBusy, setRecheckBusy] = useState(false);
+  const [recheckPreview, setRecheckPreview] = useState<any | null>(null);
+  const [recheckResult, setRecheckResult] = useState<any | null>(null);
   const { current } = useRouterDevice();
 
   const showToast = (msg: string) => {
@@ -147,6 +150,38 @@ export default function IPoE() {
       loadLeases();
     } catch (e: any) {
       showToast(e?.response?.data?.error || 'Could not update plan');
+    }
+  };
+
+  const openBillingRecheck = async () => {
+    setRecheckBusy(true);
+    setRecheckResult(null);
+    try {
+      const r = await api.get('/ipoe/billing-recheck', { params: { routerId: current?.id } });
+      if (!(r.data.toExpire?.length || r.data.toDisable?.length)) {
+        showToast('No overdue or past-grace IPoE leases found.');
+        setRecheckPreview(null);
+      } else {
+        setRecheckPreview(r.data);
+      }
+    } catch (e: any) {
+      showToast(e?.response?.data?.error || 'Recheck failed');
+    } finally {
+      setRecheckBusy(false);
+    }
+  };
+
+  const confirmBillingRecheck = async () => {
+    setRecheckBusy(true);
+    try {
+      const r = await api.post('/ipoe/billing-recheck', { routerId: current?.id });
+      setRecheckPreview(null);
+      setRecheckResult(r.data);
+      loadLeases();
+    } catch (e: any) {
+      showToast(e?.response?.data?.error || 'Could not apply expiry protocols');
+    } finally {
+      setRecheckBusy(false);
     }
   };
 
@@ -283,6 +318,16 @@ export default function IPoE() {
                   <SearchInput value={search} onChange={setSearch} placeholder="Search IP / MAC / Host…" className="w-64" />
                   <button type="button" className="btn-secondary" onClick={() => loadLeases()} disabled={busy || !current}>
                     <RefreshCw size={16} className={busy ? 'animate-spin' : ''} /> Refresh
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary text-amber-800 border-amber-200 hover:bg-amber-50"
+                    onClick={openBillingRecheck}
+                    disabled={recheckBusy}
+                    title="Recheck overdue and past-grace leases"
+                  >
+                    <ClipboardCheck size={16} className={recheckBusy ? 'animate-pulse' : ''} />
+                    {recheckBusy ? 'Checking…' : 'Recheck expiry'}
                   </button>
                 </>
               }
@@ -612,6 +657,89 @@ export default function IPoE() {
               {blockResult.action === 'blocked' ? <Lock size={22} /> : <Unlock size={22} />}
             </div>
             <p className="text-sm text-slate-600 leading-relaxed">{blockResult.detail}</p>
+          </div>
+        </Modal>
+      )}
+
+      {recheckPreview && (
+        <Modal
+          title="Confirm IPoE expiry protocols"
+          subtitle={`Grace ${recheckPreview.graceHours}h after due date`}
+          onClose={() => !recheckBusy && setRecheckPreview(null)}
+          footer={
+            <>
+              <button type="button" className="btn-secondary" onClick={() => setRecheckPreview(null)} disabled={recheckBusy}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn-primary bg-amber-600 hover:bg-amber-700 from-amber-600 to-amber-700"
+                onClick={confirmBillingRecheck}
+                disabled={recheckBusy}
+              >
+                {recheckBusy ? <><Loader2 size={16} className="animate-spin" /> Applying…</> : 'Execute protocols'}
+              </button>
+            </>
+          }
+        >
+          <div className="space-y-4 text-sm text-slate-600">
+            <p>Found overdue leases. Confirm to mark non-payment and block leases past the grace period on MikroTik.</p>
+            {!!recheckPreview.toExpire?.length && (
+              <div>
+                <div className="font-semibold text-amber-800 mb-1">Mark non-payment ({recheckPreview.toExpire.length})</div>
+                <ul className="max-h-40 overflow-auto rounded-xl border border-amber-100 bg-amber-50/50 divide-y divide-amber-100">
+                  {recheckPreview.toExpire.map((l: any) => (
+                    <li key={l.mac} className="px-3 py-2 flex justify-between gap-2">
+                      <span>
+                        <b className="text-slate-800">{l.name}</b>
+                        <span className="text-slate-500 font-mono text-xs"> · {l.mac}</span>
+                      </span>
+                      <span className="text-xs text-amber-700 whitespace-nowrap">{l.daysOverdue}d overdue · due {l.due}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {!!recheckPreview.toDisable?.length && (
+              <div>
+                <div className="font-semibold text-rose-800 mb-1">Block past grace ({recheckPreview.toDisable.length})</div>
+                <ul className="max-h-40 overflow-auto rounded-xl border border-rose-100 bg-rose-50/50 divide-y divide-rose-100">
+                  {recheckPreview.toDisable.map((l: any) => (
+                    <li key={l.mac} className="px-3 py-2 flex justify-between gap-2">
+                      <span>
+                        <b className="text-slate-800">{l.name}</b>
+                        <span className="text-slate-500 font-mono text-xs"> · {l.mac}</span>
+                      </span>
+                      <span className="text-xs text-rose-700 whitespace-nowrap">{l.hoursOverdue}h overdue · due {l.due}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        </Modal>
+      )}
+
+      {recheckResult && (
+        <Modal
+          title="IPoE expiry protocols complete"
+          subtitle={recheckResult.message || 'Done'}
+          onClose={() => setRecheckResult(null)}
+          footer={
+            <button type="button" className="btn-primary" onClick={() => setRecheckResult(null)}>
+              OK
+            </button>
+          }
+        >
+          <div className="text-sm text-slate-600 space-y-2">
+            <p>
+              Non-payment: <b>{recheckResult.result?.markedNonPayment ?? 0}</b>
+              {' · '}
+              Blocked: <b>{recheckResult.result?.blocked ?? 0}</b>
+              {(recheckResult.result?.routerErrors ?? 0) > 0 && (
+                <> · Router errors: <b className="text-rose-600">{recheckResult.result.routerErrors}</b></>
+              )}
+            </p>
           </div>
         </Modal>
       )}

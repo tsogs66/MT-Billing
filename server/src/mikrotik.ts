@@ -1286,13 +1286,22 @@ export async function fetchPppInterfaceBytes(
 /** DNS cache names — used to estimate popular platforms/services. */
 export async function fetchDnsCacheNames(conn: RouterConn): Promise<string[]> {
   return withRouter(conn, async (api) => {
-    try {
-      const rows = (await api.write('/ip/dns/cache/print')) as Record<string, string>[];
-      return (rows || []).map((r) => String(r.name || r['data'] || '')).filter(Boolean);
-    } catch {
-      return [];
+    const names: string[] = [];
+    const paths = ['/ip/dns/cache/print', '/ip/dns/cache/all/print'];
+    for (const path of paths) {
+      try {
+        const rows = (await api.write(path)) as Record<string, string>[];
+        for (const r of rows || []) {
+          const n = String(r.name || '').trim();
+          if (n) names.push(n);
+        }
+        if (names.length) break;
+      } catch {
+        /* try next path (ROS version differences) */
+      }
     }
-  }, { timeoutSec: 15 });
+    return [...new Set(names)];
+  }, { timeoutSec: 20 });
 }
 
 /** Sample active connections' destination addresses (capped). */
