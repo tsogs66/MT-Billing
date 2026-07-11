@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MapContainer, TileLayer, Marker, Polyline, Popup, Tooltip as LTooltip, useMap, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
 import { Link } from 'react-router-dom';
-import { Search, SlidersHorizontal, Maximize2, Plus, Pencil, Trash2, Server, X, Route } from 'lucide-react';
+import { Search, SlidersHorizontal, Maximize2, Plus, Server, X, Route } from 'lucide-react';
 import Layout from '../components/Layout';
 import { Modal, ModalFooter, FormField, StatusBadge } from '../components/ui';
 import { api } from '../api';

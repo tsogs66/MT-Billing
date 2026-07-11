@@ -344,8 +344,11 @@ export function seed() {
     db.prepare('INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)').run(
       user,
       bcrypt.hashSync(pass, 10),
-      'superadmin'
+      'Administrator'
     );
+  } else {
+    // Normalize legacy role labels
+    db.prepare("UPDATE users SET role = 'Administrator' WHERE role IN ('superadmin', 'admin')").run();
   }
 
   if (count('company') === 0) {

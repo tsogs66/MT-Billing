@@ -1,6 +1,13 @@
 import express from 'express';
+import bcrypt from 'bcryptjs';
 import { db } from './db.js';
-import { panelHardwareId, expectedLicenseKey, normalizeCode } from './panelId.js';
+import {
+  panelHardwareId,
+  expectedLicenseKey,
+  validateLicenseKey,
+  expiresAtFromDuration,
+  LICENSE_DURATIONS,
+} from './panelId.js';
 import {
   fetchWanRoutes,
   setRouteEnabled,
@@ -19,6 +26,13 @@ import {
 } from './mikrotik.js';
 
 export const extraRouter = express.Router();
+
+/** All panel menu permission keys (must match client Sidebar). */
+export const ALL_PERMISSIONS = [
+  'dashboard', 'terminal', 'ai', 'routers', 'network', 'pppoe', 'ipoe', 'map',
+  'zerotier', 'super-router', 'files', 'sales', 'inventory', 'hotspot',
+  'notifications', 'uptime', 'logs', 'company', 'settings', 'roles', 'updater', 'license',
+] as const;
 
 // Shared license / password-reset signing secrets live in panelId.ts.
 // Vendor tools: activator/activator.cjs (unified) and server/scripts/*-activator.mjs
@@ -87,6 +101,8 @@ export function initExtra() {
   for (const [col, type] of [
     ['license_key', 'TEXT'],
     ['license_activated', 'INTEGER DEFAULT 0'],
+    ['license_expires_at', 'TEXT'],
+    ['license_duration', 'TEXT'],
     ['zerotier_api_token', 'TEXT'],
     ['zerotier_network_id', 'TEXT'],
     ['zerotier_node_name', 'TEXT'],
@@ -97,9 +113,42 @@ export function initExtra() {
   if ((db.prepare('SELECT COUNT(*) AS c FROM roles').get() as any).c === 0) {
     const ins = db.prepare('INSERT INTO roles (name, description, permissions) VALUES (?, ?, ?)');
     ins.run('Administrator', 'Full access to all panel features', JSON.stringify(['*']));
-    ins.run('Technician', 'Manage clients, routers and network', JSON.stringify(['pppoe', 'ipoe', 'routers', 'network', 'map']));
-    ins.run('Cashier', 'Billing and payments only', JSON.stringify(['pppoe', 'sales', 'notifications']));
-    ins.run('Read-only', 'View dashboards and reports', JSON.stringify(['dashboard', 'sales', 'map']));
+    ins.run(
+      'Technician',
+      'Manage clients, routers and network',
+      JSON.stringify(['dashboard', 'terminal', 'pppoe', 'ipoe', 'routers', 'network', 'map', 'files', 'logs', 'license'])
+    );
+    ins.run(
+      'Cashier',
+      'Billing and payments only',
+      JSON.stringify(['dashboard', 'pppoe', 'sales', 'notifications', 'hotspot', 'license'])
+    );
+    ins.run(
+      'Read-only',
+      'View dashboards and reports',
+      JSON.stringify(['dashboard', 'sales', 'map', 'uptime', 'license'])
+    );
+  }
+
+  seedDefaultPanelUsers();
+}
+
+/** Default logins for each role (documented in Panel Roles). */
+export function seedDefaultPanelUsers() {
+  // Normalize legacy role names first
+  db.prepare("UPDATE users SET role = 'Administrator' WHERE role IN ('superadmin', 'admin')").run();
+
+  const defaults: { username: string; password: string; role: string }[] = [
+    { username: process.env.ADMIN_USER || 'admin', password: process.env.ADMIN_PASS || 'admin123', role: 'Administrator' },
+    { username: 'technician', password: 'tech123', role: 'Technician' },
+    { username: 'cashier', password: 'cash123', role: 'Cashier' },
+    { username: 'viewer', password: 'view123', role: 'Read-only' },
+  ];
+  const has = db.prepare('SELECT id FROM users WHERE username = ?');
+  const ins = db.prepare('INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)');
+  for (const u of defaults) {
+    if (has.get(u.username)) continue;
+    ins.run(u.username, bcrypt.hashSync(u.password, 10), u.role);
   }
 }
 
@@ -714,6 +763,75 @@ extraRouter.delete('/roles/:id', (req, res) => {
   res.json({ ok: true });
 });
 
+// ---------------- Panel users (login accounts bound to roles) ----------------
+extraRouter.get('/panel-users', (_req, res) => {
+  const rows = db
+    .prepare('SELECT id, username, role, created_at AS createdAt FROM users ORDER BY id')
+    .all();
+  res.json(rows);
+});
+
+extraRouter.post('/panel-users', (req, res) => {
+  const b = req.body || {};
+  const username = String(b.username || '').trim();
+  const password = String(b.password || '');
+  const role = String(b.role || '').trim();
+  if (!username || password.length < 6) {
+    return res.status(400).json({ error: 'Username and password (min 6 chars) are required.' });
+  }
+  const roleRow = db.prepare('SELECT name FROM roles WHERE name = ?').get(role) as { name: string } | undefined;
+  if (!roleRow) return res.status(400).json({ error: 'Select a valid role.' });
+  try {
+    const info = db
+      .prepare('INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)')
+      .run(username, bcrypt.hashSync(password, 10), roleRow.name);
+    res.status(201).json({
+      id: info.lastInsertRowid,
+      username,
+      role: roleRow.name,
+    });
+  } catch {
+    res.status(409).json({ error: 'Username already exists.' });
+  }
+});
+
+extraRouter.put('/panel-users/:id', (req, res) => {
+  const id = Number(req.params.id);
+  const ex = db.prepare('SELECT * FROM users WHERE id = ?').get(id) as any;
+  if (!ex) return res.status(404).json({ error: 'not found' });
+  const b = req.body || {};
+  const username = b.username != null ? String(b.username).trim() : ex.username;
+  const role = b.role != null ? String(b.role).trim() : ex.role;
+  if (b.role) {
+    const roleRow = db.prepare('SELECT name FROM roles WHERE name = ?').get(role);
+    if (!roleRow) return res.status(400).json({ error: 'Select a valid role.' });
+  }
+  try {
+    if (b.password && String(b.password).length >= 6) {
+      db.prepare('UPDATE users SET username=?, role=?, password_hash=? WHERE id=?').run(
+        username,
+        role,
+        bcrypt.hashSync(String(b.password), 10),
+        id
+      );
+    } else {
+      db.prepare('UPDATE users SET username=?, role=? WHERE id=?').run(username, role, id);
+    }
+    res.json({ id, username, role });
+  } catch {
+    res.status(409).json({ error: 'Username already exists.' });
+  }
+});
+
+extraRouter.delete('/panel-users/:id', (req: any, res) => {
+  const id = Number(req.params.id);
+  if (req.user?.id === id) return res.status(400).json({ error: 'Cannot delete your own account.' });
+  const count = (db.prepare('SELECT COUNT(*) AS c FROM users').get() as any).c;
+  if (count <= 1) return res.status(400).json({ error: 'Cannot delete the last panel user.' });
+  db.prepare('DELETE FROM users WHERE id = ?').run(id);
+  res.json({ ok: true });
+});
+
 // ---------------- Log Viewer ----------------
 extraRouter.get('/logs/router', (req, res) => {
   const r = db.prepare('SELECT id, name FROM routers WHERE id = ?').get(Number(req.query.routerId)) as any;
@@ -773,34 +891,91 @@ function hardwareId(): string {
 export function expectedKeyFor(hwid: string): string {
   return expectedLicenseKey(hwid);
 }
-function normalizeKey(k: string): string {
-  return normalizeCode(k);
+
+export function getLicenseStatus(): {
+  activated: boolean;
+  expired: boolean;
+  expiresAt: string | null;
+  duration: string | null;
+  licenseKey: string | null;
+} {
+  const s = db
+    .prepare('SELECT license_activated, license_key, license_expires_at, license_duration FROM app_settings WHERE id = 1')
+    .get() as any;
+  if (!s?.license_activated) {
+    return { activated: false, expired: false, expiresAt: null, duration: null, licenseKey: null };
+  }
+  const expiresAt = s.license_expires_at || null;
+  const expired = !!(expiresAt && new Date(expiresAt).getTime() < Date.now());
+  if (expired && s.license_activated) {
+    db.prepare('UPDATE app_settings SET license_activated = 0 WHERE id = 1').run();
+    return { activated: false, expired: true, expiresAt, duration: s.license_duration || null, licenseKey: null };
+  }
+  return {
+    activated: true,
+    expired: false,
+    expiresAt,
+    duration: s.license_duration || null,
+    licenseKey: s.license_key || null,
+  };
 }
+
 extraRouter.get('/license', (_req, res) => {
-  const s = db.prepare('SELECT license_activated, license_key FROM app_settings WHERE id = 1').get() as any;
+  const status = getLicenseStatus();
   const hwid = hardwareId();
   res.json({
     hardwareId: hwid,
-    activated: !!s?.license_activated,
-    licenseKey: s?.license_activated ? s.license_key : null,
+    activated: status.activated,
+    expired: status.expired,
+    expiresAt: status.expiresAt,
+    duration: status.duration,
+    licenseKey: status.activated ? status.licenseKey : null,
+    durations: LICENSE_DURATIONS,
     product: 'MT-Billing',
-    edition: s?.license_activated ? 'Licensed' : 'Unlicensed (trial)',
+    edition: status.activated
+      ? status.duration === 'life' || !status.expiresAt
+        ? 'Licensed (Lifetime)'
+        : `Licensed until ${new Date(status.expiresAt!).toLocaleDateString()}`
+      : status.expired
+        ? 'Expired'
+        : 'Unlicensed (trial)',
   });
 });
+
 extraRouter.post('/license/activate', (req, res) => {
   const hwid = hardwareId();
-  const provided = normalizeKey(req.body?.key);
-  const expected = normalizeKey(expectedKeyFor(hwid));
-  if (!provided) return res.status(400).json({ error: 'license key is required' });
-  if (provided !== expected) {
-    db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run('warning', 'license', 'Invalid license activation attempt');
+  const provided = String(req.body?.key || '');
+  if (!provided.trim()) return res.status(400).json({ error: 'license key is required' });
+  const result = validateLicenseKey(hwid, provided);
+  if (!result.ok) {
+    db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+      'warning',
+      'license',
+      'Invalid license activation attempt'
+    );
     return res.status(400).json({ error: 'Invalid license key for this hardware ID.' });
   }
-  db.prepare('UPDATE app_settings SET license_activated = 1, license_key = ? WHERE id = 1').run(expectedKeyFor(hwid));
-  db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run('info', 'license', 'License activated');
-  res.json({ ok: true, activated: true, licenseKey: expectedKeyFor(hwid) });
+  const expiresAt = expiresAtFromDuration(result.duration);
+  db.prepare(
+    'UPDATE app_settings SET license_activated = 1, license_key = ?, license_duration = ?, license_expires_at = ? WHERE id = 1'
+  ).run(result.licenseKey, result.duration, expiresAt);
+  db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+    'info',
+    'license',
+    `License activated (${result.duration}${expiresAt ? `, expires ${expiresAt}` : ', lifetime'})`
+  );
+  res.json({
+    ok: true,
+    activated: true,
+    licenseKey: result.licenseKey,
+    duration: result.duration,
+    expiresAt,
+  });
 });
+
 extraRouter.post('/license/deactivate', (_req, res) => {
-  db.prepare('UPDATE app_settings SET license_activated = 0, license_key = NULL WHERE id = 1').run();
+  db.prepare(
+    'UPDATE app_settings SET license_activated = 0, license_key = NULL, license_duration = NULL, license_expires_at = NULL WHERE id = 1'
+  ).run();
   res.json({ ok: true, activated: false });
 });

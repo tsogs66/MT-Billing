@@ -2,6 +2,7 @@ import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { useAuth } from './context/AuthContext';
 import Layout from './components/Layout';
 import { PageStub } from './components/ui';
+import { permissionForPath } from './components/Sidebar';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import PPPoE from './pages/PPPoE';
@@ -44,6 +45,18 @@ function Protected({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+function RequireAccess({ children }: { children: React.ReactNode }) {
+  const { canAccess } = useAuth();
+  const loc = useLocation();
+  const perm = permissionForPath(loc.pathname);
+  if (!canAccess(perm)) {
+    if (canAccess('dashboard') && loc.pathname !== '/') return <Navigate to="/" replace />;
+    if (canAccess('license') && loc.pathname !== '/license') return <Navigate to="/license" replace />;
+    return <Navigate to="/" replace />;
+  }
+  return <>{children}</>;
+}
+
 const stub = (title: string, description: string) => (
   <Layout title={title}>
     <PageStub title={title} description={description} />
@@ -59,31 +72,33 @@ export default function App() {
         path="/*"
         element={
           <Protected>
-            <Routes>
-              <Route path="/" element={<Dashboard />} />
-              <Route path="/pppoe" element={<PPPoE service="pppoe" title="PPPoE Management" />} />
-              <Route path="/ipoe" element={<IPoE />} />
-              <Route path="/map" element={<ClientsMap />} />
-              <Route path="/sales" element={<SalesReport />} />
-              <Route path="/routers" element={<Routers />} />
-              <Route path="/inventory" element={<Inventory />} />
-              <Route path="/hotspot" element={<Hotspot />} />
-              <Route path="/uptime" element={<Uptime />} />
-              <Route path="/notifications" element={<Notifications />} />
-              <Route path="/logs" element={<Logs />} />
-              <Route path="/company" element={<Company />} />
-              <Route path="/ai-scripting" element={<AiScripting />} />
-              <Route path="/terminal" element={<TerminalPage />} />
-              <Route path="/network" element={<Network />} />
-              <Route path="/files" element={<MikrotikFiles />} />
-              <Route path="/zerotier" element={<ZeroTier />} />
-              <Route path="/settings" element={<SystemSettings />} />
-              <Route path="/roles" element={<PanelRoles />} />
-              <Route path="/updater" element={<Updater />} />
-              <Route path="/super-router" element={stub('Super Router', 'Central controller for managing multiple MikroTik routers.')} />
-              <Route path="/license" element={<License />} />
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
+            <RequireAccess>
+              <Routes>
+                <Route path="/" element={<Dashboard />} />
+                <Route path="/pppoe" element={<PPPoE service="pppoe" title="PPPoE Management" />} />
+                <Route path="/ipoe" element={<IPoE />} />
+                <Route path="/map" element={<ClientsMap />} />
+                <Route path="/sales" element={<SalesReport />} />
+                <Route path="/routers" element={<Routers />} />
+                <Route path="/inventory" element={<Inventory />} />
+                <Route path="/hotspot" element={<Hotspot />} />
+                <Route path="/uptime" element={<Uptime />} />
+                <Route path="/notifications" element={<Notifications />} />
+                <Route path="/logs" element={<Logs />} />
+                <Route path="/company" element={<Company />} />
+                <Route path="/ai-scripting" element={<AiScripting />} />
+                <Route path="/terminal" element={<TerminalPage />} />
+                <Route path="/network" element={<Network />} />
+                <Route path="/files" element={<MikrotikFiles />} />
+                <Route path="/zerotier" element={<ZeroTier />} />
+                <Route path="/settings" element={<SystemSettings />} />
+                <Route path="/roles" element={<PanelRoles />} />
+                <Route path="/updater" element={<Updater />} />
+                <Route path="/super-router" element={stub('Super Router', 'Central controller for managing multiple MikroTik routers.')} />
+                <Route path="/license" element={<License />} />
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+            </RequireAccess>
           </Protected>
         }
       />

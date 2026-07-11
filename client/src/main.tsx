@@ -5,19 +5,22 @@ import App from './App';
 import { AuthProvider } from './context/AuthContext';
 import { RouterProvider } from './context/RouterContext';
 import { CompanyProvider } from './context/CompanyContext';
+import { ThemeProvider } from './context/ThemeContext';
 import 'leaflet/dist/leaflet.css';
 import './index.css';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <BrowserRouter>
-      <AuthProvider>
-        <CompanyProvider>
-          <RouterProvider>
-            <App />
-          </RouterProvider>
-        </CompanyProvider>
-      </AuthProvider>
+      <ThemeProvider>
+        <AuthProvider>
+          <CompanyProvider>
+            <RouterProvider>
+              <App />
+            </RouterProvider>
+          </CompanyProvider>
+        </AuthProvider>
+      </ThemeProvider>
     </BrowserRouter>
   </React.StrictMode>
 );

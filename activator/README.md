@@ -29,17 +29,19 @@ npm run build:win
 Produces **`activator/dist/mt-billing-activator.exe`**.
 
 ```bat
-mt-billing-activator.exe 1A2B-3C4D-5E6F-7890
-mt-billing-activator.exe --license 1A2B-3C4D-5E6F-7890
+mt-billing-activator.exe 1A2B-3C4D-5E6F-7890 --days 1y
+mt-billing-activator.exe --license 1A2B-3C4D-5E6F-7890 --days 90d
 mt-billing-activator.exe --reset 1A2B-3C4D-5E6F-7890
 ```
 
-Double-click for interactive mode (prompts for the ID, prints both codes).
+Durations: `30d`, `90d`, `180d`, `1y`, `2y`, `life` (default). The duration is appended to the license key (e.g. `…-1Y`). The panel stores expiry and locks menus again when it lapses.
+
+Double-click for interactive mode (prompts for the ID **and expiration**, prints both codes).
 
 ## Option B — `activator.html` (offline in a browser)
 
 1. Copy `activator.html` to the vendor PC.
-2. Double-click → paste Hardware / Panel ID → **Generate**.
+2. Double-click → paste Hardware / Panel ID → choose **License expiration** → **Generate**.
 3. Copy the license key and/or reset code.
 
 ---
@@ -65,7 +67,7 @@ Double-click for interactive mode (prompts for the ID, prints both codes).
 ## CLI helpers (Node)
 
 ```bash
-node server/scripts/license-activator.mjs <HARDWARE-ID>
+node server/scripts/license-activator.mjs <HARDWARE-ID> [30d|90d|180d|1y|2y|life]
 node server/scripts/password-reset-activator.mjs <PANEL-ID>
-node activator/activator.cjs <HARDWARE-OR-PANEL-ID>
+node activator/activator.cjs <HARDWARE-OR-PANEL-ID> --days 1y
 ```

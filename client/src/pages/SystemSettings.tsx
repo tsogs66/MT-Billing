@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  Settings as SettingsIcon, Sun, Moon, Monitor, Database as DbIcon, Bot, Clock, KeyRound,
+  Settings as SettingsIcon, Sun, Moon, Anchor, Database as DbIcon, Bot, Clock, KeyRound,
   Router as RouterIcon, Globe2, Download, Trash2, RefreshCw, Plus, Pencil, Power,
 } from 'lucide-react';
 import Layout from '../components/Layout';
@@ -8,6 +8,7 @@ import {
   StatusBadge, TabBar, Flash, LoadingPage, SettingsSection, Modal, ModalFooter, FormField,
 } from '../components/ui';
 import { api } from '../api';
+import { useTheme, type ThemeId } from '../context/ThemeContext';
 
 const TABS = [
   { key: 'panel', label: 'Panel Settings', icon: SettingsIcon },
@@ -71,47 +72,57 @@ export default function SystemSettings() {
 }
 
 function PanelSettings({ app, setA, save }: any) {
-  const themes = [
-    ['light', 'Light', Sun],
-    ['dark', 'Dark', Moon],
-    ['system', 'System', Monitor],
-  ] as const;
+  const { theme, setTheme } = useTheme();
+  const themes: { key: ThemeId; label: string; Icon: typeof Sun; hint: string }[] = [
+    { key: 'light', label: 'Light', Icon: Sun, hint: 'Clean daylight panel' },
+    { key: 'dark', label: 'Dark', Icon: Moon, hint: 'Low-light operations' },
+    { key: 'onepiece', label: 'One Piece', Icon: Anchor, hint: 'Anime ocean / straw-hat' },
+  ];
+  const selectTheme = (key: ThemeId) => {
+    setA({ theme: key });
+    setTheme(key);
+  };
+  // Sync saved theme into provider when settings load
+  useEffect(() => {
+    if (app?.theme === 'light' || app?.theme === 'dark' || app?.theme === 'onepiece') {
+      if (app.theme !== theme) setTheme(app.theme);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [app?.theme]);
+
   return (
     <SettingsSection icon={SettingsIcon} title="Panel Settings">
       <div className="space-y-5 max-w-2xl">
         <div>
           <span className="text-sm font-semibold text-slate-700 mb-1 block">Theme</span>
-          <div className="grid grid-cols-3 rounded-lg border border-slate-200 overflow-hidden">
-            {themes.map(([key, label, Icon]) => (
+          <div className="grid grid-cols-3 rounded-xl border border-slate-200 overflow-hidden">
+            {themes.map(({ key, label, Icon, hint }) => (
               <button
                 key={key}
-                onClick={() => setA({ theme: key })}
-                className={`flex items-center justify-center gap-2 py-2.5 text-sm ${app.theme === key ? 'bg-white text-brand-600 font-medium shadow-inner' : 'bg-slate-50 text-slate-500 hover:bg-white'}`}
+                type="button"
+                onClick={() => selectTheme(key)}
+                className={`flex flex-col items-center justify-center gap-1 py-3 px-2 text-sm ${
+                  (app.theme || theme) === key
+                    ? 'bg-white text-brand-600 font-medium shadow-inner'
+                    : 'bg-slate-50 text-slate-500 hover:bg-white'
+                }`}
               >
-                <Icon size={16} /> {label}
+                <span className="flex items-center gap-1.5"><Icon size={16} /> {label}</span>
+                <span className="text-[10px] text-slate-400 font-normal">{hint}</span>
               </button>
             ))}
           </div>
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <label className="block">
-            <span className="text-sm font-semibold text-slate-700 mb-1 block">Language</span>
-            <select className="input" value={app.language} onChange={(e) => setA({ language: e.target.value })}>
-              <option value="en">English</option>
-              <option value="fil">Filipino</option>
-            </select>
-          </label>
-          <label className="block">
-            <span className="text-sm font-semibold text-slate-700 mb-1 block">Currency</span>
-            <select className="input" value={app.currency} onChange={(e) => setA({ currency: e.target.value })}>
-              <option value="PHP">PHP (₱)</option>
-              <option value="USD">USD ($)</option>
-              <option value="EUR">EUR (€)</option>
-            </select>
-          </label>
-        </div>
+        <label className="block max-w-xs">
+          <span className="text-sm font-semibold text-slate-700 mb-1 block">Currency</span>
+          <select className="input" value={app.currency} onChange={(e) => setA({ currency: e.target.value })}>
+            <option value="PHP">PHP (₱)</option>
+            <option value="USD">USD ($)</option>
+            <option value="EUR">EUR (€)</option>
+          </select>
+        </label>
         <div className="flex justify-end">
-          <button className="btn-primary" onClick={() => save()}>Save Panel Settings</button>
+          <button type="button" className="btn-primary" onClick={() => save({ theme: app.theme || theme })}>Save Panel Settings</button>
         </div>
       </div>
     </SettingsSection>
@@ -126,11 +137,27 @@ function ServerRestart({ flash }: { flash: (m: string) => void }) {
     setBusy(true);
     try {
       await api.post('/settings/restart-server');
-      flash('Server restart initiated. The panel will reconnect in a few seconds.');
+      flash('Server restart initiated. Waiting for API to come back…');
       setConfirm(false);
+      // Poll health until the API is back (tsx watch / systemd / self-respawn)
+      let tries = 0;
+      const tick = async () => {
+        tries += 1;
+        try {
+          await api.get('/health');
+          flash('API server is back online.');
+          setBusy(false);
+        } catch {
+          if (tries < 30) setTimeout(tick, 1000);
+          else {
+            flash('Restart sent. If the panel stays offline, start the API process manually.');
+            setBusy(false);
+          }
+        }
+      };
+      setTimeout(tick, 1500);
     } catch (e: any) {
       flash(e?.response?.data?.error || 'Restart failed.');
-    } finally {
       setBusy(false);
     }
   };
@@ -404,6 +431,8 @@ function TimeSync({ app, setA, save, flash }: any) {
 }
 
 function AccountReset({ flash }: any) {
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [recoveryKey, setRecoveryKey] = useState('');
   const [pw, setPw] = useState('');
   const [confirm, setConfirm] = useState('');
   const [busy, setBusy] = useState(false);
@@ -416,12 +445,24 @@ function AccountReset({ flash }: any) {
       flash('Passwords do not match.');
       return;
     }
+    if (!currentPassword && !recoveryKey.trim()) {
+      flash('Enter your current password or a vendor recovery key.');
+      return;
+    }
     setBusy(true);
     try {
-      await api.post('/account/reset-password', { newPassword: pw });
+      await api.post('/account/reset-password', {
+        newPassword: pw,
+        currentPassword: currentPassword || undefined,
+        recoveryKey: recoveryKey.trim() || undefined,
+      });
       flash('Password updated.');
+      setCurrentPassword('');
+      setRecoveryKey('');
       setPw('');
       setConfirm('');
+    } catch (e: any) {
+      flash(e?.response?.data?.error || 'Could not update password.');
     } finally {
       setBusy(false);
     }
@@ -429,16 +470,27 @@ function AccountReset({ flash }: any) {
   return (
     <SettingsSection icon={KeyRound} title="Account Reset">
       <div className="space-y-4 max-w-md">
-        <p className="text-sm text-slate-500">Change the password for the current panel account.</p>
+        <p className="text-sm text-slate-500">
+          Change the password for the current panel account. You must confirm with your{' '}
+          <b>current password</b> or a vendor <b>password recovery key</b> (from the activator).
+        </p>
+        <label className="block">
+          <span className="text-sm font-semibold text-slate-700 mb-1 block">Current Password</span>
+          <input className="input" type="password" autoComplete="current-password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} placeholder="Leave blank if using recovery key" />
+        </label>
+        <label className="block">
+          <span className="text-sm font-semibold text-slate-700 mb-1 block">Or Recovery Key</span>
+          <input className="input font-mono text-sm" value={recoveryKey} onChange={(e) => setRecoveryKey(e.target.value)} placeholder="RST-XXXX-XXXX-XXXX-XXXX" />
+        </label>
         <label className="block">
           <span className="text-sm font-semibold text-slate-700 mb-1 block">New Password</span>
-          <input className="input" type="password" value={pw} onChange={(e) => setPw(e.target.value)} />
+          <input className="input" type="password" autoComplete="new-password" value={pw} onChange={(e) => setPw(e.target.value)} />
         </label>
         <label className="block">
           <span className="text-sm font-semibold text-slate-700 mb-1 block">Confirm Password</span>
-          <input className="input" type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} />
+          <input className="input" type="password" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} />
         </label>
-        <button className="btn-primary" onClick={submit} disabled={busy}>{busy ? 'Saving…' : 'Reset Password'}</button>
+        <button type="button" className="btn-primary" onClick={submit} disabled={busy}>{busy ? 'Saving…' : 'Reset Password'}</button>
       </div>
     </SettingsSection>
   );

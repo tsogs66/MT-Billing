@@ -3,8 +3,10 @@ import { KeyRound, Copy, CheckCircle2, ShieldCheck, ShieldAlert } from 'lucide-r
 import Layout from '../components/Layout';
 import { Card, Flash, FormField, LoadingPage, PageHeader } from '../components/ui';
 import { api } from '../api';
+import { useAuth } from '../context/AuthContext';
 
 export default function License() {
+  const { refresh } = useAuth();
   const [info, setInfo] = useState<any>(null);
   const [key, setKey] = useState('');
   const [error, setError] = useState('');
@@ -29,6 +31,7 @@ export default function License() {
       await api.post('/license/activate', { key });
       setKey('');
       await load();
+      await refresh();
     } catch (e: any) {
       setError(e?.response?.data?.error || 'Activation failed');
     } finally {
@@ -38,14 +41,15 @@ export default function License() {
 
   const deactivate = async () => {
     await api.post('/license/deactivate');
-    load();
+    await load();
+    await refresh();
   };
 
   if (!info) return <Layout title="License"><LoadingPage /></Layout>;
 
   return (
     <Layout title="License">
-      <PageHeader title="Panel License" description="Activate MT-Billing with a license key from your vendor." icon={KeyRound} />
+      <PageHeader title="Panel License" description="Activate MT-Billing with a duration-bound license key from your vendor." icon={KeyRound} />
       <Flash message={error} type="error" onDismiss={() => setError('')} />
 
       <Card className="max-w-2xl" interactive>
@@ -55,12 +59,20 @@ export default function License() {
           </div>
           <div>
             <div className="font-bold text-slate-800">{info.product} — {info.edition}</div>
-            <div className="text-sm text-slate-500">{info.activated ? 'This installation is licensed.' : 'Activate the panel with a license key.'}</div>
+            <div className="text-sm text-slate-500">
+              {info.activated
+                ? info.expiresAt
+                  ? `Valid until ${new Date(info.expiresAt).toLocaleString()}`
+                  : 'Lifetime license.'
+                : info.expired
+                  ? 'Previous license expired. Enter a new key.'
+                  : 'Activate the panel with a license key. Until then only Dashboard and License are available.'}
+            </div>
           </div>
         </div>
 
         <div className="space-y-5">
-          <FormField label="Hardware ID" hint="Send this Hardware ID to your vendor to receive a matching license key.">
+          <FormField label="Hardware ID" hint="Send this Hardware ID to your vendor. They will pick an expiration (30d / 90d / 1y / lifetime) when generating the key.">
             <div className="flex items-center gap-2">
               <code className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-slate-700 font-mono text-sm">{info.hardwareId}</code>
               <button type="button" className="btn-secondary shrink-0" onClick={copyHwid}>
@@ -73,12 +85,15 @@ export default function License() {
             <div className="rounded-xl bg-emerald-50 border border-emerald-100 p-4">
               <div className="text-sm text-emerald-700 flex items-center gap-2 font-medium"><ShieldCheck size={16} /> Licensed</div>
               <div className="text-xs text-slate-500 mt-1 font-mono">{info.licenseKey}</div>
+              {info.duration && (
+                <div className="text-xs text-slate-500 mt-1">Duration: {info.duration}</div>
+              )}
               <button type="button" className="mt-3 text-sm text-rose-600 hover:text-rose-700 font-medium" onClick={deactivate}>Deactivate</button>
             </div>
           ) : (
             <FormField label="License Key">
               <div className="flex items-center gap-2">
-                <input className="input font-mono" value={key} onChange={(e) => setKey(e.target.value)} placeholder="XXXXX-XXXXX-XXXXX-XXXXX" />
+                <input className="input font-mono" value={key} onChange={(e) => setKey(e.target.value)} placeholder="XXXXX-XXXXX-XXXXX-XXXXX-1Y" />
                 <button type="button" className="btn-primary shrink-0" onClick={activate} disabled={busy || !key.trim()}>
                   {busy ? 'Activating…' : 'Activate'}
                 </button>

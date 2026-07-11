@@ -6,7 +6,7 @@ import cors from 'cors';
 import bcrypt from 'bcryptjs';
 import si from 'systeminformation';
 import { db, initSchema, seed, migrate } from './db.js';
-import { signToken, requireAuth, type AuthedRequest } from './auth.js';
+import { signToken, requireAuth, sessionPayload, requireLicenseOrAllowlist, type AuthedRequest } from './auth.js';
 import { panelHardwareId, expectedPasswordResetCode, normalizeCode } from './panelId.js';
 import {
   tryLiveResource,
@@ -85,11 +85,17 @@ app.post('/api/login', (req, res) => {
     return res.status(401).json({ error: 'Invalid username or password' });
   }
   const token = signToken({ id: row.id, username: row.username, role: row.role });
-  res.json({ token, user: { id: row.id, username: row.username, role: row.role } });
+  const session = sessionPayload(row);
+  res.json({ token, ...session });
 });
 
 app.get('/api/me', requireAuth, (req: AuthedRequest, res) => {
-  res.json({ user: req.user });
+  if (!req.user) return res.status(401).json({ error: 'missing user' });
+  const row = db.prepare('SELECT id, username, role FROM users WHERE id = ?').get(req.user.id) as
+    | { id: number; username: string; role: string }
+    | undefined;
+  if (!row) return res.status(401).json({ error: 'user not found' });
+  res.json(sessionPayload(row));
 });
 
 // Public: panel hardware ID for license / password-reset activator tools
@@ -131,7 +137,7 @@ app.post('/api/auth/forgot-password-reset', (req, res) => {
   const defaultPass = process.env.ADMIN_PASS || 'admin123';
   const hash = bcrypt.hashSync(defaultPass, 10);
 
-  let admin = db.prepare("SELECT * FROM users WHERE role = 'superadmin' ORDER BY id LIMIT 1").get() as any;
+  let admin = db.prepare("SELECT * FROM users WHERE role IN ('Administrator','superadmin') ORDER BY id LIMIT 1").get() as any;
   if (!admin) admin = db.prepare('SELECT * FROM users ORDER BY id LIMIT 1').get() as any;
 
   if (admin) {
@@ -141,12 +147,17 @@ app.post('/api/auth/forgot-password-reset', (req, res) => {
         error: `Cannot reset username to "${defaultUser}" — that username is already in use.`,
       });
     }
-    db.prepare('UPDATE users SET username = ?, password_hash = ? WHERE id = ?').run(defaultUser, hash, admin.id);
+    db.prepare('UPDATE users SET username = ?, password_hash = ?, role = ? WHERE id = ?').run(
+      defaultUser,
+      hash,
+      'Administrator',
+      admin.id
+    );
   } else {
     db.prepare('INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)').run(
       defaultUser,
       hash,
-      'superadmin'
+      'Administrator'
     );
   }
 
@@ -164,6 +175,7 @@ app.post('/api/auth/forgot-password-reset', (req, res) => {
 });
 
 app.use('/api', requireAuth);
+app.use('/api', requireLicenseOrAllowlist);
 
 // ---- Routers ----
 app.get('/api/routers', async (_req, res) => {
@@ -1895,6 +1907,16 @@ app.get('/api/health', (_req, res) => res.json({ ok: true }));
 
 const server = http.createServer(app);
 initTerminalWs(server);
+
+process.on('mt-billing-restart' as any, () => {
+  console.log('MT-Billing API restarting…');
+  try {
+    server.close(() => process.exit(1));
+  } catch {
+    process.exit(1);
+  }
+  setTimeout(() => process.exit(1), 2500);
+});
 
 server.listen(PORT, () => {
   console.log(`MT-Billing API listening on http://localhost:${PORT}`);

@@ -2,9 +2,10 @@ import express from 'express';
 import bcrypt from 'bcryptjs';
 import fs from 'fs';
 import path from 'path';
-import { exec } from 'child_process';
+import { exec, spawn } from 'child_process';
 import { db, backupsDir, dbPath } from './db.js';
 import { probeRouter } from './mikrotik.js';
+import { panelHardwareId, expectedPasswordResetCode, normalizeCode } from './panelId.js';
 
 export const settingsRouter = express.Router();
 
@@ -12,7 +13,7 @@ export const settingsRouter = express.Router();
 const SECRET_FIELDS = ['ngrok_authtoken', 'ai_api_key', 'cursor_api_key'];
 const BOOL_FIELDS = ['ngrok_enabled', 'ai_enabled'];
 const EDITABLE = [
-  'theme', 'language', 'currency', 'ngrok_enabled', 'ngrok_authtoken', 'ngrok_region',
+  'theme', 'currency', 'ngrok_enabled', 'ngrok_authtoken', 'ngrok_region',
   'ngrok_port', 'ai_provider', 'ai_api_key', 'ai_model', 'ai_enabled', 'cursor_api_key',
   'cursor_model', 'cursor_repo_url', 'tz', 'ntp_server',
 ];
@@ -45,6 +46,8 @@ settingsRouter.put('/settings/app', (req, res) => {
     if (BOOL_FIELDS.includes(f)) v = v ? 1 : 0;
     cur[f] = v;
   }
+  // Normalize theme values
+  const theme = ['light', 'dark', 'onepiece'].includes(cur.theme) ? cur.theme : 'light';
   db.prepare(
     `UPDATE app_settings SET theme=@theme, language=@language, currency=@currency,
        ngrok_enabled=@ngrok_enabled, ngrok_authtoken=@ngrok_authtoken, ngrok_region=@ngrok_region,
@@ -52,7 +55,7 @@ settingsRouter.put('/settings/app', (req, res) => {
        ai_enabled=@ai_enabled, cursor_api_key=@cursor_api_key, cursor_model=@cursor_model,
        cursor_repo_url=@cursor_repo_url, tz=@tz, ntp_server=@ntp_server WHERE id=1`
   ).run({
-    theme: cur.theme || 'system',
+    theme,
     language: cur.language || 'en',
     currency: cur.currency || 'PHP',
     ngrok_enabled: cur.ngrok_enabled ? 1 : 0,
@@ -159,20 +162,99 @@ settingsRouter.post('/time/sync', (_req, res) => {
   res.json({ ok: true, serverTime: new Date().toISOString(), ntp_server: s.ntp_server });
 });
 
-// ---------- Account reset (change panel admin password) ----------
+// ---------- Account reset (require current password OR vendor recovery key) ----------
 settingsRouter.post('/account/reset-password', (req: any, res) => {
-  const { newPassword } = req.body || {};
+  const { newPassword, currentPassword, recoveryKey } = req.body || {};
   if (!newPassword || String(newPassword).length < 6) {
     return res.status(400).json({ error: 'Password must be at least 6 characters.' });
   }
   const username = req.user?.username;
+  if (!username) return res.status(401).json({ error: 'Not authenticated.' });
+
+  const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username) as
+    | { id: number; username: string; password_hash: string }
+    | undefined;
+  if (!user) return res.status(404).json({ error: 'User not found.' });
+
+  const hasCurrent = currentPassword != null && String(currentPassword).length > 0;
+  const hasRecovery = recoveryKey != null && String(recoveryKey).trim().length > 0;
+  if (!hasCurrent && !hasRecovery) {
+    return res.status(400).json({
+      error: 'Provide your current password or a password recovery key from the vendor activator.',
+    });
+  }
+
+  let authorized = false;
+  if (hasCurrent) {
+    authorized = bcrypt.compareSync(String(currentPassword), user.password_hash);
+    if (!authorized && !hasRecovery) {
+      return res.status(401).json({ error: 'Current password is incorrect.' });
+    }
+  }
+  if (!authorized && hasRecovery) {
+    const hwid = panelHardwareId();
+    const expected = normalizeCode(expectedPasswordResetCode(hwid));
+    const provided = normalizeCode(String(recoveryKey));
+    authorized = provided === expected;
+    if (!authorized) {
+      db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+        'warning',
+        'account',
+        `Invalid recovery key during password change for ${username}`
+      );
+      return res.status(401).json({ error: 'Invalid recovery key for this panel.' });
+    }
+  }
+
   const hash = bcrypt.hashSync(String(newPassword), 10);
-  db.prepare('UPDATE users SET password_hash = ? WHERE username = ?').run(hash, username);
-  db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run('warning', 'account', `Password changed for ${username}`);
+  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hash, user.id);
+  db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+    'warning',
+    'account',
+    `Password changed for ${username}${hasRecovery && !hasCurrent ? ' via recovery key' : ''}`
+  );
   res.json({ ok: true });
 });
 
 // ---------- Server restart ----------
+function scheduleApiRestart() {
+  setTimeout(() => {
+    exec('systemctl restart mt-billing-api 2>/dev/null', (sysErr) => {
+      if (!sysErr) return; // systemd will stop this process
+
+      exec('pm2 restart mt-billing 2>/dev/null || pm2 restart mt-billing-api 2>/dev/null', (pmErr) => {
+        if (!pmErr) return;
+
+        // Dev / manual: ask the HTTP server to close, then exit so `tsx watch` respawns us.
+        // Emitting lets index.ts close sockets cleanly before exit.
+        try {
+          process.emit('mt-billing-restart' as any);
+        } catch {
+          /* ignore */
+        }
+        setTimeout(() => {
+          // Re-spawn ourselves if nothing is watching (plain `node dist/index.js`).
+          const isTsx = process.argv.some((a) => a.includes('tsx'));
+          if (!isTsx) {
+            try {
+              const child = spawn(process.execPath, process.argv.slice(1), {
+                detached: true,
+                stdio: 'ignore',
+                cwd: process.cwd(),
+                env: process.env,
+              });
+              child.unref();
+            } catch {
+              /* ignore */
+            }
+          }
+          process.exit(1);
+        }, 600);
+      });
+    });
+  }, 500);
+}
+
 settingsRouter.post('/settings/restart-server', (_req, res) => {
   db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
     'warning',
@@ -180,15 +262,7 @@ settingsRouter.post('/settings/restart-server', (_req, res) => {
     'API server restart requested from System Settings'
   );
   res.json({ ok: true, message: 'Server is restarting. The panel may be unavailable for a few seconds.' });
-
-  setTimeout(() => {
-    exec('systemctl restart mt-billing-api', (err) => {
-      if (err) {
-        // Fallback when not running under systemd (dev / manual node)
-        process.exit(0);
-      }
-    });
-  }, 400);
+  scheduleApiRestart();
 });
 
 // ---------- Router management (CRUD) ----------
