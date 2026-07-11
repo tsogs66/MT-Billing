@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { AreaChart, Area, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import {
   Cpu, HardDrive, MemoryStick, Server, Users, WifiOff, AlertTriangle, Search,
-  Activity, CircleDot, TrendingUp, Wallet, Calendar,
+  Activity, CircleDot, TrendingUp, Wallet, Calendar, KeyRound, ShieldAlert, Copy, CheckCircle2,
 } from 'lucide-react';
 import Layout from '../components/Layout';
 import { Card, Progress, Stat, StatTile, SectionTitle, TabPills } from '../components/ui';
 import { api, peso } from '../api';
 import { useRouterDevice } from '../context/RouterContext';
+import { useAuth } from '../context/AuthContext';
 import InterfaceTraffic from '../components/InterfaceTraffic';
 
 interface Host {
@@ -68,6 +70,201 @@ function fmtUptime(sec?: number) {
 }
 
 export default function Dashboard() {
+  const { user } = useAuth();
+  const licensed = !!user?.licenseActivated;
+
+  if (!licensed) {
+    return <SystemOverviewUnlicensed />;
+  }
+
+  return <DashboardLicensed />;
+}
+
+/** Shown on `/` when no license key has been activated. */
+function SystemOverviewUnlicensed() {
+  const { current } = useRouterDevice();
+  const [host, setHost] = useState<Host | null>(null);
+  const [router, setRouter] = useState<RouterStat | null>(null);
+  const [license, setLicense] = useState<any>(null);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    api.get('/dashboard/host').then((r) => setHost(r.data));
+    api.get('/license').then((r) => setLicense(r.data));
+    const t = setInterval(() => {
+      api.get('/dashboard/host').then((r) => setHost(r.data));
+    }, 10000);
+    return () => clearInterval(t);
+  }, []);
+
+  useEffect(() => {
+    if (!current?.id) {
+      setRouter(null);
+      return;
+    }
+    api.get(`/dashboard/router/${current.id}`).then((r) => setRouter(r.data)).catch(() => setRouter(null));
+  }, [current?.id]);
+
+  const copyHwid = () => {
+    if (!license?.hardwareId) return;
+    navigator.clipboard?.writeText(license.hardwareId);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <Layout title="System Overview">
+      <div className="rounded-2xl border border-amber-200 bg-gradient-to-r from-amber-50 to-orange-50 p-5 mb-6 flex flex-col sm:flex-row sm:items-center gap-4">
+        <div className="flex items-start gap-3 flex-1 min-w-0">
+          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-700">
+            <ShieldAlert size={22} />
+          </span>
+          <div className="min-w-0">
+            <h2 className="font-bold text-slate-900">License not activated</h2>
+            <p className="text-sm text-slate-600 mt-0.5">
+              This panel is in trial mode. Activate a license to unlock billing, PPPoE/IPoE, maps, and the rest of the menu.
+              Until then you can review host health below and open the License page.
+            </p>
+            {license?.hardwareId && (
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <span className="text-xs font-medium text-slate-500">Hardware ID</span>
+                <code className="text-xs font-mono bg-white/80 border border-amber-200/80 rounded-lg px-2 py-1 text-slate-700">
+                  {license.hardwareId}
+                </code>
+                <button type="button" className="text-xs text-sky-600 hover:underline inline-flex items-center gap-1" onClick={copyHwid}>
+                  {copied ? <CheckCircle2 size={12} /> : <Copy size={12} />}
+                  {copied ? 'Copied' : 'Copy'}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+        <Link to="/license" className="btn-primary shrink-0 inline-flex items-center gap-2 self-start sm:self-center">
+          <KeyRound size={16} /> Activate License
+        </Link>
+      </div>
+
+      <SectionTitle icon={Server}>System Overview</SectionTitle>
+      <p className="text-sm text-slate-500 mb-4">
+        Live status of this billing host
+        {current ? ` and selected router (${current.name})` : ''}. Full subscriber and sales dashboards unlock after activation.
+      </p>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        <StatTile
+          label="CPU"
+          value={host ? `${host.cpuUsage}%` : '—'}
+          tone="text-brand-600"
+          icon={Cpu}
+          accent="from-brand-500/15 to-transparent"
+          delay={0}
+        />
+        <StatTile
+          label="RAM"
+          value={host ? `${host.ramPct}%` : '—'}
+          tone="text-sky-600"
+          icon={MemoryStick}
+          accent="from-sky-500/15 to-transparent"
+          delay={50}
+        />
+        <StatTile
+          label="Disk"
+          value={host ? `${host.diskPct}%` : '—'}
+          tone="text-amber-600"
+          icon={HardDrive}
+          accent="from-amber-500/15 to-transparent"
+          delay={100}
+        />
+        <StatTile
+          label="Uptime"
+          value={fmtUptime(host?.uptime)}
+          tone="text-emerald-600"
+          icon={Activity}
+          accent="from-emerald-500/15 to-transparent"
+          delay={150}
+        />
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
+        <Card title="Host Panel Status" icon={Cpu} interactive right={<span className="text-xs text-slate-400">This server</span>}>
+          <div className="space-y-4">
+            <Row label="Hostname" value={host?.hostname ?? '—'} />
+            <Row label="Board / Model" value={host?.board ?? '—'} />
+            <Row label="Uptime" value={fmtUptime(host?.uptime)} />
+            <Row
+              label={<span className="flex items-center gap-2"><Cpu size={15} className="text-brand-500" />CPU Temp</span>}
+              value={host?.cpuTemp != null ? `${host.cpuTemp}°C` : '—'}
+            />
+            <Row
+              label={<span className="flex items-center gap-2"><Cpu size={15} className="text-brand-500" />CPU Usage</span>}
+              value={host ? `${host.cpuUsage}%` : '—'}
+            />
+            <div>
+              <div className="flex justify-between text-sm mb-1.5">
+                <span className="flex items-center gap-2 text-slate-600 font-medium"><MemoryStick size={15} className="text-sky-500" />RAM Usage</span>
+                <span className="text-slate-500">
+                  {host ? `${host.ramPct}%` : '—'} {host?.ramUsed ? `(${bytes(host.ramUsed)}/${bytes(host.ramTotal)})` : ''}
+                </span>
+              </div>
+              <Progress value={host?.ramPct ?? 0} color="bg-gradient-to-r from-sky-400 to-sky-500" />
+            </div>
+            <div>
+              <div className="flex justify-between text-sm mb-1.5">
+                <span className="flex items-center gap-2 text-slate-600 font-medium"><HardDrive size={15} className="text-amber-500" />Disk</span>
+                <span className="text-slate-500">{host ? `${host.diskPct}%` : '—'}</span>
+              </div>
+              <Progress value={host?.diskPct ?? 0} color="bg-gradient-to-r from-amber-400 to-amber-500" />
+            </div>
+          </div>
+        </Card>
+
+        <Card
+          title={current ? `Router: ${router?.name ?? current.name}` : 'Router Status'}
+          icon={Server}
+          interactive
+          right={
+            current ? (
+              <span className={`badge ${router?.live ? 'bg-emerald-100 text-emerald-700 ring-emerald-200/60' : 'bg-amber-100 text-amber-700 ring-amber-200/60'}`}>
+                {router?.live ? '● live' : 'offline / unreachable'}
+              </span>
+            ) : (
+              <span className="badge bg-slate-100 text-slate-500">No router selected</span>
+            )
+          }
+        >
+          {!current ? (
+            <p className="text-sm text-slate-500 py-6 text-center">Select a router from the top-right menu to view its status.</p>
+          ) : (
+            <div className="space-y-4">
+              <Row label="Host" value={router?.host ?? current.host ?? '—'} />
+              <Row label={<span className="flex items-center gap-2"><Server size={15} className="text-brand-500" />Board Name</span>} value={router?.board ?? '—'} />
+              <Row label="Uptime" value={router?.uptime ?? '—'} />
+              <Row label="CPU Load" value={router ? `${router.cpuLoad}%` : '—'} />
+              <div>
+                <div className="flex justify-between text-sm mb-1.5">
+                  <span className="text-slate-600 font-medium">Memory</span>
+                  <span className="text-slate-500">{router ? `${router.memPct}% of ${router.memTotal} MB` : '—'}</span>
+                </div>
+                <Progress value={router?.memPct ?? 0} color="bg-gradient-to-r from-emerald-400 to-emerald-500" />
+              </div>
+            </div>
+          )}
+        </Card>
+      </div>
+
+      <Card className="mt-5" title="Next step" icon={KeyRound}>
+        <p className="text-sm text-slate-600 mb-3">
+          Send your Hardware ID to your vendor, paste the license key on the License page, then the full panel menus unlock for your role.
+        </p>
+        <Link to="/license" className="btn-primary inline-flex items-center gap-2">
+          <KeyRound size={16} /> Go to License
+        </Link>
+      </Card>
+    </Layout>
+  );
+}
+
+function DashboardLicensed() {
   const { current } = useRouterDevice();
   const [host, setHost] = useState<Host | null>(null);
   const [router, setRouter] = useState<RouterStat | null>(null);
