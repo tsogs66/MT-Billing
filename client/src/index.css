@@ -11,6 +11,14 @@
   --page-fg: #0f172a;
   --card-bg: rgba(255, 255, 255, 0.9);
   --card-border: rgba(226, 232, 240, 0.8);
+  --sidebar-bg: #ffffff;
+  --sidebar-fg: #334155;
+  --sidebar-border: #e2e8f0;
+  --sidebar-muted: #64748b;
+  --sidebar-hover-bg: #f1f5f9;
+  --sidebar-active-bg: rgba(249, 115, 22, 0.12);
+  --sidebar-active-fg: #c2410c;
+  --sidebar-icon-bg: #f1f5f9;
 }
 
 html,
@@ -29,6 +37,77 @@ body {
   transition: background-color 0.25s ease, color 0.25s ease;
 }
 
+/* ── Sidebar (theme-aware base = light) ── */
+.theme-sidebar {
+  background: var(--sidebar-bg);
+  color: var(--sidebar-fg);
+  border-right: 1px solid var(--sidebar-border);
+}
+.theme-sidebar-header,
+.theme-sidebar-footer {
+  border-color: var(--sidebar-border);
+  background: color-mix(in srgb, var(--sidebar-bg) 92%, transparent);
+  border-bottom-width: 1px;
+  border-bottom-style: solid;
+}
+.theme-sidebar-footer {
+  border-bottom: none;
+  border-top-width: 1px;
+  border-top-style: solid;
+}
+.theme-sidebar-section {
+  color: var(--sidebar-muted);
+}
+.theme-sidebar-section:hover {
+  color: var(--sidebar-fg);
+}
+.theme-sidebar-link {
+  color: var(--sidebar-muted);
+}
+.theme-sidebar-link:hover {
+  color: var(--sidebar-fg);
+  background: var(--sidebar-hover-bg);
+}
+.theme-sidebar-link.is-active {
+  background: var(--sidebar-active-bg);
+  color: var(--sidebar-active-fg);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--brand) 18%, transparent);
+}
+.theme-sidebar-link-icon {
+  background: var(--sidebar-icon-bg);
+  color: var(--sidebar-muted);
+}
+.theme-sidebar-link:hover .theme-sidebar-link-icon {
+  color: var(--sidebar-fg);
+}
+.theme-sidebar-link-icon.is-active,
+.theme-sidebar-link.is-active .theme-sidebar-link-icon {
+  background: color-mix(in srgb, var(--brand) 18%, transparent);
+  color: var(--brand);
+}
+.theme-sidebar-icon-btn {
+  color: var(--sidebar-muted);
+}
+.theme-sidebar-icon-btn:hover {
+  color: var(--sidebar-fg);
+  background: var(--sidebar-hover-bg);
+}
+.theme-sidebar-banner {
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  background: rgba(245, 158, 11, 0.1);
+  color: #92400e;
+}
+.theme-sidebar-user {
+  background: var(--sidebar-hover-bg);
+  border: 1px solid var(--sidebar-border);
+}
+.theme-sidebar-user-name {
+  color: var(--sidebar-fg);
+}
+.theme-sidebar-user-meta {
+  color: var(--sidebar-muted);
+}
+
 /* ── Dark theme ── */
 [data-theme='dark'] {
   color-scheme: dark;
@@ -41,6 +120,13 @@ body {
   --modal-bg: rgba(15, 23, 42, 0.96);
   --modal-border: rgba(51, 65, 85, 0.9);
   --sidebar-bg: #020617;
+  --sidebar-fg: #cbd5e1;
+  --sidebar-border: #1e293b;
+  --sidebar-muted: #94a3b8;
+  --sidebar-hover-bg: rgba(30, 41, 59, 0.7);
+  --sidebar-active-bg: rgba(251, 146, 60, 0.15);
+  --sidebar-active-fg: #fdba74;
+  --sidebar-icon-bg: rgba(30, 41, 59, 0.55);
 }
 [data-theme='dark'] body {
   background: #0b1220;
@@ -57,6 +143,12 @@ body {
 [data-theme='dark'] aside.theme-sidebar {
   background: linear-gradient(180deg, #020617 0%, #0b1220 100%) !important;
   border-right-color: #1e293b !important;
+  color: #cbd5e1;
+}
+[data-theme='dark'] .theme-sidebar-banner {
+  border-color: rgba(245, 158, 11, 0.3);
+  background: rgba(245, 158, 11, 0.1);
+  color: #fde68a;
 }
 [data-theme='dark'] .card,
 [data-theme='dark'] .card-interactive {
@@ -122,6 +214,14 @@ body {
   --card-border: rgba(232, 185, 35, 0.28);
   --modal-bg: rgba(8, 28, 52, 0.96);
   --modal-border: rgba(232, 185, 35, 0.35);
+  --sidebar-bg: #06101c;
+  --sidebar-fg: #e2e8f0;
+  --sidebar-border: rgba(232, 185, 35, 0.35);
+  --sidebar-muted: #94a3b8;
+  --sidebar-hover-bg: rgba(232, 185, 35, 0.08);
+  --sidebar-active-bg: rgba(232, 185, 35, 0.16);
+  --sidebar-active-fg: #f5d76e;
+  --sidebar-icon-bg: rgba(8, 28, 52, 0.75);
 }
 [data-theme='onepiece'] body {
   background-color: #04101f;
@@ -157,6 +257,12 @@ body {
   background-position: left center !important;
   border-right-color: rgba(232, 185, 35, 0.35) !important;
   box-shadow: 4px 0 24px rgba(0, 0, 0, 0.35);
+  color: #e2e8f0;
+}
+[data-theme='onepiece'] .theme-sidebar-banner {
+  border-color: rgba(232, 185, 35, 0.35);
+  background: rgba(200, 16, 46, 0.18);
+  color: #fde68a;
 }
 [data-theme='onepiece'] .card,
 [data-theme='onepiece'] .card-interactive {
@@ -229,6 +335,12 @@ body {
 /* Light theme modal alignment */
 [data-theme='light'] .theme-modal {
   background: rgba(255, 255, 255, 0.98);
+}
+[data-theme='light'] .theme-sidebar,
+[data-theme='light'] aside.theme-sidebar {
+  background: #ffffff !important;
+  border-right-color: #e2e8f0 !important;
+  color: #334155;
 }
 
 .sidebar-scroll {

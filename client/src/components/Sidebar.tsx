@@ -10,6 +10,7 @@ import type { LucideIcon } from 'lucide-react';
 import Logo from './Logo';
 import { useLayout } from './Layout';
 import { useAuth } from '../context/AuthContext';
+import { useTheme } from '../context/ThemeContext';
 
 type NavItem = { to: string; label: string; icon: LucideIcon; end?: boolean; permission: string };
 type NavSection = { title: string; items: NavItem[] };
@@ -61,10 +62,12 @@ const NAV_SECTIONS: NavSection[] = [
 export default function Sidebar() {
   const { sidebarOpen, setSidebarOpen } = useLayout();
   const { canAccess, user } = useAuth();
+  const { theme } = useTheme();
   const location = useLocation();
   const navRef = useRef<HTMLElement>(null);
   const scrollPos = useRef(0);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const logoVariant = theme === 'light' ? 'light' : 'dark';
 
   // Preserve sidebar scroll — do not jump when a menu is selected
   useEffect(() => {
@@ -95,18 +98,16 @@ export default function Sidebar() {
   return (
     <aside
       className={[
-        'fixed lg:sticky top-0 z-50 h-screen w-[var(--sidebar-width)] shrink-0',
-        'bg-slate-950 text-slate-300 flex flex-col shadow-sidebar',
-        'border-r border-slate-800/80 transition-transform duration-300 ease-out',
-        'theme-sidebar',
+        'theme-sidebar fixed lg:sticky top-0 z-50 h-screen w-[var(--sidebar-width)] shrink-0',
+        'flex flex-col shadow-sidebar transition-transform duration-300 ease-out',
         sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0',
       ].join(' ')}
     >
-      <div className="h-16 flex items-center justify-between px-4 border-b border-slate-800/80 bg-slate-950/95 shrink-0">
-        <Logo size="sm" variant="dark" />
+      <div className="theme-sidebar-header h-16 flex items-center justify-between px-4 shrink-0">
+        <Logo size="sm" variant={logoVariant} />
         <button
           type="button"
-          className="lg:hidden p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+          className="theme-sidebar-icon-btn lg:hidden p-1.5 rounded-lg transition-colors"
           onClick={() => setSidebarOpen(false)}
           aria-label="Close sidebar"
         >
@@ -121,7 +122,7 @@ export default function Sidebar() {
         style={{ overflowAnchor: 'none' }}
       >
         {!user?.licenseActivated && (
-          <div className="mx-2 mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200/90 leading-snug">
+          <div className="theme-sidebar-banner mx-2 mb-3 rounded-lg px-3 py-2 text-[11px] leading-snug">
             License inactive — all menus are visible in <b>read-only</b> mode. Activate to enable edits.
           </div>
         )}
@@ -132,7 +133,7 @@ export default function Sidebar() {
               <button
                 type="button"
                 onClick={() => toggleSection(section.title)}
-                className="w-full flex items-center justify-between px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-500 hover:text-slate-400 transition-colors"
+                className="theme-sidebar-section w-full flex items-center justify-between px-3 py-2 text-[10px] font-bold uppercase tracking-widest transition-colors"
               >
                 <span>{section.title}</span>
                 <ChevronDown
@@ -156,10 +157,8 @@ export default function Sidebar() {
                         }}
                         className={({ isActive }) =>
                           [
-                            'group relative flex items-center gap-3 px-3 py-2.5 text-sm rounded-xl mx-1 transition-all duration-200',
-                            isActive
-                              ? 'bg-brand-500/15 text-brand-300 font-medium shadow-glow-sm'
-                              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60',
+                            'theme-sidebar-link group relative flex items-center gap-3 px-3 py-2.5 text-sm rounded-xl mx-1 transition-all duration-200',
+                            isActive ? 'is-active font-medium' : '',
                           ].join(' ')
                         }
                       >
@@ -168,10 +167,8 @@ export default function Sidebar() {
                             {isActive && <span className="nav-active-indicator" />}
                             <span
                               className={[
-                                'flex items-center justify-center w-8 h-8 rounded-lg transition-all duration-200',
-                                isActive
-                                  ? 'bg-brand-500/20 text-brand-400'
-                                  : 'bg-slate-800/50 text-slate-500 group-hover:bg-slate-800 group-hover:text-slate-300',
+                                'theme-sidebar-link-icon flex items-center justify-center w-8 h-8 rounded-lg transition-all duration-200',
+                                isActive ? 'is-active' : '',
                               ].join(' ')}
                             >
                               <Icon size={17} strokeWidth={isActive ? 2.25 : 2} />
@@ -189,15 +186,15 @@ export default function Sidebar() {
         })}
       </nav>
 
-      <div className="px-4 py-4 border-t border-slate-800/80 bg-slate-950/95 shrink-0">
-        <div className="flex items-center gap-2 px-2 py-2 rounded-xl bg-slate-900/80 border border-slate-800/60">
+      <div className="theme-sidebar-footer px-4 py-4 shrink-0">
+        <div className="theme-sidebar-user flex items-center gap-2 px-2 py-2 rounded-xl">
           <span className="relative flex h-2 w-2">
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-60" />
             <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
           </span>
           <div className="min-w-0 flex-1">
-            <div className="text-xs font-medium text-slate-300 truncate">{user?.username || 'Panel'}</div>
-            <div className="text-[10px] text-slate-500 truncate">{user?.role || '—'} · ts0gs v1.0.0</div>
+            <div className="theme-sidebar-user-name text-xs font-medium truncate">{user?.username || 'Panel'}</div>
+            <div className="theme-sidebar-user-meta text-[10px] truncate">{user?.role || '—'} · ts0gs v1.0.0</div>
           </div>
         </div>
       </div>
