@@ -15,7 +15,10 @@ interface AuthCtx {
   login: (username: string, password: string) => Promise<void>;
   logout: () => void;
   refresh: () => Promise<void>;
+  /** Menu/route visibility (role-based when licensed; all menus when unlicensed). */
   canAccess: (permission: string) => boolean;
+  /** False until license is activated — panel is view-only. */
+  canWrite: boolean;
 }
 
 const Ctx = createContext<AuthCtx>(null as unknown as AuthCtx);
@@ -34,47 +37,60 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const refresh = async () => {
-    const r = await api.get('/me');
-    setUser(normalizeUser(r.data.user));
-  };
-
   useEffect(() => {
     const token = localStorage.getItem('mt_token');
     if (!token) {
+      localStorage.removeItem('mt_licensed');
       setLoading(false);
       return;
     }
     api
       .get('/me')
-      .then((r) => setUser(normalizeUser(r.data.user)))
-      .catch(() => localStorage.removeItem('mt_token'))
+      .then((r) => {
+        const u = normalizeUser(r.data.user);
+        localStorage.setItem('mt_licensed', u.licenseActivated ? '1' : '0');
+        setUser(u);
+      })
+      .catch(() => {
+        localStorage.removeItem('mt_token');
+        localStorage.removeItem('mt_licensed');
+      })
       .finally(() => setLoading(false));
   }, []);
 
   const login = async (username: string, password: string) => {
     const r = await api.post('/login', { username, password });
     localStorage.setItem('mt_token', r.data.token);
-    setUser(normalizeUser(r.data.user));
+    const u = normalizeUser(r.data.user);
+    localStorage.setItem('mt_licensed', u.licenseActivated ? '1' : '0');
+    setUser(u);
   };
 
   const logout = () => {
     localStorage.removeItem('mt_token');
+    localStorage.removeItem('mt_licensed');
     setUser(null);
+  };
+
+  const refresh = async () => {
+    const r = await api.get('/me');
+    const u = normalizeUser(r.data.user);
+    localStorage.setItem('mt_licensed', u.licenseActivated ? '1' : '0');
+    setUser(u);
   };
 
   const canAccess = (permission: string) => {
     if (!user) return false;
-    // Until licensed, only dashboard + license menus
-    if (!user.licenseActivated) {
-      return permission === 'dashboard' || permission === 'license';
-    }
+    // Unlicensed: show every menu (read-only browsing)
+    if (!user.licenseActivated) return true;
     if (user.permissions.includes('*')) return true;
     return user.permissions.includes(permission);
   };
 
+  const canWrite = !!user?.licenseActivated;
+
   return (
-    <Ctx.Provider value={{ user, loading, login, logout, refresh, canAccess }}>
+    <Ctx.Provider value={{ user, loading, login, logout, refresh, canAccess, canWrite }}>
       {children}
     </Ctx.Provider>
   );

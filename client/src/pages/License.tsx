@@ -45,10 +45,10 @@ export default function License() {
     await refresh();
   };
 
-  if (!info) return <Layout title="License"><LoadingPage /></Layout>;
+  if (!info) return <Layout title="License" allowWrite><LoadingPage /></Layout>;
 
   return (
-    <Layout title="License">
+    <Layout title="License" allowWrite>
       <PageHeader title="Panel License" description="Activate MT-Billing with a duration-bound license key from your vendor." icon={KeyRound} />
       <Flash message={error} type="error" onDismiss={() => setError('')} />
 
@@ -94,7 +94,7 @@ export default function License() {
             <FormField label="License Key">
               <div className="flex items-center gap-2">
                 <input className="input font-mono" value={key} onChange={(e) => setKey(e.target.value)} placeholder="XXXXX-XXXXX-XXXXX-XXXXX-1Y" />
-                <button type="button" className="btn-primary shrink-0" onClick={activate} disabled={busy || !key.trim()}>
+                <button type="button" className="btn-primary shrink-0" data-allow-write onClick={activate} disabled={busy || !key.trim()}>
                   {busy ? 'Activating…' : 'Activate'}
                 </button>
               </div>

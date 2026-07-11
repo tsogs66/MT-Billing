@@ -123,7 +123,7 @@ export default function Sidebar() {
       >
         {!user?.licenseActivated && (
           <div className="mx-2 mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200/90 leading-snug">
-            License inactive — only Dashboard and License are available.
+            License inactive — all menus are visible in <b>read-only</b> mode. Activate to enable edits.
           </div>
         )}
         {sections.map((section) => {

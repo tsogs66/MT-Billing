@@ -77,27 +77,25 @@ export function sessionPayload(user: { id: number; username: string; role: strin
 }
 
 /**
- * After auth: if license is inactive, only allow dashboard + license (+ session) APIs.
+ * After auth: if license is inactive, allow viewing (GET) everywhere,
+ * but block mutating requests except license activation.
  */
 export function requireLicenseOrAllowlist(req: AuthedRequest, res: Response, next: NextFunction) {
   const license = getLicenseStatus();
   if (license.activated) return next();
 
+  const method = (req.method || 'GET').toUpperCase();
   const path = (req.path || '').replace(/^\/api/, '') || req.url.split('?')[0];
-  const allow = [
-    /^\/me$/,
-    /^\/license(\/|$)/,
-    /^\/dashboard(\/|$)/,
-    /^\/company\/branding$/,
-    /^\/settings\/app$/,
-    /^\/health$/,
-    /^\/routers$/,
-  ];
-  if (allow.some((re) => re.test(path))) return next();
+
+  // Read-only browsing is allowed for the full panel
+  if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return next();
+
+  // License activation / deactivation must still work
+  if (method === 'POST' && /^\/license\/(activate|deactivate)$/.test(path)) return next();
 
   return res.status(403).json({
     error: 'License required',
-    code: 'LICENSE_REQUIRED',
-    message: 'Activate the panel license to use this feature. Only Dashboard and License are available.',
+    code: 'LICENSE_READONLY',
+    message: 'Panel is read-only until a license is activated. You can view data but cannot make changes.',
   });
 }

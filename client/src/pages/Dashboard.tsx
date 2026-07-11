@@ -139,7 +139,7 @@ function SystemOverviewUnlicensed() {
             )}
           </div>
         </div>
-        <Link to="/license" className="btn-primary shrink-0 inline-flex items-center gap-2 self-start sm:self-center">
+        <Link to="/license" className="btn-primary shrink-0 inline-flex items-center gap-2 self-start sm:self-center" data-allow-write>
           <KeyRound size={16} /> Activate License
         </Link>
       </div>
@@ -256,7 +256,7 @@ function SystemOverviewUnlicensed() {
         <p className="text-sm text-slate-600 mb-3">
           Send your Hardware ID to your vendor, paste the license key on the License page, then the full panel menus unlock for your role.
         </p>
-        <Link to="/license" className="btn-primary inline-flex items-center gap-2">
+        <Link to="/license" className="btn-primary inline-flex items-center gap-2" data-allow-write>
           <KeyRound size={16} /> Go to License
         </Link>
       </Card>

@@ -2,12 +2,46 @@ import axios from 'axios';
 
 export const api = axios.create({ baseURL: '/api' });
 
+const WRITE_METHODS = new Set(['post', 'put', 'patch', 'delete']);
+
+/** Paths that may mutate even when the panel license is inactive. */
+function isLicenseWriteAllowed(url?: string) {
+  const path = String(url || '');
+  return (
+    /\/license\/(activate|deactivate)\b/.test(path) ||
+    /(^|\/)login\b/.test(path) ||
+    /\/auth\//.test(path)
+  );
+}
+
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('mt_token');
   if (token) {
     config.headers = config.headers || {};
     config.headers.Authorization = `Bearer ${token}`;
   }
+
+  const method = String(config.method || 'get').toLowerCase();
+  // Only enforce read-only when a session exists and license is inactive
+  if (token && WRITE_METHODS.has(method) && !isLicenseWriteAllowed(config.url)) {
+    const licensed = localStorage.getItem('mt_licensed') === '1';
+    if (!licensed) {
+      return Promise.reject({
+        response: {
+          status: 403,
+          data: {
+            error: 'License required',
+            code: 'LICENSE_READONLY',
+            message: 'Panel is read-only until a license is activated.',
+          },
+        },
+        config,
+        isAxiosError: true,
+        toJSON: () => ({}),
+      });
+    }
+  }
+
   return config;
 });
 
@@ -16,6 +50,7 @@ api.interceptors.response.use(
   (err) => {
     if (err?.response?.status === 401 && localStorage.getItem('mt_token')) {
       localStorage.removeItem('mt_token');
+      localStorage.removeItem('mt_licensed');
       if (!location.pathname.startsWith('/login')) location.href = '/login';
     }
     return Promise.reject(err);
