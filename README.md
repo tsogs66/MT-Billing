@@ -95,6 +95,7 @@ data otherwise).
 | `npm --prefix server run start` | Run the compiled backend |
 | `scripts/proxmox-install.sh` | Proxmox host helper → `ct/mt-billing.sh` |
 | `scripts/proxmox-update.sh` | Proxmox host helper → pull/build/restart inside LXC |
+| `scripts/fetch-update-from-github.sh` | Copy updater files from GitHub raw into `install/` |
 | `install/mt-billing-update.sh` | Guest update script (git pull + build + restart) |
 | `scripts/build-rpi-img.sh` | Build Raspberry Pi `.img` (+ `.img.xz`) for Etcher/Rufus |
 | `scripts/build-opi-img.sh` | Build Orange Pi `.img` (+ `.img.xz`) for Etcher/Rufus |
@@ -149,6 +150,19 @@ Uses [community-scripts](https://github.com/community-scripts/ProxmoxVE) `build.
 # Inside the LXC
 systemctl status mt-billing-auto-update.timer
 journalctl -u mt-billing-auto-update.service -n 50
+```
+
+**Copy update scripts only** (no full app pull yet):
+
+```bash
+# One-liner inside the LXC
+curl -fsSL https://raw.githubusercontent.com/tsogs66/MT-Billing/main/scripts/fetch-update-from-github.sh | sudo bash
+
+# Proxmox host → copy into container, then run update
+sudo bash scripts/fetch-update-from-github.sh --run
+
+# Copy + enable 10-minute auto-update timer
+sudo bash scripts/fetch-update-from-github.sh --enable-timer
 ```
 
 **Manual — from Proxmox host:**

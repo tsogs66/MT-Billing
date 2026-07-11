@@ -63,10 +63,15 @@ if pct exec "$CTID" -- test -f "$UPDATER" 2>/dev/null; then
   echo "Running guest update script in CT ${CTID}…"
   pct exec "$CTID" -- env MT_BILLING_AUTO_ONLY="${MT_BILLING_AUTO_ONLY:-0}" bash "$UPDATER" $AUTO_FLAG
 else
-  echo "Guest update script missing — pulling installer from GitHub into CT ${CTID}…"
-  BRANCH="${var_repo_branch:-main}"
-  RAW="https://raw.githubusercontent.com/tsogs66/MT-Billing/${BRANCH}/install/mt-billing-update.sh"
-  pct exec "$CTID" -- bash -c "curl -fsSL '$RAW' -o /tmp/mt-billing-update.sh && chmod +x /tmp/mt-billing-update.sh && MT_BILLING_AUTO_ONLY='${MT_BILLING_AUTO_ONLY:-0}' bash /tmp/mt-billing-update.sh $AUTO_FLAG"
+  echo "Guest update script missing — copying from GitHub into CT ${CTID}…"
+  FETCH="$ROOT/scripts/fetch-update-from-github.sh"
+  if [[ -f "$FETCH" ]]; then
+    CTID="$CTID" var_repo_branch="${var_repo_branch:-main}" bash "$FETCH" --run
+  else
+    BRANCH="${var_repo_branch:-main}"
+    RAW="https://raw.githubusercontent.com/tsogs66/MT-Billing/${BRANCH}/install/mt-billing-update.sh"
+    pct exec "$CTID" -- bash -c "curl -fsSL '$RAW' -o /tmp/mt-billing-update.sh && chmod +x /tmp/mt-billing-update.sh && MT_BILLING_AUTO_ONLY='${MT_BILLING_AUTO_ONLY:-0}' bash /tmp/mt-billing-update.sh $AUTO_FLAG"
+  fi
 fi
 
 echo "Done. Panel: http://$(pct exec "$CTID" -- hostname -I 2>/dev/null | awk '{print $1}')"
