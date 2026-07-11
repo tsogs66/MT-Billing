@@ -94,7 +94,12 @@ EOF
   cat >"${SUDOERS_FILE}" <<EOF
 # MT-Billing — allow panel service user to start the root update oneshot
 Defaults:${svc_user} !requiretty
-${svc_user} ALL=(root) NOPASSWD: /bin/systemctl start mt-billing-panel-update.service, /bin/systemctl start --no-block mt-billing-panel-update.service, /usr/bin/systemctl start mt-billing-panel-update.service, /usr/bin/systemctl start --no-block mt-billing-panel-update.service
+${svc_user} ALL=(root) NOPASSWD: /bin/systemctl start mt-billing-panel-update.service
+${svc_user} ALL=(root) NOPASSWD: /bin/systemctl start --no-block mt-billing-panel-update.service
+${svc_user} ALL=(root) NOPASSWD: /usr/bin/systemctl start mt-billing-panel-update.service
+${svc_user} ALL=(root) NOPASSWD: /usr/bin/systemctl start --no-block mt-billing-panel-update.service
+${svc_user} ALL=(root) NOPASSWD: /bin/bash ${INSTALL_DIR}/install/mt-billing-update.sh
+${svc_user} ALL=(root) NOPASSWD: /usr/bin/bash ${INSTALL_DIR}/install/mt-billing-update.sh
 EOF
   chmod 440 "${SUDOERS_FILE}"
   if command -v visudo >/dev/null 2>&1; then

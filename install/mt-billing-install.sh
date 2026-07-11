@@ -122,7 +122,12 @@ WantedBy=multi-user.target
 EOF
 cat >/etc/sudoers.d/mt-billing <<EOF
 Defaults:${SVC_USER_FOR_SUDO} !requiretty
-${SVC_USER_FOR_SUDO} ALL=(root) NOPASSWD: /bin/systemctl start mt-billing-panel-update.service, /bin/systemctl start --no-block mt-billing-panel-update.service, /usr/bin/systemctl start mt-billing-panel-update.service, /usr/bin/systemctl start --no-block mt-billing-panel-update.service
+${SVC_USER_FOR_SUDO} ALL=(root) NOPASSWD: /bin/systemctl start mt-billing-panel-update.service
+${SVC_USER_FOR_SUDO} ALL=(root) NOPASSWD: /bin/systemctl start --no-block mt-billing-panel-update.service
+${SVC_USER_FOR_SUDO} ALL=(root) NOPASSWD: /usr/bin/systemctl start mt-billing-panel-update.service
+${SVC_USER_FOR_SUDO} ALL=(root) NOPASSWD: /usr/bin/systemctl start --no-block mt-billing-panel-update.service
+${SVC_USER_FOR_SUDO} ALL=(root) NOPASSWD: /bin/bash ${INSTALL_DIR}/install/mt-billing-update.sh
+${SVC_USER_FOR_SUDO} ALL=(root) NOPASSWD: /usr/bin/bash ${INSTALL_DIR}/install/mt-billing-update.sh
 EOF
 chmod 440 /etc/sudoers.d/mt-billing
 $STD systemctl daemon-reload

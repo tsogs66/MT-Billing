@@ -429,7 +429,7 @@ export async function applyUpdate(): Promise<{
     }
 
     const hint =
-      'Panel update needs root once. On the LXC run: curl -fsSL https://raw.githubusercontent.com/tsogs66/MT-Billing/main/install/mt-billing-update.sh | sudo bash';
+      'Panel update needs root once. On the LXC run: curl -fsSL https://raw.githubusercontent.com/tsogs66/MT-Billing/main/install/mt-billing-grant-updater-root.sh | sudo bash';
     markFailed(hint);
     return { ok: false, message: hint, job: readUpdateJob(installDir) || undefined };
   }
