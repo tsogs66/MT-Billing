@@ -25,7 +25,11 @@ export default function Login() {
       await login(username, password);
       nav('/');
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Login failed');
+      if (!err?.response) {
+        setError('Cannot reach the server. Run npm run dev from the project root and try again.');
+      } else {
+        setError(err.response.data?.error || 'Invalid username or password');
+      }
     } finally {
       setLoading(false);
     }
