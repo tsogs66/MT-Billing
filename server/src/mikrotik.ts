@@ -250,3 +250,164 @@ export async function fetchRouterInterfaceTraffic(
     return out;
   });
 }
+
+function rosBool(v: string | undefined): boolean {
+  return v === 'true' || v === 'yes';
+}
+
+export interface FirewallRuleRow {
+  id: string;
+  table: 'filter' | 'nat' | 'mangle';
+  chain: string;
+  action: string;
+  proto: string;
+  dstPort: string;
+  srcAddress: string;
+  dstAddress: string;
+  inInterface: string;
+  outInterface: string;
+  comment: string;
+  enabled: boolean;
+}
+
+/** Live firewall filter + NAT rules from the router. */
+export async function fetchFirewallRules(conn: RouterConn): Promise<FirewallRuleRow[]> {
+  return withRouter(conn, async (api) => {
+    const [filter, nat] = await Promise.all([
+      api.write('/ip/firewall/filter/print') as Promise<Record<string, string>[]>,
+      api.write('/ip/firewall/nat/print') as Promise<Record<string, string>[]>,
+    ]);
+    const map = (rows: Record<string, string>[] | undefined, table: FirewallRuleRow['table']) =>
+      (rows || []).map((r) => ({
+        id: r['.id'] || '',
+        table,
+        chain: r.chain || '-',
+        action: r.action || '-',
+        proto: r.protocol || r.proto || 'all',
+        dstPort: r['dst-port'] || '-',
+        srcAddress: r['src-address'] || '-',
+        dstAddress: r['dst-address'] || '-',
+        inInterface: r['in-interface'] || '-',
+        outInterface: r['out-interface'] || '-',
+        comment: r.comment || '',
+        enabled: !rosBool(r.disabled),
+      }));
+    return [...map(filter, 'filter'), ...map(nat, 'nat')];
+  });
+}
+
+export interface IpRouteRow {
+  id: string;
+  dst: string;
+  gateway: string;
+  distance: number;
+  active: boolean;
+  enabled: boolean;
+  interfaceName: string;
+  checkGateway: string;
+  routingMark: string;
+  comment: string;
+}
+
+/** Full IP routing table from the router. */
+export async function fetchIpRoutes(conn: RouterConn): Promise<IpRouteRow[]> {
+  return withRouter(conn, async (api) => {
+    const routes = (await api.write('/ip/route/print')) as Record<string, string>[];
+    return (routes || []).map((r) => ({
+      id: r['.id'] || '',
+      dst: r['dst-address'] || '0.0.0.0/0',
+      gateway: r.gateway || r['immediate-gw'] || '-',
+      distance: Number(r.distance) || 0,
+      active: rosBool(r.active),
+      enabled: !rosBool(r.disabled),
+      interfaceName: r.interface || r['immediate-gw']?.split('%')[1] || '-',
+      checkGateway: r['check-gateway'] || '',
+      routingMark: r['routing-mark'] || '',
+      comment: r.comment || '',
+    }));
+  });
+}
+
+export interface VlanRow {
+  id: string;
+  name: string;
+  vlanId: number;
+  iface: string;
+  comment: string;
+  enabled: boolean;
+}
+
+/** VLAN interfaces from the router. */
+export async function fetchVlans(conn: RouterConn): Promise<VlanRow[]> {
+  return withRouter(conn, async (api) => {
+    const rows = (await api.write('/interface/vlan/print')) as Record<string, string>[];
+    return (rows || []).map((v) => ({
+      id: v['.id'] || '',
+      name: v.name || '',
+      vlanId: Number(v['vlan-id']) || 0,
+      iface: v.interface || '-',
+      comment: v.comment || '',
+      enabled: !rosBool(v.disabled),
+    }));
+  });
+}
+
+export interface MultiWanLinkRow {
+  name: string;
+  role: 'primary' | 'backup' | 'failover';
+  weight: number;
+  gateway: string;
+  interfaceName: string;
+  distance: number;
+  checkMethod: string;
+  status: 'up' | 'standby' | 'down';
+}
+
+/** Multi-WAN view derived from default / check-gateway routes on the router. */
+export async function fetchMultiWanLinks(conn: RouterConn): Promise<{
+  enabled: boolean;
+  strategy: string;
+  links: MultiWanLinkRow[];
+}> {
+  const wan = await fetchWanRoutes(conn);
+  const sorted = [...wan].sort((a, b) => a.distance - b.distance || a.gateway.localeCompare(b.gateway));
+  const links: MultiWanLinkRow[] = sorted.map((r, i) => {
+    let role: MultiWanLinkRow['role'] = 'failover';
+    if (i === 0) role = 'primary';
+    else if (i === 1) role = 'backup';
+    const weight = Math.max(1, Math.round((1 / Math.max(1, r.distance) / sorted.reduce((s, x) => s + 1 / Math.max(1, x.distance), 0)) * 100));
+    let status: MultiWanLinkRow['status'] = 'down';
+    if (!r.enabled) status = 'down';
+    else if (r.status === 'Active') status = 'up';
+    else status = 'standby';
+    return {
+      name: r.interfaceName || r.gateway,
+      role,
+      weight: sorted.length === 1 ? 100 : weight,
+      gateway: r.gateway,
+      interfaceName: r.interfaceName || '-',
+      distance: r.distance,
+      checkMethod: r.checkMethod,
+      status,
+    };
+  });
+  // Normalize weights to ~100
+  const sum = links.reduce((s, l) => s + l.weight, 0) || 1;
+  if (links.length > 1 && sum !== 100) {
+    let acc = 0;
+    links.forEach((l, i) => {
+      if (i === links.length - 1) l.weight = Math.max(1, 100 - acc);
+      else {
+        l.weight = Math.max(1, Math.round((l.weight / sum) * 100));
+        acc += l.weight;
+      }
+    });
+  }
+  return {
+    enabled: links.some((l) => l.status === 'up' || l.status === 'standby'),
+    strategy: links.length
+      ? `Distance-based failover (${links.filter((l) => l.checkMethod && l.checkMethod !== 'route').length ? 'check-gateway' : 'default routes'})`
+      : 'No WAN routes',
+    links,
+  };
+}

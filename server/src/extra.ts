@@ -1,7 +1,14 @@
 import express from 'express';
 import { db } from './db.js';
 import { panelHardwareId, expectedLicenseKey, normalizeCode } from './panelId.js';
-import { fetchWanRoutes, setRouteEnabled } from './mikrotik.js';
+import {
+  fetchWanRoutes,
+  setRouteEnabled,
+  fetchFirewallRules,
+  fetchIpRoutes,
+  fetchVlans,
+  fetchMultiWanLinks,
+} from './mikrotik.js';
 
 export const extraRouter = express.Router();
 
@@ -88,8 +95,25 @@ export function initExtra() {
 }
 
 // ---------------- Network ----------------
-async function syncWanRoutesFromRouters() {
-  const routers = db.prepare('SELECT * FROM routers').all() as any[];
+function resolveNetworkRouter(req: express.Request): { router: any; error?: string; status?: number } {
+  const routerId = Number(req.query.routerId || req.body?.routerId || 0);
+  if (!routerId) {
+    return { router: null, error: 'Select a router in the top bar.', status: 400 };
+  }
+  const router = db.prepare('SELECT * FROM routers WHERE id = ?').get(routerId) as any;
+  if (!router) return { router: null, error: 'Router not found', status: 404 };
+  if (!router.host || !router.api_user) {
+    return { router: null, error: 'Router API credentials not configured.', status: 400 };
+  }
+  return { router };
+}
+
+async function syncWanRoutesFromRouters(routerId?: number | null) {
+  const routers = (
+    routerId
+      ? db.prepare('SELECT * FROM routers WHERE id = ?').all(routerId)
+      : db.prepare('SELECT * FROM routers').all()
+  ) as any[];
   const collected: {
     router_id: number;
     router_name: string;
@@ -126,12 +150,14 @@ async function syncWanRoutesFromRouters() {
     }
   }
 
-  if (collected.length === 0) {
+  if (routerId) {
+    db.prepare('DELETE FROM wan_routes WHERE router_id = ?').run(routerId);
+  } else {
     db.prepare('DELETE FROM wan_routes').run();
-    return false;
   }
 
-  db.prepare('DELETE FROM wan_routes').run();
+  if (collected.length === 0) return false;
+
   const ins = db.prepare(
     `INSERT INTO wan_routes (router_id, router_name, route_id, gateway, check_method, distance, status, enabled, interface_name, dst_address)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
@@ -157,20 +183,51 @@ function getRouterConn(routerId: number) {
   return db.prepare('SELECT * FROM routers WHERE id = ?').get(routerId) as any;
 }
 
-extraRouter.get('/network/wan', async (_req, res) => {
-  const live = await syncWanRoutesFromRouters();
+extraRouter.get('/network/wan', async (req, res) => {
+  const routerId = req.query.routerId ? Number(req.query.routerId) : null;
+  if (!routerId) return res.status(400).json({ error: 'Select a router in the top bar.', routes: [], live: false });
+  const router = getRouterConn(routerId);
+  if (!router) return res.status(404).json({ error: 'Router not found', routes: [], live: false });
+  if (!router.host || !router.api_user) {
+    return res.status(400).json({ error: 'Router API credentials not configured.', routes: [], live: false });
+  }
+
+  let live = false;
+  let fetchError = '';
+  try {
+    live = await syncWanRoutesFromRouters(routerId);
+  } catch (e: any) {
+    fetchError = e?.message || 'Could not reach MikroTik';
+  }
+
   const routes = live
     ? (db
         .prepare(
           `SELECT id, router_id AS routerId, router_name AS routerName, gateway,
                   check_method AS checkMethod, distance, status, enabled,
                   interface_name AS interfaceName, dst_address AS dstAddress
-           FROM wan_routes WHERE route_id IS NOT NULL ORDER BY router_name, distance, id`
+           FROM wan_routes WHERE router_id = ? AND route_id IS NOT NULL ORDER BY distance, id`
         )
-        .all() as any[])
+        .all(routerId) as any[])
     : [];
-  res.json({ routes, live });
+
+  if (!live && !fetchError) {
+    try {
+      await fetchWanRoutes(router);
+    } catch (e: any) {
+      fetchError = e?.message || 'Could not reach MikroTik';
+    }
+  }
+
+  res.json({
+    routes,
+    live,
+    routerId,
+    routerName: router.name,
+    error: fetchError || undefined,
+  });
 });
+
 extraRouter.post('/network/wan/:id/toggle', async (req, res) => {
   const id = Number(req.params.id);
   const row = db
@@ -205,12 +262,17 @@ extraRouter.post('/network/wan/:id/toggle', async (req, res) => {
 
 extraRouter.post('/network/wan/toggle-all', async (req, res) => {
   const enable = !!req.body?.enabled;
-  const rows = db
-    .prepare('SELECT id, router_id, route_id, gateway FROM wan_routes WHERE route_id IS NOT NULL')
-    .all() as { id: number; router_id: number; route_id: string; gateway: string }[];
+  const routerId = req.body?.routerId ? Number(req.body.routerId) : req.query.routerId ? Number(req.query.routerId) : null;
+  const rows = (
+    routerId
+      ? db
+          .prepare('SELECT id, router_id, route_id, gateway FROM wan_routes WHERE route_id IS NOT NULL AND router_id = ?')
+          .all(routerId)
+      : db.prepare('SELECT id, router_id, route_id, gateway FROM wan_routes WHERE route_id IS NOT NULL').all()
+  ) as { id: number; router_id: number; route_id: string; gateway: string }[];
 
   if (rows.length === 0) {
-    return res.status(400).json({ error: 'No live WAN routes to update. Add routers and refresh.' });
+    return res.status(400).json({ error: 'No live WAN routes to update. Select a reachable router and refresh.' });
   }
 
   const errors: string[] = [];
@@ -240,39 +302,67 @@ extraRouter.post('/network/wan/toggle-all', async (req, res) => {
   );
   res.json({ ok: true, enabled: enable, errors: errors.length ? errors : undefined });
 });
-extraRouter.get('/network/firewall', (_req, res) => {
-  res.json([
-    { chain: 'input', action: 'accept', proto: 'tcp', dstPort: '8291,8728', comment: 'Winbox/API', enabled: true },
-    { chain: 'input', action: 'drop', proto: 'tcp', dstPort: '23', comment: 'Block telnet', enabled: true },
-    { chain: 'forward', action: 'accept', proto: 'all', dstPort: '-', comment: 'LAN to WAN', enabled: true },
-    { chain: 'srcnat', action: 'masquerade', proto: 'all', dstPort: '-', comment: 'NAT out', enabled: true },
-    { chain: 'input', action: 'drop', proto: 'all', dstPort: '-', comment: 'Drop all else', enabled: true },
-  ]);
+
+extraRouter.get('/network/firewall', async (req, res) => {
+  const { router, error, status } = resolveNetworkRouter(req);
+  if (!router) return res.status(status || 400).json({ error, rules: [], live: false });
+  try {
+    const rules = await fetchFirewallRules(router);
+    res.json({ rules, live: true, routerId: router.id, routerName: router.name });
+  } catch (e: any) {
+    res.status(502).json({
+      error: e?.message || 'Could not fetch firewall rules from MikroTik',
+      rules: [],
+      live: false,
+      routerId: router.id,
+      routerName: router.name,
+    });
+  }
 });
-extraRouter.get('/network/routes', (_req, res) => {
-  res.json({
-    routes: [
-      { dst: '0.0.0.0/0', gateway: '8.8.8.8', distance: 1, active: true },
-      { dst: '10.20.0.0/16', gateway: 'bridge-LAN', distance: 0, active: true },
-      { dst: '50.50.60.0/24', gateway: 'ether1', distance: 1, active: true },
-    ],
-    vlans: [
-      { name: 'vlan10-mgmt', vlanId: 10, iface: 'ether2', comment: 'Management' },
-      { name: 'vlan20-pppoe', vlanId: 20, iface: 'ether3', comment: 'PPPoE access' },
-      { name: 'vlan30-hotspot', vlanId: 30, iface: 'ether4', comment: 'Hotspot' },
-    ],
-  });
+
+extraRouter.get('/network/routes', async (req, res) => {
+  const { router, error, status } = resolveNetworkRouter(req);
+  if (!router) return res.status(status || 400).json({ error, routes: [], vlans: [], live: false });
+  try {
+    const [routes, vlans] = await Promise.all([fetchIpRoutes(router), fetchVlans(router)]);
+    res.json({ routes, vlans, live: true, routerId: router.id, routerName: router.name });
+  } catch (e: any) {
+    res.status(502).json({
+      error: e?.message || 'Could not fetch routes/VLANs from MikroTik',
+      routes: [],
+      vlans: [],
+      live: false,
+      routerId: router.id,
+      routerName: router.name,
+    });
+  }
 });
-extraRouter.get('/network/multiwan', (_req, res) => {
-  res.json({
-    enabled: true,
-    strategy: 'AI load-balance (PCC + latency aware)',
-    links: [
-      { name: 'ISP-PFSENSE-MAIN', role: 'primary', weight: 60, latencyMs: 12, loss: 0, status: 'up' },
-      { name: 'WAN_BACKUP_SERVER', role: 'backup', weight: 30, latencyMs: 34, loss: 0, status: 'up' },
-      { name: 'LTE-Failover', role: 'failover', weight: 10, latencyMs: 78, loss: 1.2, status: 'standby' },
-    ],
-  });
+
+extraRouter.get('/network/multiwan', async (req, res) => {
+  const { router, error, status } = resolveNetworkRouter(req);
+  if (!router) {
+    return res.status(status || 400).json({
+      error,
+      enabled: false,
+      strategy: '',
+      links: [],
+      live: false,
+    });
+  }
+  try {
+    const data = await fetchMultiWanLinks(router);
+    res.json({ ...data, live: true, routerId: router.id, routerName: router.name });
+  } catch (e: any) {
+    res.status(502).json({
+      error: e?.message || 'Could not fetch multi-WAN data from MikroTik',
+      enabled: false,
+      strategy: '',
+      links: [],
+      live: false,
+      routerId: router.id,
+      routerName: router.name,
+    });
+  }
 });
 
 // ---------------- Inventory CRUD ----------------
