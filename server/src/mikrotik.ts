@@ -507,3 +507,150 @@ export async function fetchNetworkInterfaces(conn: RouterConn): Promise<{
     };
   });
 }
+
+// ---------------- PPP / PPPoE ----------------
+
+export interface PppSecretRow {
+  id: string;
+  name: string;
+  password: string;
+  profile: string;
+  service: string;
+  comment: string;
+  disabled: boolean;
+  callerId: string;
+}
+
+export interface PppActiveRow {
+  id: string;
+  name: string;
+  address: string;
+  uptime: string;
+  caller: string;
+  service: string;
+  profile: string;
+}
+
+export interface PppProfileRow {
+  id: string;
+  name: string;
+  rateLimit: string;
+  localAddress: string;
+  remoteAddress: string;
+  onlyOne: string;
+  comment: string;
+}
+
+export interface PppoeServerRow {
+  id: string;
+  name: string;
+  interface: string;
+  maxSessions: number;
+  service: string;
+  authentication: string;
+  status: string;
+  disabled: boolean;
+  oneSessionPerHost: boolean;
+}
+
+export async function fetchPppSecrets(conn: RouterConn): Promise<PppSecretRow[]> {
+  return withRouter(conn, async (api) => {
+    const rows = (await api.write('/ppp/secret/print')) as Record<string, string>[];
+    return (rows || []).map((s) => ({
+      id: s['.id'] || '',
+      name: s.name || '',
+      password: s.password || '',
+      profile: s.profile || '',
+      service: s.service || 'pppoe',
+      comment: s.comment || '',
+      disabled: rosBool(s.disabled),
+      callerId: s['caller-id'] || '',
+    }));
+  });
+}
+
+export async function fetchPppActive(conn: RouterConn): Promise<PppActiveRow[]> {
+  return withRouter(conn, async (api) => {
+    const rows = (await api.write('/ppp/active/print')) as Record<string, string>[];
+    return (rows || []).map((a) => ({
+      id: a['.id'] || '',
+      name: a.name || '',
+      address: a.address || '-',
+      uptime: a.uptime || '-',
+      caller: a['caller-id'] || a.caller || '-',
+      service: a.service || 'pppoe',
+      profile: a.profile || '-',
+    }));
+  });
+}
+
+export async function fetchPppProfiles(conn: RouterConn): Promise<PppProfileRow[]> {
+  return withRouter(conn, async (api) => {
+    const rows = (await api.write('/ppp/profile/print')) as Record<string, string>[];
+    return (rows || []).map((p) => ({
+      id: p['.id'] || '',
+      name: p.name || '',
+      rateLimit: p['rate-limit'] || '',
+      localAddress: p['local-address'] || '',
+      remoteAddress: p['remote-address'] || '',
+      onlyOne: p['only-one'] || '',
+      comment: p.comment || '',
+    }));
+  });
+}
+
+export async function addPppProfile(
+  conn: RouterConn,
+  fields: { name: string; rateLimit?: string; localAddress?: string; remoteAddress?: string; comment?: string }
+): Promise<void> {
+  const args = [`=name=${fields.name}`];
+  if (fields.rateLimit) args.push(`=rate-limit=${fields.rateLimit}`);
+  if (fields.localAddress) args.push(`=local-address=${fields.localAddress}`);
+  if (fields.remoteAddress) args.push(`=remote-address=${fields.remoteAddress}`);
+  if (fields.comment) args.push(`=comment=${fields.comment}`);
+  await withRouter(conn, (api) => api.write('/ppp/profile/add', args));
+}
+
+export async function updatePppProfile(
+  conn: RouterConn,
+  id: string,
+  fields: { name?: string; rateLimit?: string; localAddress?: string; remoteAddress?: string; comment?: string }
+): Promise<void> {
+  const args = [`=.id=${id}`];
+  if (fields.name) args.push(`=name=${fields.name}`);
+  if (fields.rateLimit != null) args.push(`=rate-limit=${fields.rateLimit}`);
+  if (fields.localAddress != null) args.push(`=local-address=${fields.localAddress}`);
+  if (fields.remoteAddress != null) args.push(`=remote-address=${fields.remoteAddress}`);
+  if (fields.comment != null) args.push(`=comment=${fields.comment}`);
+  await withRouter(conn, (api) => api.write('/ppp/profile/set', args));
+}
+
+export async function removePppProfile(conn: RouterConn, id: string): Promise<void> {
+  await withRouter(conn, (api) => api.write('/ppp/profile/remove', [`=numbers=${id}`]));
+}
+
+export async function setPppSecretEnabled(conn: RouterConn, nameOrId: string, enabled: boolean): Promise<void> {
+  await withRouter(conn, (api) =>
+    api.write(enabled ? '/ppp/secret/enable' : '/ppp/secret/disable', [`=numbers=${nameOrId}`])
+  );
+}
+
+export async function fetchPppoeServers(conn: RouterConn): Promise<PppoeServerRow[]> {
+  return withRouter(conn, async (api) => {
+    const rows = (await api.write('/interface/pppoe-server/server/print')) as Record<string, string>[];
+    return (rows || []).map((s) => {
+      const disabled = rosBool(s.disabled);
+      return {
+        id: s['.id'] || '',
+        name: s['service-name'] || s.name || '',
+        interface: s.interface || '-',
+        maxSessions: Number(s['max-sessions'] || s['max-session'] || 0) || 0,
+        service: 'pppoe',
+        authentication: s.authentication || s.auth || '-',
+        status: disabled ? 'disabled' : 'running',
+        disabled,
+        oneSessionPerHost: rosBool(s['one-session-per-host']),
+      };
+    });
+  });
+}

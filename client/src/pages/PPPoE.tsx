@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Users, WifiOff, Activity, Layers, Server, ReceiptText, Plus, Pencil, Trash2, KeyRound, Eye, EyeOff, MapPin, DownloadCloud } from 'lucide-react';
+import { Users, WifiOff, Activity, Layers, Server, ReceiptText, Plus, Pencil, Trash2, KeyRound, Eye, EyeOff, MapPin, DownloadCloud, RefreshCw } from 'lucide-react';
 import Layout from '../components/Layout';
 import {
   StatusBadge, TabBar, Toolbar, SearchInput, DataTable, IconAction, Toast,
@@ -21,6 +21,8 @@ interface PUser {
   email?: string | null;
   contact?: string | null;
   online?: boolean | number;
+  sessionOnline?: boolean;
+  mikrotikProfile?: string | null;
 }
 
 const TABS = [
@@ -31,6 +33,13 @@ const TABS = [
   { key: 'servers', label: 'Servers', icon: Server },
   { key: 'plans', label: 'Billing Plans', icon: ReceiptText },
 ];
+
+function userStatusLabel(u: PUser): string {
+  if (u.status === 'disabled') return 'disabled';
+  if (u.sessionOnline || u.online === 1 || u.online === true) return 'online';
+  if (u.status === 'Active') return 'offline';
+  return u.status;
+}
 
 export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; title: string }) {
   const [tab, setTab] = useState('users');
@@ -47,9 +56,59 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
   const [fetching, setFetching] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [tabError, setTabError] = useState('');
+  const [tabBusy, setTabBusy] = useState(false);
+  const [profileEdit, setProfileEdit] = useState<any | null>(null);
+  const [showProfileAdd, setShowProfileAdd] = useState(false);
+  const [planEdit, setPlanEdit] = useState<any | null>(null);
+  const [showPlanAdd, setShowPlanAdd] = useState(false);
   const { current } = useRouterDevice();
 
-  const loadUsers = () => api.get(`/pppoe/users?service=${service}`).then((r) => setUsers(r.data));
+  const routerQ = current?.id ? `&routerId=${current.id}` : '';
+  const routerParams = current?.id ? { routerId: current.id } : {};
+
+  const loadUsers = () =>
+    api.get(`/pppoe/users?service=${service}${routerQ}`).then((r) => setUsers(r.data)).catch(() => setUsers([]));
+
+  const loadProfiles = () =>
+    api
+      .get('/pppoe/profiles', { params: routerParams })
+      .then((r) => setProfiles(Array.isArray(r.data) ? r.data : r.data.profiles || []))
+      .catch(() => setProfiles([]));
+
+  const loadActive = () => {
+    setTabBusy(true);
+    setTabError('');
+    return api
+      .get('/pppoe/active', { params: { service, ...routerParams } })
+      .then((r) => {
+        setActive(r.data.sessions || (Array.isArray(r.data) ? r.data : []));
+        if (r.data.error) setTabError(r.data.error);
+      })
+      .catch((e) => {
+        setActive([]);
+        setTabError(e?.response?.data?.error || 'Could not load active sessions');
+      })
+      .finally(() => setTabBusy(false));
+  };
+
+  const loadServers = () => {
+    setTabBusy(true);
+    setTabError('');
+    return api
+      .get('/pppoe/servers', { params: routerParams })
+      .then((r) => {
+        setServers(r.data.servers || (Array.isArray(r.data) ? r.data : []));
+        if (r.data.error) setTabError(r.data.error);
+      })
+      .catch((e) => {
+        setServers([]);
+        setTabError(e?.response?.data?.error || 'Could not load PPPoE servers');
+      })
+      .finally(() => setTabBusy(false));
+  };
+
+  const loadPlans = () => api.get('/billing-plans').then((r) => setPlans(r.data)).catch(() => setPlans([]));
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -64,8 +123,12 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
     setFetching(true);
     try {
       const r = await api.post(`/pppoe/fetch-mikrotik?routerId=${current.id}`);
-      showToast(`Fetched from ${r.data.router}: ${r.data.profilesImported} profiles, ${r.data.fetched} secrets (${r.data.created} new, ${r.data.updated} updated).`);
+      showToast(`Fetched from ${r.data.router}: ${r.data.profilesImported} profiles, ${r.data.fetched} secrets (${r.data.created} new, ${r.data.updated} updated), ${r.data.active ?? 0} active.`);
       loadUsers();
+      loadProfiles();
+      loadPlans();
+      if (tab === 'active') loadActive();
+      if (tab === 'servers') loadServers();
     } catch (e: any) {
       showToast(e?.response?.data?.error || 'Fetch from MikroTik failed.');
     } finally {
@@ -74,22 +137,33 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
   };
 
   const toggleEnabled = async (u: PUser) => {
-    const r = await api.post(`/pppoe/users/${u.id}/toggle-enabled`);
-    showToast(`${u.username} ${r.data.status === 'disabled' ? 'disabled' : 'enabled'} in MikroTik.`);
-    loadUsers();
+    try {
+      const r = await api.post(`/pppoe/users/${u.id}/toggle-enabled`);
+      showToast(`${u.username} ${r.data.status === 'disabled' ? 'disabled' : 'enabled'} in MikroTik.`);
+      loadUsers();
+    } catch (e: any) {
+      showToast(e?.response?.data?.error || 'Toggle failed.');
+    }
   };
 
   useEffect(() => {
     setTab('users');
     setSearch('');
     setSelected(new Set());
+    setTabError('');
     loadUsers();
-    api.get('/pppoe/profiles').then((r) => setProfiles(r.data));
-    api.get(`/pppoe/active?service=${service}`).then((r) => setActive(r.data));
-    api.get('/pppoe/servers').then((r) => setServers(r.data));
-    api.get('/billing-plans').then((r) => setPlans(r.data));
+    loadProfiles();
+    loadPlans();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [service]);
+  }, [service, current?.id]);
+
+  useEffect(() => {
+    if (tab === 'active') loadActive();
+    if (tab === 'servers') loadServers();
+    if (tab === 'profiles') loadProfiles();
+    if (tab === 'plans') loadPlans();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, current?.id]);
 
   const filtered = users.filter(
     (u) =>
@@ -97,7 +171,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
       (u.customer || '').toLowerCase().includes(search.toLowerCase()) ||
       (u.account || '').includes(search)
   );
-  const offline = filtered.filter((u) => u.status !== 'Active');
+  const offline = filtered.filter((u) => !(u.sessionOnline || u.online === 1 || u.online === true) || u.status === 'disabled');
   const listUsers = tab === 'offline' ? offline : filtered;
   const allSelected = listUsers.length > 0 && listUsers.every((u) => selected.has(u.id));
   const someSelected = listUsers.some((u) => selected.has(u.id));
@@ -162,8 +236,33 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
   };
 
   const remove = async (id: number) => {
+    if (!confirm('Delete this user?')) return;
     await api.delete(`/pppoe/users/${id}`);
     loadUsers();
+  };
+
+  const deleteProfile = async (p: any) => {
+    if (!confirm(`Delete profile "${p.name}"?`)) return;
+    try {
+      await api.delete(`/pppoe/profiles/${p.id}`, { params: routerParams });
+      showToast(`Profile ${p.name} deleted.`);
+      loadProfiles();
+      loadPlans();
+    } catch (e: any) {
+      showToast(e?.response?.data?.error || 'Delete failed.');
+    }
+  };
+
+  const deletePlan = async (p: any) => {
+    if (!confirm(`Delete billing plan "${p.name}"?`)) return;
+    try {
+      await api.delete(`/billing-plans/${p.id}`);
+      showToast(`Plan ${p.name} deleted.`);
+      loadPlans();
+      loadProfiles();
+    } catch (e: any) {
+      showToast(e?.response?.data?.error || 'Delete failed.');
+    }
   };
 
   return (
@@ -181,6 +280,9 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                   </span>
                   {someSelected && (
                     <span className="text-brand-600 font-medium text-sm">{selected.size} selected</span>
+                  )}
+                  {current && (
+                    <span className="text-xs text-slate-400">Router: {current.name}</span>
                   )}
                 </div>
               }
@@ -202,6 +304,9 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                     placeholder={`Search ${service.toUpperCase()} user…`}
                     className="w-64"
                   />
+                  <button type="button" className="btn-secondary" onClick={loadUsers} title="Refresh users">
+                    <RefreshCw size={16} /> Refresh
+                  </button>
                   <button
                     type="button"
                     className="btn-secondary"
@@ -260,8 +365,8 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                       <div className="text-xs text-slate-400">{u.customer}</div>
                     </div>,
                     <span className="text-slate-500">{u.account}</span>,
-                    <span className="text-slate-600">{u.profile}</span>,
-                    <StatusBadge status={u.status} />,
+                    <span className="text-slate-600 font-medium">{u.mikrotikProfile || u.profile}</span>,
+                    <StatusBadge status={userStatusLabel(u)} />,
                     <span className="text-slate-500">{u.subscriptionDue}</span>,
                     <div key="a" className="flex items-center justify-end gap-1">
                       <IconAction icon={ReceiptText} title="Process Payment" tone="emerald" onClick={() => setPayFor(u)} />
@@ -283,39 +388,180 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
         )}
 
         {tab === 'active' && (
-          <div className="p-4">
-            <SimpleTable
-              columns={['Username', 'Customer', 'Profile', 'Address', 'Uptime', 'Caller ID']}
-              rows={active.map((a) => [a.username, a.customer, a.profile, a.address, a.uptime, a.caller])}
+          <>
+            <Toolbar
+              left={
+                <span>
+                  Active sessions <span className="font-semibold text-slate-800">{active.length}</span>
+                  {current ? <span className="text-xs text-slate-400 ml-2">from {current.name}</span> : null}
+                </span>
+              }
+              right={
+                <button type="button" className="btn-secondary" onClick={loadActive} disabled={tabBusy || !current}>
+                  <RefreshCw size={16} className={tabBusy ? 'animate-spin' : ''} /> Refresh
+                </button>
+              }
             />
-          </div>
+            <div className="p-4 pt-0 space-y-3">
+              {!current && (
+                <div className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                  Select a MikroTik router in the top bar to load live PPP active sessions.
+                </div>
+              )}
+              {tabError && <div className="text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">{tabError}</div>}
+              <DataTable
+                columns={[
+                  { key: 'user', label: 'Username' },
+                  { key: 'customer', label: 'Customer' },
+                  { key: 'profile', label: 'Profile' },
+                  { key: 'addr', label: 'Address' },
+                  { key: 'uptime', label: 'Uptime' },
+                  { key: 'caller', label: 'Caller ID (MAC)' },
+                ]}
+                rows={active.map((a, i) => ({
+                  key: i,
+                  cells: [
+                    <span className="font-semibold text-slate-800">{a.username}</span>,
+                    a.customer,
+                    a.profile,
+                    <span className="font-mono text-xs">{a.address}</span>,
+                    a.uptime,
+                    <span className="font-mono text-sm text-sky-700">{a.caller}</span>,
+                  ],
+                }))}
+                emptyMessage={current ? 'No active PPP sessions on this router.' : 'Select a router to view active connections.'}
+              />
+            </div>
+          </>
         )}
 
         {tab === 'profiles' && (
-          <div className="p-4">
-            <SimpleTable
-              columns={['Name', 'Rate Limit', 'Price', 'Type']}
-              rows={profiles.map((p) => [p.name, p.rateLimit, peso(p.price), p.type])}
+          <>
+            <Toolbar
+              left={<span>PPP Profiles <span className="font-semibold text-slate-800">{profiles.length}</span></span>}
+              right={
+                <>
+                  <button type="button" className="btn-secondary" onClick={loadProfiles} disabled={tabBusy}>
+                    <RefreshCw size={16} /> Refresh
+                  </button>
+                  <button type="button" className="btn-primary" onClick={() => setShowProfileAdd(true)}>
+                    <Plus size={16} /> Add Profile
+                  </button>
+                </>
+              }
             />
-          </div>
+            <div className="p-4 pt-0">
+              <DataTable
+                columns={[
+                  { key: 'name', label: 'Name' },
+                  { key: 'rate', label: 'Rate Limit' },
+                  { key: 'price', label: 'Price' },
+                  { key: 'type', label: 'Type' },
+                  { key: 'actions', label: 'Actions', align: 'right' },
+                ]}
+                rows={profiles.map((p) => ({
+                  key: p.id || p.name,
+                  cells: [
+                    <span className="font-medium text-slate-800">{p.name}</span>,
+                    <span className="font-mono text-xs">{p.rateLimit || '—'}</span>,
+                    peso(p.price),
+                    p.type || 'pppoe',
+                    <div className="flex justify-end gap-1">
+                      <IconAction icon={Pencil} title="Edit" tone="sky" onClick={() => setProfileEdit(p)} />
+                      <IconAction icon={Trash2} title="Delete" tone="rose" onClick={() => deleteProfile(p)} />
+                    </div>,
+                  ],
+                }))}
+                emptyMessage="No profiles. Fetch from MikroTik or add one."
+              />
+            </div>
+          </>
         )}
 
         {tab === 'servers' && (
-          <div className="p-4">
-            <SimpleTable
-              columns={['Name', 'Interface', 'Max Sessions', 'Service', 'Auth', 'Status']}
-              rows={servers.map((s) => [s.name, s.interface, s.maxSessions, s.service, s.authentication, <StatusBadge key={s.name} status={s.status} />])}
+          <>
+            <Toolbar
+              left={
+                <span>
+                  PPPoE Servers <span className="font-semibold text-slate-800">{servers.length}</span>
+                  {current ? <span className="text-xs text-slate-400 ml-2">from {current.name}</span> : null}
+                </span>
+              }
+              right={
+                <button type="button" className="btn-secondary" onClick={loadServers} disabled={tabBusy || !current}>
+                  <RefreshCw size={16} className={tabBusy ? 'animate-spin' : ''} /> Refresh
+                </button>
+              }
             />
-          </div>
+            <div className="p-4 pt-0 space-y-3">
+              {!current && (
+                <div className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                  Select a MikroTik router to load configured PPPoE servers (/interface/pppoe-server/server).
+                </div>
+              )}
+              {tabError && <div className="text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">{tabError}</div>}
+              <DataTable
+                columns={[
+                  { key: 'name', label: 'Service Name' },
+                  { key: 'iface', label: 'Interface' },
+                  { key: 'max', label: 'Max Sessions' },
+                  { key: 'svc', label: 'Service' },
+                  { key: 'auth', label: 'Authentication' },
+                  { key: 'status', label: 'Status' },
+                ]}
+                rows={servers.map((s, i) => ({
+                  key: s.id || i,
+                  cells: [
+                    <span className="font-medium text-slate-800">{s.name || '—'}</span>,
+                    s.interface,
+                    s.maxSessions || '—',
+                    s.service,
+                    <span className="font-mono text-xs">{s.authentication}</span>,
+                    <StatusBadge status={s.status} />,
+                  ],
+                }))}
+                emptyMessage={current ? 'No PPPoE servers configured on this router.' : 'Select a router to view PPPoE servers.'}
+              />
+            </div>
+          </>
         )}
 
         {tab === 'plans' && (
-          <div className="p-4">
-            <SimpleTable
-              columns={['Plan', 'Rate Limit', 'Monthly Price']}
-              rows={plans.map((p) => [p.name, p.rateLimit, peso(p.price)])}
+          <>
+            <Toolbar
+              left={<span>Billing Plans <span className="font-semibold text-slate-800">{plans.length}</span></span>}
+              right={
+                <>
+                  <button type="button" className="btn-secondary" onClick={loadPlans}>
+                    <RefreshCw size={16} /> Refresh
+                  </button>
+                  <button type="button" className="btn-primary" onClick={() => setShowPlanAdd(true)}>
+                    <Plus size={16} /> Add New Plan
+                  </button>
+                </>
+              }
             />
-          </div>
+            <div className="p-4 pt-0">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
+                {plans.map((p) => (
+                  <div key={p.id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm hover:shadow-md transition-shadow">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="font-bold text-slate-900 text-lg">{p.name}</div>
+                        <div className="text-xs text-slate-400 font-mono mt-0.5">{p.rateLimit || 'No rate limit'}</div>
+                      </div>
+                      <div className="flex gap-1">
+                        <IconAction icon={Pencil} title="Edit plan" tone="sky" onClick={() => setPlanEdit(p)} />
+                        <IconAction icon={Trash2} title="Delete plan" tone="rose" onClick={() => deletePlan(p)} />
+                      </div>
+                    </div>
+                    <div className="mt-4 text-2xl font-bold text-brand-600">{peso(p.price)}<span className="text-sm font-medium text-slate-400">/mo</span></div>
+                  </div>
+                ))}
+              </div>
+              {plans.length === 0 && <div className="text-sm text-slate-400 py-8 text-center">No billing plans yet. Click Add New Plan.</div>}
+            </div>
+          </>
         )}
       </Card>
 
@@ -362,8 +608,177 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
         />
       )}
 
+      {(showProfileAdd || profileEdit) && (
+        <ProfileFormModal
+          initial={profileEdit}
+          routerId={current?.id}
+          onClose={() => {
+            setShowProfileAdd(false);
+            setProfileEdit(null);
+          }}
+          onSaved={() => {
+            setShowProfileAdd(false);
+            setProfileEdit(null);
+            showToast(profileEdit ? 'Profile updated.' : 'Profile created.');
+            loadProfiles();
+            loadPlans();
+          }}
+        />
+      )}
+
+      {(showPlanAdd || planEdit) && (
+        <PlanFormModal
+          initial={planEdit}
+          onClose={() => {
+            setShowPlanAdd(false);
+            setPlanEdit(null);
+          }}
+          onSaved={() => {
+            setShowPlanAdd(false);
+            setPlanEdit(null);
+            showToast(planEdit ? 'Plan updated.' : 'Plan created.');
+            loadPlans();
+            loadProfiles();
+          }}
+        />
+      )}
+
       <Toast message={toast} />
     </Layout>
+  );
+}
+
+function ProfileFormModal({
+  initial,
+  routerId,
+  onClose,
+  onSaved,
+}: {
+  initial: any | null;
+  routerId?: number;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const isEdit = !!initial?.id && Number.isFinite(Number(initial.id));
+  const [name, setName] = useState(initial?.name || '');
+  const [rateLimit, setRateLimit] = useState(initial?.rateLimit || '');
+  const [price, setPrice] = useState(String(initial?.price ?? 0));
+  const [localAddress, setLocalAddress] = useState(initial?.localAddress || '');
+  const [remoteAddress, setRemoteAddress] = useState(initial?.remoteAddress || '');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const save = async () => {
+    if (!name.trim()) {
+      setError('Name is required');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    try {
+      const payload = {
+        name: name.trim(),
+        rateLimit: rateLimit.trim(),
+        price: Number(price) || 0,
+        localAddress: localAddress.trim() || undefined,
+        remoteAddress: remoteAddress.trim() || undefined,
+        routerId,
+        mikrotikId: initial?.mikrotikId,
+      };
+      if (isEdit) await api.put(`/pppoe/profiles/${initial.id}`, payload);
+      else await api.post('/pppoe/profiles', payload);
+      onSaved();
+    } catch (e: any) {
+      setError(e?.response?.data?.error || 'Save failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      title={isEdit ? 'Edit Profile' : 'Add Profile'}
+      subtitle="Creates/updates /ppp/profile on the selected MikroTik when credentials are set."
+      onClose={onClose}
+      footer={<ModalFooter onCancel={onClose} onConfirm={save} confirmLabel={isEdit ? 'Save Changes' : 'Add Profile'} busy={busy} />}
+    >
+      {error && <div className="text-sm text-rose-600 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2 mb-4">{error}</div>}
+      <div className="space-y-4">
+        <FormField label="Profile Name" required>
+          <input className="input" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+        </FormField>
+        <FormField label="Rate Limit" hint="e.g. 15M/15M or 10M/50M">
+          <input className="input font-mono" value={rateLimit} onChange={(e) => setRateLimit(e.target.value)} placeholder="15M/15M" />
+        </FormField>
+        <FormField label="Local Address">
+          <input className="input font-mono" value={localAddress} onChange={(e) => setLocalAddress(e.target.value)} />
+        </FormField>
+        <FormField label="Remote Address">
+          <input className="input font-mono" value={remoteAddress} onChange={(e) => setRemoteAddress(e.target.value)} />
+        </FormField>
+        <FormField label="Panel Price (optional)">
+          <input className="input" type="number" min={0} value={price} onChange={(e) => setPrice(e.target.value)} />
+        </FormField>
+      </div>
+    </Modal>
+  );
+}
+
+function PlanFormModal({
+  initial,
+  onClose,
+  onSaved,
+}: {
+  initial: any | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const isEdit = !!initial?.id;
+  const [name, setName] = useState(initial?.name || '');
+  const [rateLimit, setRateLimit] = useState(initial?.rateLimit || '');
+  const [price, setPrice] = useState(String(initial?.price ?? ''));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const save = async () => {
+    if (!name.trim()) {
+      setError('Plan name is required');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    try {
+      const payload = { name: name.trim(), rateLimit: rateLimit.trim(), price: Number(price) || 0 };
+      if (isEdit) await api.put(`/billing-plans/${initial.id}`, payload);
+      else await api.post('/billing-plans', payload);
+      onSaved();
+    } catch (e: any) {
+      setError(e?.response?.data?.error || 'Save failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      title={isEdit ? 'Edit Billing Plan' : 'Add New Plan'}
+      subtitle="Panel pricing used for payments and receipts."
+      onClose={onClose}
+      footer={<ModalFooter onCancel={onClose} onConfirm={save} confirmLabel={isEdit ? 'Save Changes' : 'Create Plan'} busy={busy} />}
+    >
+      {error && <div className="text-sm text-rose-600 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2 mb-4">{error}</div>}
+      <div className="space-y-4">
+        <FormField label="Plan Name" required>
+          <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. UNLI500" autoFocus />
+        </FormField>
+        <FormField label="Rate Limit" hint="Shown on cards; match a PPP profile when possible.">
+          <input className="input font-mono" value={rateLimit} onChange={(e) => setRateLimit(e.target.value)} placeholder="25M/25M" />
+        </FormField>
+        <FormField label="Monthly Price" required>
+          <input className="input" type="number" min={0} step="0.01" value={price} onChange={(e) => setPrice(e.target.value)} placeholder="999" />
+        </FormField>
+      </div>
+    </Modal>
   );
 }
 
@@ -506,16 +921,6 @@ function ProcessPaymentModal({ user, profiles, onClose, onPaid }: { user: PUser;
         </div>
       </div>
     </Modal>
-  );
-}
-
-function SimpleTable({ columns, rows }: { columns: string[]; rows: React.ReactNode[][] }) {
-  return (
-    <DataTable
-      columns={columns.map((c, i) => ({ key: String(i), label: c }))}
-      rows={rows.map((r, i) => ({ key: i, cells: r }))}
-      emptyMessage="No records."
-    />
   );
 }
 

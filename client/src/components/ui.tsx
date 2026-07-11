@@ -68,6 +68,8 @@ const STATUS_STYLES: Record<string, string> = {
   active: 'bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200/60',
   running: 'bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200/60',
   online: 'bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200/60',
+  Active: 'bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200/60',
+  running: 'bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200/60',
   live: 'bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200/60',
   unused: 'bg-sky-100 text-sky-700 ring-1 ring-sky-200/60',
   inactive: 'bg-slate-100 text-slate-500 ring-1 ring-slate-200/60',
