@@ -25,7 +25,10 @@ export default function Login() {
       await login(username, password);
       nav('/');
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Login failed');
+      const apiMsg = err?.response?.data?.error;
+      if (apiMsg) setError(apiMsg);
+      else if (!err?.response) setError('Cannot reach the API. Is the server running?');
+      else setError('Login failed');
     } finally {
       setLoading(false);
     }
@@ -157,10 +160,19 @@ function ForgotPasswordForm({ onBack, onSuccess }: { onBack: () => void; onSucce
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    publicApi.get('/auth/panel-id').then((r) => {
-      setPanelId(r.data.panelId);
-      setDefaultUser(r.data.defaultUser || 'admin');
-    }).catch(() => setError('Could not load Panel ID.'));
+    publicApi
+      .get('/auth/panel-id')
+      .then((r) => {
+        setPanelId(r.data.panelId);
+        setDefaultUser(r.data.defaultUser || 'admin');
+        setError('');
+      })
+      .catch((err: any) => {
+        const apiMsg = err?.response?.data?.error;
+        if (apiMsg) setError(apiMsg);
+        else if (!err?.response) setError('Cannot reach the API — Panel ID unavailable until the server is running.');
+        else setError('Could not load Panel ID.');
+      });
   }, []);
 
   const copyId = () => {
