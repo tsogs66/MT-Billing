@@ -9,7 +9,7 @@ import { db, initSchema, seed, migrate } from './db.js';
 import { signToken, requireAuth, type AuthedRequest } from './auth.js';
 import { panelHardwareId, expectedPasswordResetCode, normalizeCode } from './panelId.js';
 import { tryLiveResource, withRouter, probeRouter, fetchWanRoutes, listRouterFiles, fetchRouterDashboardStats, fetchRouterQueues, fetchRouterInterfaceNames, fetchRouterInterfaceTraffic } from './mikrotik.js';
-import { buildSecretComment, parseSecretComment, upsertPppSecret, setPppSecretEnabled, removePppSecret } from './ppp-secret.js';
+import { buildSecretComment, parseSecretComment, upsertPppSecret, setPppSecretEnabled, removePppSecret, fetchPppSecret, fetchPppSecrets, fetchPppActive, fetchPppProfiles, fetchPppoeServers, mergeMikrotikUserState, secretIsDisabled } from './ppp-secret.js';
 import { getUptime, getUptimeSummary, runUptimeChecks, startUptime } from './uptime.js';
 import { getInterfaceNames, getTrafficSnapshot } from './interfaces.js';
 import { settingsRouter } from './settings.js';
@@ -421,9 +421,71 @@ async function trySyncUserToMikrotik(user: any): Promise<{ synced: boolean; erro
   }
 }
 
+async function refreshUserFromMikrotik(user: any, router?: any): Promise<any> {
+  const r = router || (user.router_id ? db.prepare('SELECT * FROM routers WHERE id = ?').get(user.router_id) : null);
+  if (!r?.host || !r?.api_user) return user;
+  try {
+    const [secret, active] = await Promise.all([
+      fetchPppSecret(routerConn(r), user.username),
+      fetchPppActive(routerConn(r)),
+    ]);
+    const connected = (active || []).some((a) => a.name === user.username);
+    const merged = mergeMikrotikUserState(secret, connected);
+    if (!merged) return user;
+    db.prepare(
+      `UPDATE pppoe_users SET profile = @profile, subscription_due = @subscription_due,
+       expiration_profile = @expiration_profile, account_number = COALESCE(NULLIF(@account_number,''), account_number),
+       status = @status, online = @online WHERE id = @id`
+    ).run({
+      id: user.id,
+      profile: merged.profile,
+      subscription_due: merged.subscription_due,
+      expiration_profile: merged.expiration_profile,
+      account_number: merged.account_number,
+      status: merged.status,
+      online: merged.online,
+    });
+    return db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(user.id) as any;
+  } catch {
+    return user;
+  }
+}
+
+async function livePppContext(routerId: number) {
+  const router = db.prepare('SELECT * FROM routers WHERE id = ?').get(routerId) as any;
+  if (!router?.host || !router?.api_user) return null;
+  const conn = routerConn(router);
+  const [secrets, active] = await Promise.all([fetchPppSecrets(conn), fetchPppActive(conn)]);
+  const activeNames = new Set((active || []).map((a) => a.name).filter(Boolean));
+  const secretByName = Object.fromEntries((secrets || []).map((s) => [s.name, s]));
+  return { router, conn, secrets, active, activeNames, secretByName };
+}
+
 // ---- PPPoE ----
-app.get('/api/pppoe/users', (req, res) => {
+app.get('/api/pppoe/users', async (req, res) => {
   const service = String(req.query.service || 'pppoe');
+  const routerId = req.query.routerId ? Number(req.query.routerId) : null;
+  const live = req.query.live === '1' || req.query.live === 'true';
+
+  if (live && routerId) {
+    try {
+      const ctx = await livePppContext(routerId);
+      if (ctx) {
+        const users = db.prepare('SELECT * FROM pppoe_users WHERE service = ?').all(service) as any[];
+        const upd = db.prepare('UPDATE pppoe_users SET status = ?, online = ? WHERE id = ?');
+        for (const u of users) {
+          const sec = ctx.secretByName[u.username];
+          if (!sec) continue;
+          const connected = ctx.activeNames.has(u.username);
+          const disabled = secretIsDisabled(sec);
+          upd.run(disabled ? 'disabled' : 'Active', disabled ? 0 : connected ? 1 : 0, u.id);
+        }
+      }
+    } catch {
+      /* keep cached DB state */
+    }
+  }
+
   const rows = db
     .prepare(
       `SELECT id, username, customer_name AS customer, account_number AS account, profile, status,
@@ -434,11 +496,40 @@ app.get('/api/pppoe/users', (req, res) => {
   res.json(rows);
 });
 
-// Full record for the edit form.
-app.get('/api/pppoe/users/:id', (req, res) => {
+// Full record for the edit form — refreshes billing fields from MikroTik when possible.
+app.get('/api/pppoe/users/:id', async (req, res) => {
+  let row = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(Number(req.params.id)) as any;
+  if (!row) return res.status(404).json({ error: 'not found' });
+  const routerId = req.query.routerId ? Number(req.query.routerId) : row.router_id;
+  if (routerId) row = await refreshUserFromMikrotik({ ...row, router_id: routerId });
+  res.json({ ...row, mikrotikComment: buildSecretComment(row) });
+});
+
+// Live MikroTik PPP secret data for payment / edit dialogs.
+app.get('/api/pppoe/users/:id/mikrotik', async (req, res) => {
   const row = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(Number(req.params.id)) as any;
   if (!row) return res.status(404).json({ error: 'not found' });
-  res.json({ ...row, mikrotikComment: buildSecretComment(row) });
+  const routerId = Number(req.query.routerId || row.router_id || 0);
+  const router = db.prepare('SELECT * FROM routers WHERE id = ?').get(routerId) as any;
+  if (!router?.host || !router?.api_user) {
+    return res.json({ live: false, user: row, mikrotikComment: buildSecretComment(row) });
+  }
+  try {
+    const refreshed = await refreshUserFromMikrotik({ ...row, router_id: routerId }, router);
+    const secret = await fetchPppSecret(routerConn(router), row.username);
+    const active = await fetchPppActive(routerConn(router));
+    const connected = (active || []).some((a) => a.name === row.username);
+    res.json({
+      live: true,
+      user: refreshed,
+      mikrotikComment: buildSecretComment(refreshed),
+      secretDisabled: secretIsDisabled(secret),
+      connected,
+      secretProfile: secret?.profile || refreshed.profile,
+    });
+  } catch (e: any) {
+    res.status(502).json({ error: e?.message || 'Could not read PPP secret from MikroTik' });
+  }
 });
 
 // Generate a unique 12-digit numeric account number.
@@ -557,7 +648,20 @@ app.post('/api/pppoe/users/:id/toggle-enabled', async (req, res) => {
   const id = Number(req.params.id);
   const u = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(id) as any;
   if (!u) return res.status(404).json({ error: 'not found' });
-  const disabling = u.status !== 'disabled';
+
+  let disabling = u.status === 'disabled';
+  const router = u.router_id ? (db.prepare('SELECT * FROM routers WHERE id = ?').get(u.router_id) as any) : null;
+  if (router?.host && router?.api_user) {
+    try {
+      const secret = await fetchPppSecret(routerConn(router), u.username);
+      disabling = !secretIsDisabled(secret);
+    } catch {
+      disabling = u.status !== 'disabled';
+    }
+  } else {
+    disabling = u.status !== 'disabled';
+  }
+
   if (disabling) {
     db.prepare("UPDATE pppoe_users SET status = 'disabled', online = 0 WHERE id = ?").run(id);
   } else {
@@ -565,15 +669,12 @@ app.post('/api/pppoe/users/:id/toggle-enabled', async (req, res) => {
   }
   const updated = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(id) as any;
   let mikrotik: { synced: boolean; error?: string } = { synced: false };
-  if (updated?.router_id) {
-    const router = db.prepare('SELECT * FROM routers WHERE id = ?').get(updated.router_id) as any;
-    if (router?.host && router?.api_user) {
-      try {
-        await setPppSecretEnabled(routerConn(router), updated.username, !disabling);
-        mikrotik = { synced: true };
-      } catch (e: any) {
-        mikrotik = { synced: false, error: e?.message };
-      }
+  if (router?.host && router?.api_user) {
+    try {
+      await setPppSecretEnabled(routerConn(router), updated.username, !disabling);
+      mikrotik = { synced: true };
+    } catch (e: any) {
+      mikrotik = { synced: false, error: e?.message };
     }
   }
   db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
@@ -601,7 +702,7 @@ app.delete('/api/pppoe/users/:id', async (req, res) => {
   res.json({ ok: true });
 });
 
-app.post('/api/pppoe/users/bulk-disable', (req, res) => {
+app.post('/api/pppoe/users/bulk-disable', async (req, res) => {
   const ids = (Array.isArray(req.body?.ids) ? req.body.ids : [])
     .map((id: unknown) => Number(id))
     .filter((id: number) => Number.isFinite(id) && id > 0);
@@ -610,10 +711,20 @@ app.post('/api/pppoe/users/bulk-disable', (req, res) => {
   const stmt = db.prepare("UPDATE pppoe_users SET status = 'disabled', online = 0 WHERE id = ?");
   let count = 0;
   for (const id of ids) {
-    const u = db.prepare('SELECT username, service FROM pppoe_users WHERE id = ?').get(id) as any;
+    const u = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(id) as any;
     if (!u) continue;
     stmt.run(id);
     count++;
+    if (u.router_id) {
+      const router = db.prepare('SELECT * FROM routers WHERE id = ?').get(u.router_id) as any;
+      if (router?.host && router?.api_user) {
+        try {
+          await setPppSecretEnabled(routerConn(router), u.username, false);
+        } catch {
+          /* logged below */
+        }
+      }
+    }
     db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
       'info',
       'mikrotik',
@@ -623,7 +734,7 @@ app.post('/api/pppoe/users/bulk-disable', (req, res) => {
   res.json({ ok: true, count });
 });
 
-app.post('/api/pppoe/users/bulk-delete', (req, res) => {
+app.post('/api/pppoe/users/bulk-delete', async (req, res) => {
   const ids = (Array.isArray(req.body?.ids) ? req.body.ids : [])
     .map((id: unknown) => Number(id))
     .filter((id: number) => Number.isFinite(id) && id > 0);
@@ -632,6 +743,18 @@ app.post('/api/pppoe/users/bulk-delete', (req, res) => {
   const stmt = db.prepare('DELETE FROM pppoe_users WHERE id = ?');
   let count = 0;
   for (const id of ids) {
+    const u = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(id) as any;
+    if (!u) continue;
+    if (u.router_id) {
+      const router = db.prepare('SELECT * FROM routers WHERE id = ?').get(u.router_id) as any;
+      if (router?.host && router?.api_user) {
+        try {
+          await removePppSecret(routerConn(router), u.username);
+        } catch {
+          /* continue local delete */
+        }
+      }
+    }
     const info = stmt.run(id);
     if (info.changes) count++;
   }
@@ -648,16 +771,22 @@ app.post('/api/pppoe/users/bulk-delete', (req, res) => {
 // payment day) and records the transaction.
 app.post('/api/pppoe/users/:id/payment', async (req, res) => {
   const id = Number(req.params.id);
-  const user = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(id) as any;
+  let user = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(id) as any;
   if (!user) return res.status(404).json({ error: 'not found' });
   const b = req.body || {};
 
+  // Always refresh billing fields from MikroTik before extending expiration.
+  const routerId = Number(b.router_id || user.router_id || 0);
+  if (routerId) user = await refreshUserFromMikrotik({ ...user, router_id: routerId });
+
   const months = Math.max(1, Math.floor(Number(b.months) || 1));
   const previousDue: string = (user.subscription_due || new Date().toISOString().slice(0, 10)).slice(0, 10);
-  const newDue = addMonthsPreserveDay(previousDue, months);
+  const newDue = b.new_due
+    ? String(b.new_due).slice(0, 10)
+    : addMonthsPreserveDay(previousDue, months);
 
   // Optional plan change applied at payment time.
-  const plan = b.plan || user.profile;
+  const plan = b.plan && b.plan !== '__no_change__' ? b.plan : user.profile;
   const prof = db.prepare('SELECT price FROM profiles WHERE name = ?').get(plan) as { price: number } | undefined;
   const unit = prof?.price ?? (Number(user.price) || 0);
   const subtotal = unit * months;
@@ -752,14 +881,23 @@ app.post('/api/pppoe/fetch-mikrotik', async (req, res) => {
 
   let secrets: any[];
   let profiles: any[];
+  let activeSessions: any[];
+  let pppServers: any[];
   try {
+    const conn = routerConn(router);
     const data = (await withRouter(router, async (api) => {
-      const p = (await api.write('/ppp/profile/print')) as any[];
-      const s = (await api.write('/ppp/secret/print')) as any[];
-      return { profiles: p, secrets: s };
-    })) as { profiles: any[]; secrets: any[] };
+      const [p, s, a, srv] = await Promise.all([
+        api.write('/ppp/profile/print') as Promise<any[]>,
+        api.write('/ppp/secret/print') as Promise<any[]>,
+        api.write('/ppp/active/print') as Promise<any[]>,
+        api.write('/interface/pppoe-server/print') as Promise<any[]>,
+      ]);
+      return { profiles: p, secrets: s, active: a, servers: srv };
+    })) as { profiles: any[]; secrets: any[]; active: any[]; servers: any[] };
     profiles = data.profiles || [];
     secrets = data.secrets || [];
+    activeSessions = data.active || [];
+    pppServers = data.servers || [];
   } catch {
     return res.status(502).json({
       error:
@@ -768,6 +906,25 @@ app.post('/api/pppoe/fetch-mikrotik', async (req, res) => {
   }
 
   const service = router.type === 'ipoe' ? 'ipoe' : 'pppoe';
+  const activeNames = new Set((activeSessions || []).map((a) => a.name).filter(Boolean));
+
+  // Cache PPPoE server list for the Servers tab.
+  db.prepare('DELETE FROM pppoe_servers WHERE router_id = ?').run(router.id);
+  const insServer = db.prepare(
+    'INSERT INTO pppoe_servers (router_id, name, interface_name, max_sessions, service, authentication, status) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  );
+  for (const s of pppServers || []) {
+    if (!s.name) continue;
+    insServer.run(
+      router.id,
+      s.name,
+      s.interface || s['interface'] || '',
+      Number(s['max-sessions'] || s.maxSessions || 0) || null,
+      s.service || 'pppoe',
+      s.authentication || '',
+      s.disabled === 'true' ? 'disabled' : 'running'
+    );
+  }
 
   // Import PPP profiles first (RouterOS has no price, so keep any existing price).
   const findProfile = db.prepare('SELECT id FROM profiles WHERE name = ?');
@@ -845,7 +1002,7 @@ app.post('/api/pppoe/fetch-mikrotik', async (req, res) => {
         plc_port: cust.plcPort != null && cust.plcPort !== '' ? String(cust.plcPort) : null,
         lat: cust.latitude != null ? Number(cust.latitude) : null,
         lng: cust.longitude != null ? Number(cust.longitude) : null,
-        online: /active/i.test(status) ? 1 : 0,
+        online: disabled ? 0 : activeNames.has(username) ? 1 : 0,
       };
       if (existing) {
         updUser.run({ ...fields, id: existing.id });
@@ -861,17 +1018,53 @@ app.post('/api/pppoe/fetch-mikrotik', async (req, res) => {
   db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
     'info',
     'mikrotik',
-    `Fetched from ${router.name}: ${profilesImported} profiles, ${secrets.length} secrets (${created} new, ${updated} updated)`
+    `Fetched from ${router.name}: ${profilesImported} profiles, ${secrets.length} secrets, ${pppServers?.length || 0} servers (${created} new, ${updated} updated)`
   );
-  res.json({ ok: true, fetched: secrets.length, created, updated, skipped, profilesImported, service, router: router.name });
+  res.json({
+    ok: true,
+    fetched: secrets.length,
+    created,
+    updated,
+    skipped,
+    profilesImported,
+    serversImported: pppServers?.length || 0,
+    activeSessions: activeSessions?.length || 0,
+    service,
+    router: router.name,
+  });
 });
 
 app.get('/api/pppoe/profiles', (_req, res) => {
   res.json(db.prepare('SELECT id, name, rate_limit AS rateLimit, price, type FROM profiles').all());
 });
 
-app.get('/api/pppoe/active', (req, res) => {
+app.get('/api/pppoe/active', async (req, res) => {
   const service = String(req.query.service || 'pppoe');
+  const routerId = req.query.routerId ? Number(req.query.routerId) : null;
+  if (routerId) {
+    const router = db.prepare('SELECT * FROM routers WHERE id = ?').get(routerId) as any;
+    if (router?.host && router?.api_user) {
+      try {
+        const active = await fetchPppActive(routerConn(router));
+        const users = db.prepare('SELECT username, customer_name, profile FROM pppoe_users WHERE service = ?').all(service) as any[];
+        const byName = Object.fromEntries(users.map((u) => [u.username, u]));
+        const rows = (active || []).map((a) => {
+          const u = byName[a.name] || {};
+          return {
+            username: a.name,
+            customer: u.customer_name || a.name,
+            profile: a.profile || u.profile || '',
+            address: a.address || a['caller-id'] || '—',
+            uptime: a.uptime || '—',
+            caller: a['caller-id'] || '—',
+          };
+        });
+        return res.json(rows);
+      } catch {
+        /* fall through to DB */
+      }
+    }
+  }
   const rows = db
     .prepare(`SELECT username, customer_name AS customer, profile FROM pppoe_users WHERE status = 'Active' AND service = ? ORDER BY id LIMIT 100`)
     .all(service) as any[];
@@ -896,7 +1089,36 @@ app.get('/api/pppoe/summary', (req, res) => {
 });
 
 // ---- Servers (PPPoE servers on router) ----
-app.get('/api/pppoe/servers', (_req, res) => {
+app.get('/api/pppoe/servers', async (req, res) => {
+  const routerId = req.query.routerId ? Number(req.query.routerId) : null;
+  if (routerId) {
+    const cached = db
+      .prepare(
+        `SELECT name, interface_name AS interface, max_sessions AS maxSessions, service, authentication, status
+         FROM pppoe_servers WHERE router_id = ? ORDER BY name`
+      )
+      .all(routerId);
+    if (cached.length) return res.json(cached);
+
+    const router = db.prepare('SELECT * FROM routers WHERE id = ?').get(routerId) as any;
+    if (router?.host && router?.api_user) {
+      try {
+        const rows = await fetchPppoeServers(routerConn(router));
+        return res.json(
+          (rows || []).map((s) => ({
+            name: s.name,
+            interface: s.interface || '',
+            maxSessions: Number(s['max-sessions'] || 0) || 0,
+            service: s.service || 'pppoe',
+            authentication: s.authentication || '',
+            status: s.disabled === 'true' ? 'disabled' : 'running',
+          }))
+        );
+      } catch {
+        /* fall through */
+      }
+    }
+  }
   res.json([
     { name: 'pppoe-server-1', interface: 'ether2', maxSessions: 1000, service: 'pppoe', authentication: 'pap,chap', status: 'running' },
     { name: 'pppoe-server-2', interface: 'vlan10', maxSessions: 500, service: 'pppoe', authentication: 'chap', status: 'running' },

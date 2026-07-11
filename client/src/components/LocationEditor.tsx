@@ -4,7 +4,7 @@ import L from 'leaflet';
 import { Search, LocateFixed, X, MapPin } from 'lucide-react';
 import { api } from '../api';
 
-export const DEFAULT_PIN: [number, number] = [13.918665341879885, 120.93887161534413];
+export const DEFAULT_PIN: [number, number] = [13.918727824777054, 120.93881797116397];
 
 const pinIcon = L.divIcon({
   className: 'loc-pin',
@@ -36,10 +36,12 @@ export default function LocationEditor({
   initial,
   onDone,
   onCancel,
+  large = false,
 }: {
   initial?: { lat: number | null; lng: number | null };
   onDone: (coords: { lat: number; lng: number }) => void;
   onCancel: () => void;
+  large?: boolean;
 }) {
   const start: [number, number] =
     initial?.lat != null && initial?.lng != null ? [initial.lat, initial.lng] : DEFAULT_PIN;
@@ -86,8 +88,8 @@ export default function LocationEditor({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[1200] p-4" onClick={onCancel}>
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 bg-black/55 flex items-center justify-center z-[1200] p-4" onClick={onCancel}>
+      <div className={`bg-white rounded-xl shadow-2xl w-full ${large ? 'max-w-5xl' : 'max-w-2xl'}`} onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100">
           <h3 className="font-semibold text-slate-700 flex items-center gap-2"><MapPin size={18} className="text-brand-600" /> Set Map Location</h3>
           <button onClick={onCancel} className="text-slate-400 hover:text-slate-600"><X size={18} /></button>
@@ -144,7 +146,7 @@ export default function LocationEditor({
 
           {msg && <div className="text-xs text-slate-500">{msg}</div>}
 
-          <div className="h-72 rounded-lg overflow-hidden border border-slate-100">
+          <div className={`${large ? 'h-[min(62vh,520px)]' : 'h-72'} rounded-lg overflow-hidden border border-slate-100`}>
             <MapContainer center={start} zoom={15} style={{ height: '100%', width: '100%' }} scrollWheelZoom>
               <TileLayer attribution="&copy; OpenStreetMap contributors" url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
               <Recenter pos={pos} />

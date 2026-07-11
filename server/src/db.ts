@@ -228,6 +228,21 @@ export function migrate() {
   ensureBillingPlans();
   ensureNotifySettings();
 
+  if (!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='pppoe_servers'").get()) {
+    db.exec(`
+      CREATE TABLE pppoe_servers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        router_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        interface_name TEXT,
+        max_sessions INTEGER,
+        service TEXT DEFAULT 'pppoe',
+        authentication TEXT,
+        status TEXT DEFAULT 'running'
+      );
+    `);
+  }
+
   // Gateway configuration columns (added over time).
   const notifyCols: [string, string][] = [
     ['smtp_host', 'TEXT'],

@@ -5,7 +5,7 @@ import {
   StatusBadge, TabBar, Toolbar, SearchInput, DataTable, IconAction, Toast,
   Modal, ModalFooter, FormField, Card,
 } from '../components/ui';
-import { api, peso } from '../api';
+import { api, peso, addMonthsPreserveDay } from '../api';
 import LocationEditor, { DEFAULT_PIN } from '../components/LocationEditor';
 import { useRouterDevice } from '../context/RouterContext';
 
@@ -49,7 +49,24 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
   const [bulkBusy, setBulkBusy] = useState(false);
   const { current } = useRouterDevice();
 
-  const loadUsers = () => api.get(`/pppoe/users?service=${service}`).then((r) => setUsers(r.data));
+  const loadUsers = () => {
+    const q = new URLSearchParams({ service });
+    if (current?.id) {
+      q.set('routerId', String(current.id));
+      q.set('live', '1');
+    }
+    return api.get(`/pppoe/users?${q}`).then((r) => setUsers(r.data));
+  };
+
+  const loadActive = () => {
+    const q = current?.id ? `?service=${service}&routerId=${current.id}` : `?service=${service}`;
+    return api.get(`/pppoe/active${q}`).then((r) => setActive(r.data));
+  };
+
+  const loadServers = () => {
+    const q = current?.id ? `?routerId=${current.id}` : '';
+    return api.get(`/pppoe/servers${q}`).then((r) => setServers(r.data));
+  };
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -64,8 +81,11 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
     setFetching(true);
     try {
       const r = await api.post(`/pppoe/fetch-mikrotik?routerId=${current.id}`);
-      showToast(`Fetched from ${r.data.router}: ${r.data.profilesImported} profiles, ${r.data.fetched} secrets (${r.data.created} new, ${r.data.updated} updated).`);
+      showToast(`Fetched from ${r.data.router}: ${r.data.profilesImported} profiles, ${r.data.fetched} secrets, ${r.data.serversImported ?? 0} servers (${r.data.created} new, ${r.data.updated} updated).`);
       loadUsers();
+      loadActive();
+      loadServers();
+      api.get('/pppoe/profiles').then((res) => setProfiles(res.data));
     } catch (e: any) {
       showToast(e?.response?.data?.error || 'Fetch from MikroTik failed.');
     } finally {
@@ -74,9 +94,12 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
   };
 
   const toggleEnabled = async (u: PUser) => {
+    const enabling = u.status === 'disabled';
+    if (!confirm(`${enabling ? 'Enable' : 'Disable'} PPP secret for ${u.username} on MikroTik?`)) return;
     const r = await api.post(`/pppoe/users/${u.id}/toggle-enabled`);
     showToast(`${u.username} ${r.data.status === 'disabled' ? 'disabled' : 'enabled'} in MikroTik.`);
     loadUsers();
+    loadActive();
   };
 
   useEffect(() => {
@@ -85,11 +108,11 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
     setSelected(new Set());
     loadUsers();
     api.get('/pppoe/profiles').then((r) => setProfiles(r.data));
-    api.get(`/pppoe/active?service=${service}`).then((r) => setActive(r.data));
-    api.get('/pppoe/servers').then((r) => setServers(r.data));
+    loadActive();
+    loadServers();
     api.get('/billing-plans').then((r) => setPlans(r.data));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [service]);
+  }, [service, current?.id]);
 
   const filtered = users.filter(
     (u) =>
@@ -97,7 +120,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
       (u.customer || '').toLowerCase().includes(search.toLowerCase()) ||
       (u.account || '').includes(search)
   );
-  const offline = filtered.filter((u) => u.status !== 'Active');
+  const offline = filtered.filter((u) => u.status === 'disabled' || !u.online);
   const listUsers = tab === 'offline' ? offline : filtered;
   const allSelected = listUsers.length > 0 && listUsers.every((u) => selected.has(u.id));
   const someSelected = listUsers.some((u) => selected.has(u.id));
@@ -161,9 +184,12 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
     }
   };
 
-  const remove = async (id: number) => {
-    await api.delete(`/pppoe/users/${id}`);
+  const remove = async (u: PUser) => {
+    if (!confirm(`Delete PPP secret for ${u.username} from MikroTik and remove from panel?`)) return;
+    await api.delete(`/pppoe/users/${u.id}`);
+    showToast(`Deleted ${u.username}.`);
     loadUsers();
+    loadActive();
   };
 
   return (
@@ -240,7 +266,8 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                   { key: 'user', label: 'Username / Customer' },
                   { key: 'account', label: 'Account #' },
                   { key: 'profile', label: 'Profile' },
-                  { key: 'status', label: 'Status' },
+                  { key: 'status', label: 'PPP Status' },
+                  { key: 'conn', label: 'Session' },
                   { key: 'due', label: 'Subscription Due' },
                   { key: 'actions', label: 'Actions', align: 'right' },
                 ]}
@@ -261,18 +288,25 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                     </div>,
                     <span className="text-slate-500">{u.account}</span>,
                     <span className="text-slate-600">{u.profile}</span>,
-                    <StatusBadge status={u.status} />,
+                    <StatusBadge status={u.status === 'disabled' ? 'disabled' : 'Active'} />,
+                    u.status === 'disabled' ? (
+                      <span className="text-xs text-rose-600 font-medium">Secret disabled</span>
+                    ) : u.online ? (
+                      <span className="text-xs text-emerald-600 font-medium">Online</span>
+                    ) : (
+                      <span className="text-xs text-amber-600 font-medium">Offline</span>
+                    ),
                     <span className="text-slate-500">{u.subscriptionDue}</span>,
                     <div key="a" className="flex items-center justify-end gap-1">
                       <IconAction icon={ReceiptText} title="Process Payment" tone="emerald" onClick={() => setPayFor(u)} />
                       <IconAction icon={Pencil} title="Edit user" tone="sky" onClick={() => setEditFor(u)} />
                       <IconAction
                         icon={KeyRound}
-                        title={u.status === 'disabled' ? 'Enable in MikroTik' : 'Disable in MikroTik'}
+                        title={u.status === 'disabled' ? 'Enable PPP secret on MikroTik' : 'Disable PPP secret on MikroTik'}
                         tone={u.status === 'disabled' ? 'emerald' : 'rose'}
                         onClick={() => toggleEnabled(u)}
                       />
-                      <IconAction icon={Trash2} title="Delete" tone="rose" onClick={() => remove(u.id)} />
+                      <IconAction icon={Trash2} title="Delete PPP secret from MikroTik" tone="rose" onClick={() => remove(u)} />
                     </div>,
                   ],
                 }))}
@@ -353,11 +387,13 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
         <ProcessPaymentModal
           user={payFor}
           profiles={profiles}
+          routerId={current?.id}
           onClose={() => setPayFor(null)}
           onPaid={(msg) => {
             setPayFor(null);
             showToast(msg);
             loadUsers();
+            loadActive();
           }}
         />
       )}
@@ -394,21 +430,65 @@ function printReceipt(receipt: any) {
   }
 }
 
-function ProcessPaymentModal({ user, profiles, onClose, onPaid }: { user: PUser; profiles: any[]; onClose: () => void; onPaid: (msg: string) => void }) {
+function ProcessPaymentModal({
+  user,
+  profiles,
+  routerId,
+  onClose,
+  onPaid,
+}: {
+  user: PUser;
+  profiles: any[];
+  routerId?: number;
+  onClose: () => void;
+  onPaid: (msg: string) => void;
+}) {
   const [plan, setPlan] = useState(user.profile || profiles[0]?.name || '');
   const [months, setMonths] = useState(1);
+  const [currentDue, setCurrentDue] = useState((user.subscriptionDue || '').slice(0, 10));
+  const [newDue, setNewDue] = useState('');
+  const [manualDue, setManualDue] = useState(false);
   const [nonPaymentProfile, setNonPaymentProfile] = useState('default');
   const [paymentDate, setPaymentDate] = useState(new Date().toISOString().slice(0, 10));
   const [discountDays, setDiscountDays] = useState(0);
   const [sendReceipt, setSendReceipt] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [email, setEmail] = useState(user.email || '');
 
-  const planPrice = profiles.find((p) => p.name === plan)?.price ?? user.price ?? 0;
+  useEffect(() => {
+    const q = routerId ? `?routerId=${routerId}` : '';
+    api.get(`/pppoe/users/${user.id}/mikrotik${q}`)
+      .then((r) => {
+        const u = r.data.user || user;
+        const due = (u.subscription_due || u.subscriptionDue || '').slice(0, 10);
+        setCurrentDue(due);
+        setPlan(u.profile || plan);
+        setNonPaymentProfile(u.expiration_profile || 'default');
+        setEmail(u.email || '');
+        if (!manualDue) setNewDue(addMonthsPreserveDay(due, months));
+      })
+      .catch(() => {
+        const due = (user.subscriptionDue || '').slice(0, 10);
+        setCurrentDue(due);
+        if (!manualDue) setNewDue(addMonthsPreserveDay(due, months));
+      })
+      .finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user.id, routerId]);
+
+  const pickMonths = (m: number) => {
+    setMonths(m);
+    setManualDue(false);
+    if (currentDue) setNewDue(addMonthsPreserveDay(currentDue, m));
+  };
+
+  const planPrice = profiles.find((p) => p.name === (plan === '__no_change__' ? user.profile : plan))?.price ?? user.price ?? 0;
   const subtotal = planPrice * months;
   const discount = Math.round((planPrice / 30) * Math.max(0, discountDays) * 100) / 100;
   const total = Math.max(0, subtotal - discount);
-  const hasEmail = !!user.email;
+  const hasEmail = !!email;
 
   const pay = async () => {
     setSaving(true);
@@ -416,11 +496,13 @@ function ProcessPaymentModal({ user, profiles, onClose, onPaid }: { user: PUser;
     try {
       const r = await api.post(`/pppoe/users/${user.id}/payment`, {
         months,
-        plan,
+        plan: plan === '__no_change__' ? '__no_change__' : plan,
         expiration_profile: nonPaymentProfile,
         payment_date: paymentDate,
         discount_days: discountDays,
         send_receipt: sendReceipt,
+        new_due: newDue,
+        router_id: routerId,
       });
       printReceipt(r.data.receipt);
       onPaid(
@@ -438,20 +520,23 @@ function ProcessPaymentModal({ user, profiles, onClose, onPaid }: { user: PUser;
       title="Process Payment"
       subtitle={`For user: ${user.username}`}
       onClose={onClose}
+      wide
       footer={
         <ModalFooter
           onCancel={onClose}
           onConfirm={pay}
           confirmLabel="Process Payment & Print"
-          busy={saving}
+          busy={saving || loading}
         />
       }
     >
+      {loading && <div className="text-sm text-slate-500 mb-3">Loading billing data from MikroTik…</div>}
       {error && <div className="text-sm text-rose-600 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2 mb-4">{error}</div>}
 
       <div className="space-y-4">
         <FormField label="Billing Plan">
           <select className="input" value={plan} onChange={(e) => setPlan(e.target.value)}>
+            <option value="__no_change__">-- No Change --</option>
             {profiles.map((p) => <option key={p.id} value={p.name}>{p.name} ({peso(p.price)})</option>)}
           </select>
         </FormField>
@@ -459,18 +544,32 @@ function ProcessPaymentModal({ user, profiles, onClose, onPaid }: { user: PUser;
         <div>
           <span className="text-sm font-medium text-slate-700 mb-2 block">Months of Extension</span>
           <div className="flex flex-wrap items-center gap-2">
-            {[1, 2, 3, 6, 12].map((m) => (
+            {[1, 2, 3, 4, 5, 6, 12].map((m) => (
               <button
                 key={m}
                 type="button"
-                onClick={() => setMonths(m)}
-                className={`px-3 py-1.5 rounded-xl text-sm font-medium border transition-colors ${months === m ? 'bg-brand-500 text-white border-brand-500 shadow-glow-sm' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}
+                onClick={() => pickMonths(m)}
+                className={`px-3 py-1.5 rounded-xl text-sm font-medium border transition-colors ${months === m && !manualDue ? 'bg-brand-500 text-white border-brand-500 shadow-glow-sm' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}
               >
-                {m}
+                {m} mo
               </button>
             ))}
           </div>
-          <span className="text-xs text-slate-400 mt-1 block">Extends expiration by whole month(s) from the current due date.</span>
+          <span className="text-xs text-slate-400 mt-1 block">Extends from the current MikroTik expiration date, not the payment date.</span>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <FormField label="Current Expiration (from MikroTik)">
+            <input className="input bg-slate-50 text-slate-600" value={currentDue || '—'} readOnly />
+          </FormField>
+          <FormField label="New Expiration Date">
+            <input
+              className="input"
+              type="date"
+              value={newDue}
+              onChange={(e) => { setManualDue(true); setNewDue(e.target.value); }}
+            />
+          </FormField>
         </div>
 
         <FormField label="Non-Payment Profile" hint="Profile to apply on due date.">
@@ -490,8 +589,8 @@ function ProcessPaymentModal({ user, profiles, onClose, onPaid }: { user: PUser;
 
         <label className="flex items-start justify-between gap-3 border-t border-slate-100 pt-3">
           <span>
-            <span className="text-sm font-medium text-slate-700 block">Send receipt to email</span>
-            <span className="text-xs text-slate-400">{hasEmail ? user.email : 'No email set in account details.'}</span>
+            <span className="text-sm font-medium text-slate-700 block">Send payment confirmation email</span>
+            <span className="text-xs text-slate-400">{hasEmail ? email : 'No email on file — add one in Edit User.'}</span>
           </span>
           <input type="checkbox" className="mt-1 w-4 h-4 accent-brand-500" disabled={!hasEmail} checked={sendReceipt && hasEmail} onChange={(e) => setSendReceipt(e.target.checked)} />
         </label>
@@ -562,7 +661,8 @@ function UserFormModal({
   useEffect(() => {
     api.get('/naps').then((r) => setNaps(r.data));
     if (editUser) {
-      api.get(`/pppoe/users/${editUser.id}`).then((r) => {
+      const q = routerId ? `?routerId=${routerId}` : '';
+      api.get(`/pppoe/users/${editUser.id}${q}`).then((r) => {
         const u = r.data;
         setForm({
           username: u.username || '',
@@ -673,6 +773,7 @@ function UserFormModal({
 
           <FormField label="Billing Plan">
             <select className="input" value={form.profile} onChange={(e) => set({ profile: e.target.value })}>
+              {isEdit && <option value={form.profile}>-- No Change --</option>}
               {profiles.map((p) => <option key={p.id} value={p.name}>{p.name}</option>)}
             </select>
           </FormField>
@@ -745,24 +846,38 @@ function UserFormModal({
           </div>
           <div className="grid grid-cols-2 gap-3">
             <FormField label="Latitude">
-              <div className="input bg-slate-50 text-slate-600 truncate">{form.lat != null ? Number(form.lat).toFixed(6) : '—'}</div>
+              <input
+                className="input"
+                type="number"
+                step="any"
+                value={form.lat ?? ''}
+                onChange={(e) => set({ lat: e.target.value === '' ? null : Number(e.target.value) })}
+              />
             </FormField>
             <FormField label="Longitude">
-              <div className="input bg-slate-50 text-slate-600 truncate">{form.lng != null ? Number(form.lng).toFixed(6) : '—'}</div>
+              <input
+                className="input"
+                type="number"
+                step="any"
+                value={form.lng ?? ''}
+                onChange={(e) => set({ lng: e.target.value === '' ? null : Number(e.target.value) })}
+              />
             </FormField>
           </div>
           <button
             type="button"
             onClick={() => setShowLoc(true)}
-            className="w-full h-20 rounded-xl border-2 border-dashed border-slate-200 text-slate-400 hover:bg-brand-50/50 hover:text-brand-600 hover:border-brand-300 flex items-center justify-center gap-2 text-sm transition-colors"
+            className="w-full h-24 rounded-xl border-2 border-dashed border-slate-200 text-slate-400 hover:bg-brand-50/50 hover:text-brand-600 hover:border-brand-300 flex items-center justify-center gap-2 text-sm transition-colors"
           >
-            <MapPin size={18} /> {form.lat != null ? 'Open map to adjust the pin' : 'Open map to set a location'}
+            <MapPin size={18} /> {form.lat != null ? 'Open large map to adjust the pin' : 'Open large map to set a location'}
           </button>
+          <p className="text-xs text-slate-400">Coordinates are saved with the user and appear on Clients Map automatically.</p>
         </div>
       </Modal>
 
       {showLoc && (
         <LocationEditor
+          large
           initial={{ lat: form.lat, lng: form.lng }}
           onDone={(c) => {
             set({ lat: c.lat, lng: c.lng });

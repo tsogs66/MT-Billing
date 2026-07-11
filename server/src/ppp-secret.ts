@@ -128,3 +128,48 @@ export async function removePppSecret(conn: RouterConn, username: string): Promi
     return true;
   });
 }
+
+export async function fetchPppSecret(conn: RouterConn, username: string): Promise<Record<string, string> | null> {
+  return withRouter(conn, (api) => findSecret(api, username));
+}
+
+export async function fetchPppSecrets(conn: RouterConn): Promise<Record<string, string>[]> {
+  return withRouter(conn, async (api) => (await api.write('/ppp/secret/print')) as Record<string, string>[]);
+}
+
+export async function fetchPppActive(conn: RouterConn): Promise<Record<string, string>[]> {
+  return withRouter(conn, async (api) => (await api.write('/ppp/active/print')) as Record<string, string>[]);
+}
+
+export async function fetchPppProfiles(conn: RouterConn): Promise<Record<string, string>[]> {
+  return withRouter(conn, async (api) => (await api.write('/ppp/profile/print')) as Record<string, string>[]);
+}
+
+export async function fetchPppoeServers(conn: RouterConn): Promise<Record<string, string>[]> {
+  return withRouter(conn, async (api) => (await api.write('/interface/pppoe-server/print')) as Record<string, string>[]);
+}
+
+export function secretIsDisabled(sec: Record<string, string> | null | undefined): boolean {
+  if (!sec) return false;
+  return sec.disabled === 'true' || sec.disabled === true as unknown as string;
+}
+
+/** Merge MikroTik secret + active session into panel user fields. */
+export function mergeMikrotikUserState(
+  secret: Record<string, string> | null,
+  connected: boolean
+): { profile: string; subscription_due: string; expiration_profile: string; account_number: string; status: string; online: number } | null {
+  if (!secret) return null;
+  const meta = parseSecretComment(secret.comment);
+  const disabled = secretIsDisabled(secret);
+  return {
+    profile: String(meta.plan || secret.profile || '15mbps'),
+    subscription_due: meta.dueDate
+      ? String(meta.dueDate).slice(0, 10)
+      : new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10),
+    expiration_profile: String(meta.expireProfile || 'default'),
+    account_number: meta.accountNumber != null ? String(meta.accountNumber) : '',
+    status: disabled ? 'disabled' : 'Active',
+    online: disabled ? 0 : connected ? 1 : 0,
+  };
+}
