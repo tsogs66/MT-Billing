@@ -200,19 +200,110 @@ export async function fetchRouterDashboardStats(conn: RouterConn): Promise<Route
   }
 }
 
-/** Queue tree entries from the router (name + bits/sec rate). */
+/** Parse RouterOS rate strings ("15.2Mbps", "800k", "1234567") to bits/sec. */
+export function parseRosRate(raw: string | number | undefined | null): number {
+  if (raw == null || raw === '') return 0;
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+  const s = String(raw).trim().toLowerCase().replace(/,/g, '');
+  const m = s.match(/^([\d.]+)\s*([a-z%/]*)$/);
+  if (!m) {
+    const n = Number(s);
+    return Number.isFinite(n) ? n : 0;
+  }
+  const n = Number(m[1]);
+  if (!Number.isFinite(n)) return 0;
+  const unit = m[2].replace(/\/s(ec)?$/, '').replace(/ps$/, '');
+  if (unit === 'g' || unit === 'gb' || unit === 'gbps') return n * 1_000_000_000;
+  if (unit === 'm' || unit === 'mb' || unit === 'mbps') return n * 1_000_000;
+  if (unit === 'k' || unit === 'kb' || unit === 'kbps') return n * 1_000;
+  // bare number from RouterOS queue stats is already bits/sec
+  return n;
+}
+
+/** Queue tree entries from the router (name + current rate in Mbps). */
 export async function fetchRouterQueues(conn: RouterConn): Promise<{ name: string; avgRate: number }[]> {
   return withRouter(conn, async (api) => {
-    const rows = (await api.write('/queue/tree/print')) as Record<string, string>[];
-    return (rows || [])
+    let rows = (await api.write('/queue/tree/print')) as Record<string, string>[];
+    // Some RouterOS builds need an explicit stats pass for live rate.
+    if (!(rows || []).some((q) => q.rate != null && String(q.rate) !== '' && String(q.rate) !== '0')) {
+      try {
+        const withStats = (await api.write('/queue/tree/print', ['=stats='])) as Record<string, string>[];
+        if (withStats?.length) rows = withStats;
+      } catch {
+        /* keep first print */
+      }
+    }
+    const mapped = (rows || [])
       .filter((q) => q.name)
       .map((q) => {
-        const bps = Number(q.rate || q['bytes'] || 0);
-        // RouterOS rate is often bits/sec; convert to Mbps for display consistency.
-        const mbps = bps > 10_000 ? bps / 1_000_000 : bps;
+        const bps = parseRosRate(q.rate);
+        const mbps = bps / 1_000_000;
         return { name: q.name, avgRate: Number(mbps.toFixed(3)) || 0 };
       })
       .sort((a, b) => b.avgRate - a.avgRate);
+    // Fall back to simple queues when the tree is empty (common on small CPE boards).
+    if (!mapped.length) {
+      const simple = (await api.write('/queue/simple/print')) as Record<string, string>[];
+      return (simple || [])
+        .filter((q) => q.name)
+        .map((q) => {
+          // simple queues expose rate as "rx/tx" — use the larger leg
+          const raw = String(q.rate || '');
+          const parts = raw.split('/');
+          const bps = Math.max(parseRosRate(parts[0]), parseRosRate(parts[1] || parts[0]));
+          return { name: q.name, avgRate: Number((bps / 1_000_000).toFixed(3)) || 0 };
+        })
+        .sort((a, b) => b.avgRate - a.avgRate);
+    }
+    return mapped;
+  });
+}
+
+const VLAN_PARENT_TYPES = new Set([
+  'ether',
+  'bridge',
+  'bond',
+  'bonding',
+  'vlan',
+  'sfp',
+  'sfp-plus',
+  'qsfpplus',
+  'wlan',
+  'cap',
+  'ovs-bridge',
+]);
+
+/** True when an interface name/type is PPPoE or otherwise unsuitable as a VLAN parent. */
+export function isPppoeInterface(name: string, type?: string): boolean {
+  const n = (name || '').toLowerCase();
+  const t = (type || '').toLowerCase();
+  if (t.startsWith('pppoe') || t === 'pptp-in' || t === 'pptp-out' || t === 'l2tp-in' || t === 'l2tp-out') return true;
+  if (n.startsWith('pppoe-') || n.startsWith('<pppoe-') || n.includes('pppoe')) return true;
+  return false;
+}
+
+/** Interfaces suitable as VLAN parents (excludes PPPoE / tunnels / disabled). */
+export async function fetchVlanParentInterfaces(
+  conn: RouterConn
+): Promise<{ name: string; type: string; running: boolean }[]> {
+  return withRouter(conn, async (api) => {
+    const rows = (await api.write('/interface/print')) as Record<string, string>[];
+    return (rows || [])
+      .filter((i) => {
+        if (!i.name || rosBool(i.disabled)) return false;
+        if (isPppoeInterface(i.name, i.type)) return false;
+        const type = (i.type || '').toLowerCase();
+        if (VLAN_PARENT_TYPES.has(type)) return true;
+        // Allow common ethernet-like names when type is blank on older ROS
+        if (!type && /^(ether|sfp|bridge|bond|wlan)/i.test(i.name)) return true;
+        return false;
+      })
+      .map((i) => ({
+        name: i.name,
+        type: i.type || '',
+        running: rosBool(i.running),
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
   });
 }
 

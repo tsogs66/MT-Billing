@@ -283,19 +283,25 @@ function DashboardLicensed() {
       const q = current?.id ? `?routerId=${current.id}` : '';
       api.get(`/dashboard/status${q}`).then((r) => setStatusCounts(r.data));
     };
+    const loadRouterAndQueues = () => {
+      if (!current?.id) {
+        setRouter(null);
+        setQueues([]);
+        return;
+      }
+      api.get(`/dashboard/router/${current.id}`).then((r) => setRouter(r.data));
+      api.get(`/dashboard/queues?routerId=${current.id}`).then((r) => {
+        const payload = r.data;
+        setQueues(Array.isArray(payload) ? payload : payload?.queues || []);
+      });
+    };
     loadStatus();
-    const t = setInterval(loadStatus, 15000);
+    loadRouterAndQueues();
+    const t = setInterval(() => {
+      loadStatus();
+      loadRouterAndQueues();
+    }, 15000);
     return () => clearInterval(t);
-  }, [current?.id]);
-
-  useEffect(() => {
-    if (!current?.id) {
-      setRouter(null);
-      setQueues([]);
-      return;
-    }
-    api.get(`/dashboard/router/${current.id}`).then((r) => setRouter(r.data));
-    api.get(`/dashboard/queues?routerId=${current.id}`).then((r) => setQueues(r.data));
   }, [current?.id]);
 
   useEffect(() => {

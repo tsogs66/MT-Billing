@@ -340,6 +340,7 @@ function Firewall({ routerId }: { routerId: number }) {
 
 function RoutesVlans({ routerId }: { routerId: number }) {
   const [data, setData] = useState<{ routes: any[]; vlans: any[] }>({ routes: [], vlans: [] });
+  const [parentIfaces, setParentIfaces] = useState<{ name: string; type: string; running: boolean }[]>([]);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [live, setLive] = useState(false);
@@ -354,11 +355,17 @@ function RoutesVlans({ routerId }: { routerId: number }) {
       .get('/network/routes', { params: { routerId } })
       .then((r) => {
         setData({ routes: r.data.routes || [], vlans: r.data.vlans || [] });
+        setParentIfaces(r.data.parentInterfaces || []);
         setLive(!!r.data.live);
         setError(r.data.error || '');
+        const ifaces: { name: string }[] = r.data.parentInterfaces || [];
+        if (ifaces.length && !vlanForm.iface) {
+          setVlanForm((f) => ({ ...f, iface: ifaces[0].name }));
+        }
       })
       .catch((e) => {
         setData({ routes: [], vlans: [] });
+        setParentIfaces([]);
         setLive(false);
         setError(e?.response?.data?.error || 'Could not load routes/VLANs from MikroTik');
       })
@@ -498,9 +505,23 @@ function RoutesVlans({ routerId }: { routerId: number }) {
             <Card className="p-4 space-y-2">
               <input className="input" placeholder="Name" value={vlanForm.name} onChange={(e) => setVlanForm({ ...vlanForm, name: e.target.value })} />
               <input className="input" placeholder="VLAN ID" value={vlanForm.vlanId} onChange={(e) => setVlanForm({ ...vlanForm, vlanId: e.target.value })} />
-              <input className="input" placeholder="Parent interface" value={vlanForm.iface} onChange={(e) => setVlanForm({ ...vlanForm, iface: e.target.value })} />
+              <select
+                className="input"
+                value={vlanForm.iface}
+                onChange={(e) => setVlanForm({ ...vlanForm, iface: e.target.value })}
+              >
+                <option value="">Select parent interface…</option>
+                {parentIfaces.map((i) => (
+                  <option key={i.name} value={i.name}>
+                    {i.name}{i.type ? ` (${i.type})` : ''}{i.running ? '' : ' — down'}
+                  </option>
+                ))}
+              </select>
+              {parentIfaces.length === 0 && live && (
+                <p className="text-xs text-amber-700">No suitable parent interfaces found (PPPoE interfaces are excluded).</p>
+              )}
               <input className="input" placeholder="Comment" value={vlanForm.comment} onChange={(e) => setVlanForm({ ...vlanForm, comment: e.target.value })} />
-              <button type="button" className="btn-primary text-sm w-full" onClick={addVlan}>Add on MikroTik</button>
+              <button type="button" className="btn-primary text-sm w-full" onClick={addVlan} disabled={!vlanForm.iface}>Add on MikroTik</button>
             </Card>
           )}
           <Card noPadding>

@@ -249,14 +249,44 @@ app.get('/api/dashboard/router/:id', async (req, res) => {
   const r = getRouter(Number(req.params.id));
   if (!r) return res.status(404).json({ error: 'router not found' });
 
-  const users = db.prepare('SELECT status, online FROM pppoe_users WHERE router_id = ?').all(r.id) as {
-    status: string;
-    online: number;
-  }[];
-  const activeUsers = users.filter((u) => u.status === 'Active');
-  const activePPPoE = activeUsers.length;
-  const offline = activeUsers.filter((u) => !u.online).length;
-  const expired = users.filter((u) => u.status === 'expired').length;
+  const users = db
+    .prepare('SELECT username, status, online FROM pppoe_users WHERE router_id = ?')
+    .all(r.id) as { username: string; status: string; online: number }[];
+
+  let liveSessions = false;
+  let onlineSet: Set<string> | null = null;
+  let disabledSecrets = new Set<string>();
+  if (r.host && r.api_user) {
+    try {
+      const [secrets, sessions] = await Promise.all([fetchPppSecrets(r), fetchPppActive(r)]);
+      onlineSet = new Set(sessions.map((s) => s.name));
+      disabledSecrets = new Set(secrets.filter((s) => s.disabled).map((s) => s.name));
+      liveSessions = true;
+      // Persist live online flags so other DB readers stay closer to reality.
+      const upd = db.prepare('UPDATE pppoe_users SET online = ? WHERE router_id = ? AND username = ?');
+      const tx = db.transaction(() => {
+        for (const u of users) {
+          upd.run(onlineSet!.has(u.username) ? 1 : 0, r.id, u.username);
+        }
+      });
+      tx();
+    } catch {
+      /* keep DB rows */
+    }
+  }
+
+  const isBillingActive = (u: { username: string; status: string }) => {
+    const s = String(u.status || '').toLowerCase();
+    if (disabledSecrets.has(u.username)) return false;
+    return s === 'active';
+  };
+
+  const activeUsers = users.filter(isBillingActive);
+  const offline = liveSessions
+    ? activeUsers.filter((u) => !onlineSet!.has(u.username)).length
+    : activeUsers.filter((u) => !u.online).length;
+  const liveOnline = liveSessions ? activeUsers.filter((u) => onlineSet!.has(u.username)).length : activeUsers.filter((u) => !!u.online).length;
+  const expired = users.filter((u) => String(u.status || '').toLowerCase() === 'expired').length;
 
   const liveStats = await fetchRouterDashboardStats(r);
 
@@ -265,11 +295,12 @@ app.get('/api/dashboard/router/:id', async (req, res) => {
     host: r.host,
     board: liveStats.board || r.board,
     live: liveStats.live,
+    liveSessions,
     uptime: liveStats.uptime || '—',
     cpuLoad: liveStats.cpuLoad,
     memPct: liveStats.memPct,
     memTotal: liveStats.memTotalMb,
-    activePPPoE,
+    activePPPoE: liveSessions ? liveOnline : activeUsers.length,
     offline,
     expired,
   });
@@ -282,32 +313,82 @@ app.get('/api/dashboard/queues', async (req, res) => {
     if (router?.host && router?.api_user) {
       try {
         const queues = await fetchRouterQueues(router);
-        if (queues.length) return res.json(queues);
-      } catch {
-        /* fall through to local sample queues */
+        return res.json({ live: true, queues });
+      } catch (e: any) {
+        return res.json({
+          live: false,
+          error: e?.message || 'Could not read queue tree from MikroTik',
+          queues: db.prepare('SELECT name, avg_rate AS avgRate FROM queues ORDER BY avg_rate DESC').all(),
+        });
       }
     }
   }
-  res.json(db.prepare('SELECT name, avg_rate AS avgRate FROM queues ORDER BY avg_rate DESC').all());
+  res.json({
+    live: false,
+    queues: db.prepare('SELECT name, avg_rate AS avgRate FROM queues ORDER BY avg_rate DESC').all(),
+  });
 });
 
-// Account status breakdown for the dashboard tiles.
-app.get('/api/dashboard/status', (req, res) => {
+// Account status breakdown for the dashboard tiles (live MikroTik when router selected).
+app.get('/api/dashboard/status', async (req, res) => {
   const routerId = req.query.routerId ? Number(req.query.routerId) : null;
   const where = routerId ? 'WHERE router_id = ?' : '';
-  const rows = (routerId
-    ? db.prepare(`SELECT status, online FROM pppoe_users ${where}`).all(routerId)
-    : db.prepare('SELECT status, online FROM pppoe_users').all()) as { status: string; online: number }[];
-  const active = rows.filter((r) => r.status === 'Active');
+  let rows = (routerId
+    ? db.prepare(`SELECT username, status, online, router_id AS routerId FROM pppoe_users ${where}`).all(routerId)
+    : db.prepare('SELECT username, status, online, router_id AS routerId FROM pppoe_users').all()) as {
+    username: string;
+    status: string;
+    online: number;
+    routerId: number;
+  }[];
+
+  let live = false;
+  const enrichRouter = async (rid: number, subset: typeof rows) => {
+    const router = getRouter(rid);
+    if (!router?.host || !router?.api_user || !subset.length) return;
+    try {
+      const [secrets, sessions] = await Promise.all([fetchPppSecrets(router), fetchPppActive(router)]);
+      const byName = new Map(secrets.map((s) => [s.name, s]));
+      const onlineSet = new Set(sessions.map((s) => s.name));
+      for (const u of subset) {
+        const sec = byName.get(u.username);
+        if (sec) {
+          if (sec.disabled) u.status = 'disabled';
+          else if (String(u.status || '').toLowerCase() === 'disabled') u.status = 'Active';
+        }
+        u.online = onlineSet.has(u.username) ? 1 : 0;
+      }
+      live = true;
+    } catch {
+      /* keep DB */
+    }
+  };
+
+  if (routerId) {
+    await enrichRouter(routerId, rows);
+  } else {
+    const byRouter = new Map<number, typeof rows>();
+    for (const u of rows) {
+      const rid = u.routerId || 0;
+      if (!rid) continue;
+      if (!byRouter.has(rid)) byRouter.set(rid, []);
+      byRouter.get(rid)!.push(u);
+    }
+    await Promise.all([...byRouter.entries()].map(([rid, subset]) => enrichRouter(rid, subset)));
+  }
+
+  const statusOf = (r: { status: string }) => String(r.status || '').toLowerCase();
+  const active = rows.filter((r) => statusOf(r) === 'active');
   res.json({
     total: rows.length,
-    online: active.filter((r) => r.online).length,
+    online: active.filter((r) => !!r.online).length,
     offline: active.filter((r) => !r.online).length,
     active: active.length,
-    expired: rows.filter((r) => r.status === 'expired').length,
-    nonPayment: rows.filter((r) => r.status === 'non-payment').length,
-    inactive: rows.filter((r) => r.status === 'inactive').length,
-    disabled: rows.filter((r) => r.status === 'disabled').length,
+    expired: rows.filter((r) => statusOf(r) === 'expired').length,
+    nonPayment: rows.filter((r) => statusOf(r) === 'non-payment').length,
+    inactive: rows.filter((r) => statusOf(r) === 'inactive').length,
+    disabled: rows.filter((r) => statusOf(r) === 'disabled').length,
+    live,
   });
 });
 
@@ -1437,6 +1518,13 @@ app.put('/api/ipoe/profiles/:id', (req, res) => {
   const up = b.uploadMbps != null ? Number(b.uploadMbps) : existing.upload_mbps;
   const maxLimit = String(b.maxLimit ?? existing.max_limit ?? `${down}M/${up}M`);
   db.prepare('UPDATE ipoe_profiles SET name=?, download_mbps=?, upload_mbps=?, max_limit=? WHERE id=?').run(name, down, up, maxLimit, id);
+  if (name !== existing.name) {
+    db.prepare('UPDATE ipoe_plans SET profile_name = ? WHERE profile_name = ?').run(name, existing.name);
+  }
+  // Keep denormalized plan speeds in sync when profile rates change.
+  db.prepare(
+    'UPDATE ipoe_plans SET download_mbps = ?, upload_mbps = ? WHERE profile_name = ?'
+  ).run(down, up, name);
   res.json(db.prepare('SELECT id, name, download_mbps AS downloadMbps, upload_mbps AS uploadMbps, max_limit AS maxLimit FROM ipoe_profiles WHERE id = ?').get(id));
 });
 

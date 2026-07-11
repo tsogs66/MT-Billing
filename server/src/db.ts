@@ -253,6 +253,7 @@ export function migrate() {
     }
   }
   ensureBillingPlans();
+  ensureIpoeBillingDefaults();
   ensureNotifySettings();
 
   // Gateway configuration columns (added over time).
@@ -312,6 +313,7 @@ export function migrate() {
   // One-time: remove demo/sample operational data; keep stock & inventory (+ users/settings).
   purgeSampleOperationalDataOnce();
   ensureBillingPlans();
+  ensureIpoeBillingDefaults();
   ensureFiberInventory();
 }
 
@@ -462,6 +464,39 @@ function ensureBillingPlans() {
   }
 }
 
+/** Predefined IPoE speed profiles + billing plans (editable in the IPoE UI). */
+function ensureIpoeBillingDefaults() {
+  const profiles: [string, number, number][] = [
+    ['IPOE-30', 30, 30],
+    ['IPOE-50', 50, 50],
+    ['IPOE-100', 100, 100],
+  ];
+  const hasProfile = db.prepare('SELECT 1 FROM ipoe_profiles WHERE name = ?');
+  const insProfile = db.prepare(
+    'INSERT INTO ipoe_profiles (name, download_mbps, upload_mbps, max_limit) VALUES (?, ?, ?, ?)'
+  );
+  for (const [name, down, up] of profiles) {
+    if (!hasProfile.get(name)) insProfile.run(name, down, up, `${down}M/${up}M`);
+  }
+
+  const plans: [string, number, string, string][] = [
+    ['UNLI500', 500, 'Monthly', 'IPOE-30'],
+    ['UNLI700', 700, 'Monthly', 'IPOE-50'],
+    ['UNLI1000', 1000, 'Monthly', 'IPOE-100'],
+  ];
+  const hasPlan = db.prepare('SELECT 1 FROM ipoe_plans WHERE name = ?');
+  const insPlan = db.prepare(
+    `INSERT INTO ipoe_plans (name, price, cycle, profile_name, download_mbps, upload_mbps)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  );
+  const getProfile = db.prepare('SELECT download_mbps, upload_mbps FROM ipoe_profiles WHERE name = ?');
+  for (const [name, price, cycle, profile] of plans) {
+    if (hasPlan.get(name)) continue;
+    const pr = getProfile.get(profile) as { download_mbps: number; upload_mbps: number } | undefined;
+    insPlan.run(name, price, cycle, profile, pr?.download_mbps ?? 0, pr?.upload_mbps ?? 0);
+  }
+}
+
 /** Derive a realistic ONU online/offline state from subscriber status. */
 function setOnlineStates() {
   db.exec("UPDATE pppoe_users SET online = 0 WHERE status != 'Active'");
@@ -493,5 +528,6 @@ export function seed() {
   }
 
   ensureBillingPlans();
+  ensureIpoeBillingDefaults();
   ensureFiberInventory();
 }

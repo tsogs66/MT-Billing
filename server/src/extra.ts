@@ -16,6 +16,8 @@ import {
   fetchVlans,
   fetchMultiWanLinks,
   fetchNetworkInterfaces,
+  fetchVlanParentInterfaces,
+  isPppoeInterface,
   setFirewallRuleEnabled,
   removeFirewallRule,
   addFirewallRule,
@@ -441,16 +443,51 @@ extraRouter.get('/network/routes', async (req, res) => {
   const { router, error, status } = resolveNetworkRouter(req);
   if (!router) return res.status(status || 400).json({ error, routes: [], vlans: [], live: false });
   try {
-    const [routes, vlans] = await Promise.all([fetchIpRoutes(router), fetchVlans(router)]);
-    res.json({ routes, vlans, live: true, routerId: router.id, routerName: router.name });
+    const [allRoutes, allVlans, parentIfaces] = await Promise.all([
+      fetchIpRoutes(router),
+      fetchVlans(router),
+      fetchVlanParentInterfaces(router).catch(() => [] as { name: string; type: string; running: boolean }[]),
+    ]);
+    // Hide PPPoE-related dynamic routes and VLAN parents from this management view.
+    const routes = allRoutes.filter((r) => {
+      if (isPppoeInterface(r.gateway || '') || isPppoeInterface(r.interfaceName || '')) return false;
+      const gw = String(r.gateway || '');
+      if (gw.startsWith('<') && /pppoe/i.test(gw)) return false;
+      return true;
+    });
+    const vlans = allVlans.filter((v) => !isPppoeInterface(v.iface || ''));
+    res.json({
+      routes,
+      vlans,
+      parentInterfaces: parentIfaces,
+      live: true,
+      routerId: router.id,
+      routerName: router.name,
+    });
   } catch (e: any) {
     res.status(502).json({
       error: e?.message || 'Could not fetch routes/VLANs from MikroTik',
       routes: [],
       vlans: [],
+      parentInterfaces: [],
       live: false,
       routerId: router.id,
       routerName: router.name,
+    });
+  }
+});
+
+extraRouter.get('/network/vlan-parents', async (req, res) => {
+  const { router, error, status } = resolveNetworkRouter(req);
+  if (!router) return res.status(status || 400).json({ error, interfaces: [], live: false });
+  try {
+    const interfaces = await fetchVlanParentInterfaces(router);
+    res.json({ interfaces, live: true, routerId: router.id, routerName: router.name });
+  } catch (e: any) {
+    res.status(502).json({
+      error: e?.message || 'Could not fetch interfaces from MikroTik',
+      interfaces: [],
+      live: false,
     });
   }
 });
@@ -508,6 +545,9 @@ extraRouter.post('/network/vlans', async (req, res) => {
   const vlanId = Number(req.body?.vlanId);
   const iface = String(req.body?.iface || '').trim();
   if (!name || !vlanId || !iface) return res.status(400).json({ error: 'name, vlanId and iface are required' });
+  if (isPppoeInterface(iface)) {
+    return res.status(400).json({ error: 'PPPoE interfaces cannot be used as VLAN parents. Choose ether/bridge/bond/wlan.' });
+  }
   try {
     await addVlan(router, {
       name,

@@ -105,7 +105,10 @@ export default function IPoE() {
     if (tab === 'users' || tab === 'offline' || tab === 'active') loadLeases();
     if (tab === 'profiles') loadProfiles();
     if (tab === 'servers') loadServers();
-    if (tab === 'plans') loadPlans();
+    if (tab === 'plans') {
+      loadPlans();
+      loadProfiles();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, current?.id]);
 
