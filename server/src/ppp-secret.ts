@@ -94,6 +94,8 @@ export async function upsertPppSecret(
   conn: RouterConn,
   user: {
     username: string;
+    /** When renaming, look up the existing secret by this name. */
+    previousUsername?: string | null;
     password?: string | null;
     profile: string;
     subscription_due?: string | null;
@@ -113,9 +115,13 @@ export async function upsertPppSecret(
   const comment = buildSecretComment(user);
   const service = rosService(user.service || 'pppoe');
   const disabled = isDisabledStatus(user.status);
+  const lookupName =
+    user.previousUsername && user.previousUsername !== user.username
+      ? user.previousUsername
+      : user.username;
 
   return withRouter(conn, async (api) => {
-    const existing = await findSecret(api, user.username);
+    const existing = await findSecret(api, lookupName);
     if (existing) {
       const id = existing['.id'] || existing.name;
       const args = [
@@ -124,11 +130,33 @@ export async function upsertPppSecret(
         `=comment=${comment}`,
         `=service=${service}`,
       ];
+      if (user.previousUsername && user.previousUsername !== user.username) {
+        args.push(`=name=${user.username}`);
+      }
       if (user.password) args.push(`=password=${user.password}`);
       await api.write('/ppp/secret/set', args);
       if (disabled) await api.write('/ppp/secret/disable', [`=numbers=${id}`]);
       else await api.write('/ppp/secret/enable', [`=numbers=${id}`]);
       return { action: 'updated' as const, secretId: String(id) };
+    }
+
+    // Rename case: old secret missing but new name already exists — update that one.
+    if (lookupName !== user.username) {
+      const byNew = await findSecret(api, user.username);
+      if (byNew) {
+        const id = byNew['.id'] || byNew.name;
+        const args = [
+          `=numbers=${id}`,
+          `=profile=${user.profile}`,
+          `=comment=${comment}`,
+          `=service=${service}`,
+        ];
+        if (user.password) args.push(`=password=${user.password}`);
+        await api.write('/ppp/secret/set', args);
+        if (disabled) await api.write('/ppp/secret/disable', [`=numbers=${id}`]);
+        else await api.write('/ppp/secret/enable', [`=numbers=${id}`]);
+        return { action: 'updated' as const, secretId: String(id) };
+      }
     }
 
     const addArgs = [

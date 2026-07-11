@@ -656,7 +656,7 @@ function UserFormModal({
         const u = r.data;
         setForm({
           username: u.username || '',
-          password: u.password || '',
+          password: '',
           profile: u.profile || defaultPlan,
           subscription_due: (u.subscription_due || '').slice(0, 10),
           expiration_profile: u.expiration_profile || 'default',
@@ -709,15 +709,22 @@ function UserFormModal({
       setError('Username is required');
       return;
     }
+    if (!isEdit && !form.password.trim()) {
+      setError('Password is required');
+      return;
+    }
     setSaving(true);
     setError('');
     try {
-      const payload = {
+      const payload: Record<string, unknown> = {
         ...form,
         nap_id: form.nap_id ? Number(form.nap_id) : null,
         router_id: routerId || undefined,
         service,
       };
+      if (isEdit && !String(form.password || '').trim()) {
+        delete payload.password;
+      }
       if (isEdit) {
         const r = await api.put(`/pppoe/users/${editUser!.id}`, payload);
         if (r.data?.mikrotikComment) setMikrotikComment(r.data.mikrotikComment);
@@ -761,21 +768,26 @@ function UserFormModal({
         <div className="space-y-4">
           <FormField label="Username" required>
             <input
-              className={`input ${isEdit ? 'bg-slate-50 text-slate-500' : ''}`}
+              className="input"
               value={form.username}
               onChange={(e) => set({ username: e.target.value })}
-              readOnly={isEdit}
               autoFocus={!isEdit}
             />
           </FormField>
 
-          <FormField label="Password">
+          <FormField
+            label="Password"
+            hint={isEdit ? 'Leave blank to keep the current password.' : undefined}
+            required={!isEdit}
+          >
             <div className="relative">
               <input
                 className="input pr-10"
                 type={showPass ? 'text' : 'password'}
                 value={form.password}
                 onChange={(e) => set({ password: e.target.value })}
+                placeholder={isEdit ? '•••••••• (unchanged)' : ''}
+                autoComplete="new-password"
               />
               <button type="button" onClick={() => setShowPass((v) => !v)} className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600">
                 {showPass ? <EyeOff size={16} /> : <Eye size={16} />}

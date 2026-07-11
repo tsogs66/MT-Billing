@@ -433,12 +433,18 @@ function routerConn(row: { host?: string; port?: number; api_user?: string; api_
   return { host: row.host, port: row.port, api_user: row.api_user, api_pass: row.api_pass };
 }
 
-async function trySyncUserToMikrotik(user: any): Promise<{ synced: boolean; error?: string }> {
+async function trySyncUserToMikrotik(
+  user: any,
+  opts?: { previousUsername?: string | null }
+): Promise<{ synced: boolean; error?: string }> {
   if (!user?.router_id) return { synced: false };
   const router = db.prepare('SELECT * FROM routers WHERE id = ?').get(user.router_id) as any;
   if (!router?.host || !router?.api_user) return { synced: false };
   try {
-    await upsertPppSecret(routerConn(router), user);
+    await upsertPppSecret(routerConn(router), {
+      ...user,
+      previousUsername: opts?.previousUsername || null,
+    });
     return { synced: true };
   } catch (e: any) {
     db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
@@ -649,6 +655,23 @@ app.put('/api/pppoe/users/:id', async (req, res) => {
   if (!existing) return res.status(404).json({ error: 'not found' });
   const b = req.body || {};
 
+  const newUsername =
+    b.username != null && String(b.username).trim()
+      ? String(b.username).trim()
+      : existing.username;
+  if (newUsername !== existing.username) {
+    const clash = db
+      .prepare('SELECT id FROM pppoe_users WHERE username = ? AND id != ?')
+      .get(newUsername, id) as { id: number } | undefined;
+    if (clash) return res.status(400).json({ error: `Username "${newUsername}" is already in use` });
+  }
+
+  // Blank / omitted password on edit keeps the existing password.
+  const password =
+    b.password != null && String(b.password).trim() !== ''
+      ? String(b.password)
+      : existing.password;
+
   // If the billing plan changed, sync the stored price to the plan's price
   // (unless an explicit price override is supplied).
   const newProfile = b.profile ?? existing.profile;
@@ -660,15 +683,16 @@ app.put('/api/pppoe/users/:id', async (req, res) => {
 
   db.prepare(
     `UPDATE pppoe_users SET
-       customer_name = @customer_name, password = @password, profile = @profile, status = @status,
+       username = @username, customer_name = @customer_name, password = @password, profile = @profile, status = @status,
        subscription_due = @subscription_due, price = @price, expiration_profile = @expiration_profile,
        contact = @contact, email = @email, nap_id = @nap_id, plc_port = @plc_port,
        address = @address, lat = @lat, lng = @lng
      WHERE id = @id`
   ).run({
     id,
+    username: newUsername,
     customer_name: b.customer_name ?? existing.customer_name,
-    password: b.password ?? existing.password,
+    password,
     profile: newProfile,
     status: b.status ?? existing.status,
     subscription_due: b.subscription_due ?? existing.subscription_due,
@@ -683,7 +707,9 @@ app.put('/api/pppoe/users/:id', async (req, res) => {
     lng: b.lng != null && b.lng !== '' ? Number(b.lng) : b.lng === '' ? null : existing.lng,
   });
   const updated = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(id) as any;
-  const mikrotik = await trySyncUserToMikrotik(updated);
+  const mikrotik = await trySyncUserToMikrotik(updated, {
+    previousUsername: newUsername !== existing.username ? existing.username : null,
+  });
   res.json({ ...updated, mikrotikComment: buildSecretComment(updated), mikrotik });
 });
 
