@@ -15,7 +15,8 @@ export interface RouterConn {
  */
 export async function withRouter<T>(
   conn: RouterConn,
-  fn: (api: RouterOSAPI) => Promise<T>
+  fn: (api: RouterOSAPI) => Promise<T>,
+  opts?: { timeoutSec?: number }
 ): Promise<T> {
   if (!conn.host || !conn.api_user) {
     throw new Error('router-not-configured');
@@ -25,7 +26,8 @@ export async function withRouter<T>(
     port: conn.port || 8728,
     user: conn.api_user,
     password: conn.api_pass || '',
-    timeout: 4,
+    // 4s was too aggressive for WAN/API-over-VPN boards and multi-step writes.
+    timeout: opts?.timeoutSec ?? 15,
   });
   await api.connect();
   try {
@@ -37,6 +39,17 @@ export async function withRouter<T>(
       /* ignore */
     }
   }
+}
+
+function rosTrapMessage(e: unknown): string {
+  const any = e as any;
+  const msg =
+    any?.message ||
+    any?.errno ||
+    any?.errors?.[0]?.message ||
+    (typeof any === 'string' ? any : '') ||
+    'MikroTik API error';
+  return String(msg);
 }
 
 export async function tryLiveResource<T>(
@@ -788,6 +801,40 @@ export async function setPppSecretEnabled(conn: RouterConn, nameOrId: string, en
   );
 }
 
+/** Ensure a PPP profile exists on the router (create empty one if missing). */
+export async function ensurePppProfile(
+  conn: RouterConn,
+  name: string,
+  rateLimit?: string
+): Promise<void> {
+  if (!name) return;
+  await withRouter(conn, async (api) => {
+    const rows = (await api.write('/ppp/profile/print')) as Record<string, string>[];
+    if ((rows || []).some((p) => String(p.name || '') === name)) return;
+    const args = [`=name=${name}`];
+    if (rateLimit) args.push(`=rate-limit=${rateLimit}`);
+    await api.write('/ppp/profile/add', args);
+  }, { timeoutSec: 15 });
+}
+
+function secretWriteArgs(fields: {
+  name?: string;
+  password?: string;
+  profile?: string;
+  service?: string;
+  comment?: string;
+  disabled?: boolean;
+}): string[] {
+  const args: string[] = [];
+  if (fields.name != null) args.push(`=name=${fields.name}`);
+  if (fields.password != null) args.push(`=password=${fields.password}`);
+  if (fields.service != null) args.push(`=service=${fields.service}`);
+  if (fields.profile) args.push(`=profile=${fields.profile}`);
+  if (fields.comment != null) args.push(`=comment=${fields.comment}`);
+  if (fields.disabled != null) args.push(`=disabled=${fields.disabled ? 'yes' : 'no'}`);
+  return args;
+}
+
 export async function addPppSecret(
   conn: RouterConn,
   fields: {
@@ -797,17 +844,55 @@ export async function addPppSecret(
     service?: string;
     comment?: string;
     disabled?: boolean;
+    rateLimit?: string;
   }
 ): Promise<void> {
-  const args = [
-    `=name=${fields.name}`,
-    `=password=${fields.password || ''}`,
-    `=service=${fields.service || 'pppoe'}`,
-  ];
-  if (fields.profile) args.push(`=profile=${fields.profile}`);
-  if (fields.comment != null) args.push(`=comment=${fields.comment}`);
-  if (fields.disabled) args.push('=disabled=yes');
-  await withRouter(conn, (api) => api.write('/ppp/secret/add', args));
+  if (fields.profile) {
+    try {
+      await ensurePppProfile(conn, fields.profile, fields.rateLimit);
+    } catch {
+      /* profile create best-effort; secret add may still work with default */
+    }
+  }
+
+  const tryAdd = async (profile?: string) => {
+    const args = secretWriteArgs({
+      name: fields.name,
+      password: fields.password || '',
+      service: fields.service || 'pppoe',
+      profile,
+      comment: fields.comment,
+      disabled: fields.disabled,
+    });
+    await withRouter(conn, (api) => api.write('/ppp/secret/add', args), { timeoutSec: 20 });
+  };
+
+  try {
+    await tryAdd(fields.profile);
+  } catch (e) {
+    const msg = rosTrapMessage(e);
+    // Missing/invalid profile → retry with RouterOS "default"
+    if (fields.profile && /profile|no such|invalid/i.test(msg)) {
+      try {
+        await tryAdd('default');
+        return;
+      } catch (e2) {
+        throw new Error(rosTrapMessage(e2) || msg);
+      }
+    }
+    // Already exists → treat as update
+    if (/already|exist|unique/i.test(msg)) {
+      await updatePppSecret(conn, fields.name, {
+        password: fields.password,
+        profile: fields.profile,
+        service: fields.service || 'pppoe',
+        comment: fields.comment,
+        disabled: fields.disabled,
+      });
+      return;
+    }
+    throw new Error(msg);
+  }
 }
 
 export async function updatePppSecret(
@@ -819,23 +904,48 @@ export async function updatePppSecret(
     service?: string;
     comment?: string;
     disabled?: boolean;
+    rateLimit?: string;
   }
 ): Promise<void> {
-  const args = [`=.id=${nameOrId}`];
-  // Prefer matching by name when Winbox-style names are used.
-  if (!String(nameOrId).startsWith('*')) {
-    args[0] = `=numbers=${nameOrId}`;
+  if (fields.profile) {
+    try {
+      await ensurePppProfile(conn, fields.profile, fields.rateLimit);
+    } catch {
+      /* best-effort */
+    }
   }
-  if (fields.password != null) args.push(`=password=${fields.password}`);
-  if (fields.profile != null) args.push(`=profile=${fields.profile}`);
-  if (fields.service != null) args.push(`=service=${fields.service}`);
-  if (fields.comment != null) args.push(`=comment=${fields.comment}`);
-  if (fields.disabled != null) args.push(`=disabled=${fields.disabled ? 'yes' : 'no'}`);
-  await withRouter(conn, (api) => api.write('/ppp/secret/set', args));
+
+  const args = [`=numbers=${nameOrId}`, ...secretWriteArgs(fields)];
+  try {
+    await withRouter(conn, (api) => api.write('/ppp/secret/set', args), { timeoutSec: 20 });
+  } catch (e) {
+    const msg = rosTrapMessage(e);
+    // Secret missing on router → create it when we have a password
+    if (/no such|not found|invalid value for argument numbers/i.test(msg)) {
+      if (fields.password == null) {
+        throw new Error(
+          `PPP secret "${nameOrId}" not found on MikroTik. Edit the user (set password) or re-create to push the secret.`
+        );
+      }
+      await addPppSecret(conn, {
+        name: nameOrId,
+        password: fields.password || '',
+        profile: fields.profile,
+        service: fields.service || 'pppoe',
+        comment: fields.comment,
+        disabled: fields.disabled,
+        rateLimit: fields.rateLimit,
+      });
+      return;
+    }
+    throw new Error(msg);
+  }
 }
 
 export async function removePppSecret(conn: RouterConn, nameOrId: string): Promise<void> {
-  await withRouter(conn, (api) => api.write('/ppp/secret/remove', [`=numbers=${nameOrId}`]));
+  await withRouter(conn, (api) => api.write('/ppp/secret/remove', [`=numbers=${nameOrId}`]), {
+    timeoutSec: 15,
+  });
 }
 
 /**
@@ -1043,28 +1153,70 @@ export async function fetchPppActiveTraffic(
     const byUser = new Map<string, string>();
     for (const iface of ifaces || []) {
       const name = iface.name || '';
-      // <pppoe-username> or similar
+      // <pppoe-username> or pppoe-username (case-insensitive key)
       const m = name.match(/^<pppoe-(.+)>$/i) || name.match(/^pppoe-(.+)$/i);
-      if (m) byUser.set(m[1], name);
+      if (m) byUser.set(pppNameKey(m[1]), name);
     }
     const out: Record<string, { download: number; upload: number }> = {};
-    for (const user of usernames) {
-      const iface = byUser.get(user);
-      if (!iface) continue;
-      try {
-        const rows = (await api.write('/interface/monitor-traffic', [
-          `=interface=${iface}`,
-          '=once=',
-        ])) as Record<string, string>[];
-        const r = rows?.[0] || {};
-        out[user] = {
-          download: Number(r['rx-bits-per-second']) || 0,
-          upload: Number(r['tx-bits-per-second']) || 0,
-        };
-      } catch {
-        /* skip */
-      }
+    const wanted = usernames.filter((u) => byUser.has(pppNameKey(u)));
+    // Probe a few at a time — each monitor-traffic is a round trip.
+    const CONC = 6;
+    for (let i = 0; i < wanted.length; i += CONC) {
+      const chunk = wanted.slice(i, i + CONC);
+      await Promise.all(
+        chunk.map(async (user) => {
+          const iface = byUser.get(pppNameKey(user));
+          if (!iface) return;
+          try {
+            const rows = (await api.write('/interface/monitor-traffic', [
+              `=interface=${iface}`,
+              '=once=',
+            ])) as Record<string, string>[];
+            const r = rows?.[0] || {};
+            out[user] = {
+              download: Number(r['rx-bits-per-second']) || 0,
+              upload: Number(r['tx-bits-per-second']) || 0,
+            };
+          } catch {
+            /* skip */
+          }
+        })
+      );
     }
     return out;
-  });
+  }, { timeoutSec: 30 });
+}
+
+/**
+ * Live rx/tx for IPoE/DHCP leases by matching simple-queue targets to lease IPs.
+ * Falls back to empty rates when no per-IP queue exists.
+ */
+export async function fetchLeaseTrafficByIp(
+  conn: RouterConn,
+  ips: string[]
+): Promise<Record<string, { download: number; upload: number }>> {
+  if (!ips.length) return {};
+  const want = new Set(ips.map((ip) => String(ip || '').trim()).filter(Boolean));
+  return withRouter(conn, async (api) => {
+    const out: Record<string, { download: number; upload: number }> = {};
+    const simple = (await api.write('/queue/simple/print')) as Record<string, string>[];
+    for (const q of simple || []) {
+      // target can be "1.2.3.4/32", "1.2.3.4", or "1.2.3.4/32,ether1"
+      const target = String(q.target || q['dst-address'] || '');
+      const ipMatch = target.match(/(\d{1,3}(?:\.\d{1,3}){3})/);
+      const ip = ipMatch?.[1];
+      if (!ip || !want.has(ip)) continue;
+      const raw = String(q.rate || '');
+      const parts = raw.split('/');
+      const download = parseRosRate(parts[0]);
+      const upload = parseRosRate(parts[1] || parts[0]);
+      // Prefer higher of existing vs this queue (multiple queues rare)
+      const prev = out[ip];
+      out[ip] = {
+        download: Math.max(prev?.download || 0, download),
+        upload: Math.max(prev?.upload || 0, upload),
+      };
+    }
+    return out;
+  }, { timeoutSec: 20 });
 }

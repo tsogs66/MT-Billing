@@ -68,7 +68,7 @@ const TARGETS: MonitorTarget[] = [
 
 const HISTORY_CAP = 60;
 const CONCURRENCY = 5;
-const TIMEOUT_MS = 12000;
+const TIMEOUT_MS = 10000;
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
 
@@ -88,10 +88,19 @@ for (const t of TARGETS) {
   });
 }
 
+function classifyHttp(code: number): { up: boolean; status: MonitorState['status'] } {
+  // 2xx / 3xx = reachable and healthy
+  if (code >= 200 && code < 400) return { up: true, status: 'up' };
+  // 5xx = server up but unhealthy
+  if (code >= 500) return { up: false, status: 'degraded' };
+  // 4xx (and others) = blocked / not useful — treat as down for ISP reachability
+  return { up: false, status: 'down' };
+}
+
 async function fetchReachable(
   url: string,
   method: 'HEAD' | 'GET'
-): Promise<{ ok: true; ms: number; code: number } | { ok: false; error: string }> {
+): Promise<{ ok: true; ms: number; code: number } | { ok: false; error: string; code?: number }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   const start = performance.now();
@@ -124,16 +133,30 @@ async function fetchReachable(
 async function checkOne(
   target: MonitorTarget
 ): Promise<{ up: boolean; ms: number | null; code: number; status: MonitorState['status']; error: string | null }> {
-  // HEAD first (cheap); some CDNs reject HEAD — fall back to GET.
+  // HEAD first (cheap); fall back to GET on network failure OR non-2xx/3xx
+  // (many CDNs reject HEAD with 403/405 while GET works).
   let result = await fetchReachable(target.url, 'HEAD');
-  if (!result.ok) {
-    result = await fetchReachable(target.url, 'GET');
+  const headBad =
+    !result.ok || (result.ok && (result.code < 200 || result.code >= 400));
+  if (headBad) {
+    const getResult = await fetchReachable(target.url, 'GET');
+    if (getResult.ok || !result.ok) {
+      result = getResult;
+    }
   }
+
   if (!result.ok) {
     return { up: false, ms: null, code: 0, status: 'down', error: result.error };
   }
-  const status: MonitorState['status'] = result.code >= 500 ? 'degraded' : 'up';
-  return { up: true, ms: result.ms, code: result.code, status, error: null };
+
+  const { up, status } = classifyHttp(result.code);
+  const error =
+    status === 'up'
+      ? null
+      : status === 'degraded'
+        ? `HTTP ${result.code}`
+        : `HTTP ${result.code}`;
+  return { up, ms: result.ms, code: result.code, status, error };
 }
 
 async function mapPool<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
@@ -149,22 +172,31 @@ async function mapPool<T, R>(items: T[], limit: number, fn: (item: T) => Promise
   return out;
 }
 
+let running: Promise<void> | null = null;
+
 export async function runUptimeChecks() {
-  await mapPool(TARGETS, CONCURRENCY, async (t) => {
-    const r = await checkOne(t);
-    const s = state.get(t.id)!;
-    s.status = r.status;
-    s.latencyMs = r.ms;
-    s.code = r.code;
-    s.lastChecked = Date.now();
-    s.lastError = r.error;
-    s.history.push({ t: s.lastChecked, up: r.up, ms: r.ms });
-    if (s.history.length > HISTORY_CAP) s.history.shift();
-    const ups = s.history.filter((h) => h.up).length;
-    s.uptimePct = s.history.length ? Number(((ups / s.history.length) * 100).toFixed(1)) : 0;
-    const lat = s.history.filter((h) => h.ms != null).map((h) => h.ms as number);
-    s.avgMs = lat.length ? Math.round(lat.reduce((a, b) => a + b, 0) / lat.length) : null;
+  // Serialize — a full run can exceed the 60s interval on slow links.
+  if (running) return running;
+  running = (async () => {
+    await mapPool(TARGETS, CONCURRENCY, async (t) => {
+      const r = await checkOne(t);
+      const s = state.get(t.id)!;
+      s.status = r.status;
+      s.latencyMs = r.ms;
+      s.code = r.code;
+      s.lastChecked = Date.now();
+      s.lastError = r.error;
+      s.history.push({ t: s.lastChecked, up: r.up, ms: r.ms });
+      if (s.history.length > HISTORY_CAP) s.history.shift();
+      const ups = s.history.filter((h) => h.up).length;
+      s.uptimePct = s.history.length ? Number(((ups / s.history.length) * 100).toFixed(1)) : 0;
+      const lat = s.history.filter((h) => h.ms != null).map((h) => h.ms as number);
+      s.avgMs = lat.length ? Math.round(lat.reduce((a, b) => a + b, 0) / lat.length) : null;
+    });
+  })().finally(() => {
+    running = null;
   });
+  return running;
 }
 
 export function getUptime(): MonitorState[] {
@@ -190,9 +222,11 @@ export function getUptimeSummary() {
 }
 
 let started = false;
-export function startUptime(intervalMs = 60000) {
+export function startUptime(intervalMs = 90000) {
   if (started) return;
   started = true;
-  runUptimeChecks().catch(() => undefined);
-  setInterval(() => runUptimeChecks().catch(() => undefined), intervalMs);
+  runUptimeChecks().catch((err) => console.error('[uptime] initial run failed', err));
+  setInterval(() => {
+    runUptimeChecks().catch((err) => console.error('[uptime] scheduled run failed', err));
+  }, intervalMs);
 }

@@ -10,6 +10,7 @@ import {
 } from '../components/ui';
 import { api, peso } from '../api';
 import { useRouterDevice } from '../context/RouterContext';
+import { formatTrafficPair } from '../lib/traffic';
 
 const TABS = [
   { key: 'users', label: 'Users', icon: Users },
@@ -19,15 +20,6 @@ const TABS = [
   { key: 'servers', label: 'Servers', icon: Server },
   { key: 'plans', label: 'Billing Plans', icon: ReceiptText },
 ];
-
-function formatBps(bps: number): string {
-  if (!bps || bps <= 0) return '0';
-  const mbps = bps / 1_000_000;
-  if (mbps >= 10) return `${Math.round(mbps)}`;
-  if (mbps >= 1) return mbps.toFixed(1);
-  const kbps = bps / 1000;
-  return kbps >= 1 ? `${Math.round(kbps)}k` : `${Math.round(bps)}`;
-}
 
 export default function IPoE() {
   const [tab, setTab] = useState('users');
@@ -54,13 +46,15 @@ export default function IPoE() {
     setTimeout(() => setToast(''), 5000);
   };
 
-  const loadLeases = (filter?: string) => {
+  const loadLeases = (filter?: string, opts?: { silent?: boolean }) => {
     if (!current) {
       setLeases([]);
       return Promise.resolve();
     }
-    setBusy(true);
-    setError('');
+    if (!opts?.silent) {
+      setBusy(true);
+      setError('');
+    }
     const f = filter || (tab === 'offline' ? 'offline' : tab === 'active' ? 'online' : 'all');
     return api
       .get('/ipoe/leases', { params: { routerId: current.id, filter: f } })
@@ -71,10 +65,14 @@ export default function IPoE() {
         if (r.data.error) setError(r.data.error);
       })
       .catch((e) => {
-        setLeases([]);
-        setError(e?.response?.data?.error || 'Could not load DHCP leases');
+        if (!opts?.silent) {
+          setLeases([]);
+          setError(e?.response?.data?.error || 'Could not load DHCP leases');
+        }
       })
-      .finally(() => setBusy(false));
+      .finally(() => {
+        if (!opts?.silent) setBusy(false);
+      });
   };
 
   const loadProfiles = () => api.get('/ipoe/profiles').then((r) => setProfiles(r.data)).catch(() => setProfiles([]));
@@ -109,6 +107,15 @@ export default function IPoE() {
       loadPlans();
       loadProfiles();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, current?.id]);
+
+  // Live traffic poll on Users / Offline / Active
+  useEffect(() => {
+    if (!current?.id) return;
+    if (tab !== 'users' && tab !== 'offline' && tab !== 'active') return;
+    const id = setInterval(() => loadLeases(undefined, { silent: true }), 3000);
+    return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, current?.id]);
 
@@ -166,7 +173,7 @@ export default function IPoE() {
     { key: 'mac', label: 'MAC' },
     { key: 'host', label: 'Host' },
     { key: 'plan', label: 'Billing Plan' },
-    { key: 'speed', label: tab === 'active' ? 'Traffic' : 'Speed' },
+    { key: 'speed', label: tab === 'offline' ? 'Speed' : 'Traffic ↓/↑' },
     { key: 'due', label: 'Due' },
     { key: 'payment', label: 'Payment' },
     { key: 'status', label: 'Status' },
@@ -184,7 +191,7 @@ export default function IPoE() {
       mac: l.mac,
       host: l.host,
       plan: l.plan,
-      speed: l.downloadMbps || 0,
+      speed: (Number(l.downloadBps) || 0) + (Number(l.uploadBps) || 0) || l.downloadMbps || 0,
       due: l.due,
       payment: l.payment,
       status: l.status,
@@ -208,7 +215,9 @@ export default function IPoE() {
         ))}
       </select>,
       <span className="text-xs font-medium text-slate-700 whitespace-nowrap">
-        {tab === 'active' ? `${l.speed}` : l.speed}
+        {l.online && (Number(l.downloadBps) > 0 || Number(l.uploadBps) > 0 || tab === 'active' || tab === 'users')
+          ? formatTrafficPair(l.downloadBps, l.uploadBps)
+          : l.speed}
       </span>,
       <span className="text-xs text-slate-500 whitespace-nowrap">{l.due || '—'}</span>,
       <StatusBadge status={l.payment || 'Active'} />,
@@ -679,4 +688,3 @@ function IpoePlanModal({ initial, profiles, onClose, onSaved }: any) {
 }
 
 // silence unused helper in case traffic is extended later
-void formatBps;

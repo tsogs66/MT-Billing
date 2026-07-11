@@ -17,6 +17,7 @@ interface Monitor {
   uptimePct: number;
   avgMs: number | null;
   history: Sample[];
+  lastError?: string | null;
 }
 interface Summary { total: number; up: number; degraded: number; down: number; avgMs: number | null; lastRun: number | null }
 
@@ -63,12 +64,19 @@ export default function Uptime() {
   const [monitors, setMonitors] = useState<Monitor[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [checking, setChecking] = useState(false);
+  const [error, setError] = useState('');
 
   const load = () =>
-    api.get('/uptime').then((r) => {
-      setMonitors(r.data.monitors);
-      setSummary(r.data.summary);
-    });
+    api
+      .get('/uptime')
+      .then((r) => {
+        setMonitors(r.data.monitors);
+        setSummary(r.data.summary);
+        setError('');
+      })
+      .catch((e) => {
+        setError(e?.response?.data?.error || 'Could not load uptime data');
+      });
 
   useEffect(() => {
     load();
@@ -78,10 +86,13 @@ export default function Uptime() {
 
   const refresh = async () => {
     setChecking(true);
+    setError('');
     try {
       const r = await api.post('/uptime/check');
       setMonitors(r.data.monitors);
       setSummary(r.data.summary);
+    } catch (e: any) {
+      setError(e?.response?.data?.error || 'Check failed');
     } finally {
       setChecking(false);
     }
@@ -103,14 +114,18 @@ export default function Uptime() {
         <StatTile label="Avg latency" value={summary?.avgMs != null ? `${summary.avgMs} ms` : '—'} icon={Gauge} tone="text-sky-600" accent="from-sky-500/15 to-transparent" delay={200} />
       </div>
 
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
         <div className="text-sm text-slate-500">
-          Last check: <span className="font-medium text-slate-700">{ago(summary?.lastRun ?? null)}</span> · auto-refreshes every 30s
+          Last check: <span className="font-medium text-slate-700">{ago(summary?.lastRun ?? null)}</span> · probes every ~90s from this panel host
         </div>
         <button type="button" className="btn-primary" onClick={refresh} disabled={checking}>
           <RefreshCw size={16} className={checking ? 'animate-spin' : ''} /> {checking ? 'Checking…' : 'Check now'}
         </button>
       </div>
+
+      {error && (
+        <div className="mb-4 text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">{error}</div>
+      )}
 
       <div className="space-y-5">
         {Object.entries(grouped).map(([category, list]) => (
@@ -123,7 +138,13 @@ export default function Uptime() {
                     <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${st.dot} ${m.status === 'up' ? 'animate-pulse-soft' : ''}`} />
                     <div className="min-w-0 flex-1">
                       <div className="font-semibold text-slate-800 truncate">{m.name}</div>
-                      <div className="text-[11px] text-slate-400 truncate">{m.url.replace(/^https?:\/\//, '')}</div>
+                      <div className="text-[11px] text-slate-400 truncate">
+                        {m.lastError
+                          ? m.lastError
+                          : m.code
+                            ? `HTTP ${m.code} · ${m.url.replace(/^https?:\/\//, '')}`
+                            : m.url.replace(/^https?:\/\//, '')}
+                      </div>
                     </div>
                     <div className="hidden sm:block"><Sparkline history={m.history} /></div>
                     <div className="text-right w-16 shrink-0">

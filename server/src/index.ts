@@ -39,6 +39,7 @@ import {
   removeDhcpServer,
   setDhcpLeaseBlocked,
   fetchPppActiveTraffic,
+  fetchLeaseTrafficByIp,
 } from './mikrotik.js';
 import { probeOlt } from './olt.js';
 import { getUptime, getUptimeSummary, runUptimeChecks, startUptime } from './uptime.js';
@@ -619,12 +620,30 @@ app.get('/api/pppoe/users', async (req, res) => {
       const [secrets, sessions] = await Promise.all([fetchPppSecrets(router), fetchPppActive(router)]);
       rows = enrichPppUsersFromLive(rows, secrets, sessions).map((u) => ({ ...u, live: true }));
       live = true;
+      const onlineNames = rows.filter((u) => u.sessionOnline).map((u) => String(u.username));
+      if (onlineNames.length) {
+        try {
+          const traffic = await fetchPppActiveTraffic(router, onlineNames);
+          const byKey = new Map<string, { download: number; upload: number }>();
+          for (const [name, t] of Object.entries(traffic)) byKey.set(pppNameKey(name), t);
+          rows = rows.map((u) => {
+            const t = byKey.get(pppNameKey(u.username));
+            return {
+              ...u,
+              downloadBps: t?.download ?? 0,
+              uploadBps: t?.upload ?? 0,
+            };
+          });
+        } catch {
+          /* traffic optional */
+        }
+      }
     } catch {
       /* keep DB rows */
     }
   }
 
-  res.json(rows.map((u) => ({ ...u, live })));
+  res.json(rows.map((u) => ({ ...u, live, downloadBps: u.downloadBps ?? 0, uploadBps: u.uploadBps ?? 0 })));
 });
 
 // Full record for the edit form.
@@ -651,6 +670,7 @@ app.post('/api/pppoe/users', async (req, res) => {
     expiration_profile, contact, email, nap_id, plc_port, address, lat, lng,
   } = b;
   if (!username) return res.status(400).json({ error: 'username is required' });
+  if (!password) return res.status(400).json({ error: 'password is required to create the MikroTik PPP secret' });
 
   const routerId = Number(b.router_id || b.routerId || 0);
   if (!routerId) {
@@ -701,28 +721,38 @@ app.post('/api/pppoe/users', async (req, res) => {
 
   const row = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(insertedId) as any;
 
-  if (routerHasApi(router)) {
-    try {
-      await addPppSecret(router, {
-        name: row.username,
-        password: row.password || '',
-        profile: row.profile || undefined,
-        service: row.service === 'ipoe' ? 'pppoe' : row.service || 'pppoe',
-        comment: commentFromPppoeUser(row),
-        disabled: secretDisabledFromStatus(row.status),
-      });
-    } catch (e: any) {
-      db.prepare('DELETE FROM pppoe_users WHERE id = ?').run(insertedId);
-      return res.status(502).json({
-        error: e?.message || 'Failed to create PPP secret on MikroTik',
-      });
-    }
+  if (!routerHasApi(router)) {
+    db.prepare('DELETE FROM pppoe_users WHERE id = ?').run(insertedId);
+    return res.status(400).json({
+      error:
+        'Router API credentials are not configured. Open Router Management, set Host + API user/password, then try again.',
+    });
+  }
+
+  try {
+    const rate = db.prepare('SELECT rate_limit FROM profiles WHERE name = ?').get(row.profile) as
+      | { rate_limit?: string }
+      | undefined;
+    await addPppSecret(router, {
+      name: row.username,
+      password: row.password || '',
+      profile: row.profile || undefined,
+      service: row.service === 'ipoe' ? 'pppoe' : row.service || 'pppoe',
+      comment: commentFromPppoeUser(row),
+      disabled: secretDisabledFromStatus(row.status),
+      rateLimit: rate?.rate_limit || undefined,
+    });
+  } catch (e: any) {
+    db.prepare('DELETE FROM pppoe_users WHERE id = ?').run(insertedId);
+    return res.status(502).json({
+      error: e?.message || 'Failed to create PPP secret on MikroTik',
+    });
   }
 
   db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
     'info',
     'pppoe',
-    `Created ${row.service || 'pppoe'} user ${username} (acct ${account})${routerHasApi(router) ? ' + MikroTik secret' : ''}`
+    `Created ${row.service || 'pppoe'} user ${username} (acct ${account}) + MikroTik secret`
   );
   res.status(201).json(row);
 });
@@ -771,12 +801,17 @@ app.put('/api/pppoe/users/:id', async (req, res) => {
   const router = getRouterById(row.router_id);
   if (routerHasApi(router)) {
     try {
+      const rate = db.prepare('SELECT rate_limit FROM profiles WHERE name = ?').get(row.profile) as
+        | { rate_limit?: string }
+        | undefined;
       await updatePppSecret(router, existing.username, {
-        password: b.password != null ? row.password : undefined,
+        // Always send password so a missing secret can be re-created on the router.
+        password: row.password || '',
         profile: row.profile || undefined,
         service: row.service === 'ipoe' ? 'pppoe' : row.service || undefined,
         comment: commentFromPppoeUser(row),
         disabled: secretDisabledFromStatus(row.status),
+        rateLimit: rate?.rate_limit || undefined,
       });
     } catch (e: any) {
       return res.status(502).json({
@@ -953,6 +988,7 @@ app.post('/api/pppoe/users/:id/payment', async (req, res) => {
   if (routerHasApi(payRouter)) {
     try {
       await updatePppSecret(payRouter, updatedUser.username, {
+        password: updatedUser.password || '',
         profile: updatedUser.profile || undefined,
         comment: commentFromPppoeUser(updatedUser),
         disabled: false,
@@ -1464,6 +1500,8 @@ app.get('/api/ipoe/leases', async (req, res) => {
         speed: formatSpeedMbps(down, up),
         downloadMbps: down,
         uploadMbps: up,
+        downloadBps: 0,
+        uploadBps: 0,
         due: meta?.due_at || '',
         payment: meta?.payment_status || 'Active',
         status: l.blocked ? 'Blocked' : online ? 'Online' : 'Offline',
@@ -1475,6 +1513,23 @@ app.get('/api/ipoe/leases', async (req, res) => {
         comment: l.comment || meta?.comment || '',
       };
     });
+
+    // Live traffic from simple queues matched by lease IP (when configured).
+    const onlineIps = mapped.filter((x) => x.online && x.address && x.address !== '—').map((x) => x.address);
+    if (onlineIps.length) {
+      try {
+        const traffic = await fetchLeaseTrafficByIp(router, onlineIps);
+        for (const row of mapped) {
+          const t = traffic[row.address];
+          if (t) {
+            row.downloadBps = t.download;
+            row.uploadBps = t.upload;
+          }
+        }
+      } catch {
+        /* optional */
+      }
+    }
 
     const filtered =
       filter === 'online' ? mapped.filter((x) => x.online && !x.blocked) : filter === 'offline' ? mapped.filter((x) => !x.online || x.blocked) : mapped;
@@ -2421,6 +2476,6 @@ process.on('mt-billing-restart' as any, () => {
 
 server.listen(PORT, () => {
   console.log(`MT-Billing API listening on http://localhost:${PORT}`);
-  startUptime(60000);
+  startUptime(90000);
   startNotifyScheduler(5 * 60 * 1000);
 });

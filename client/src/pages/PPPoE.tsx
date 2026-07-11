@@ -8,6 +8,7 @@ import {
 import { api, peso } from '../api';
 import LocationEditor, { DEFAULT_PIN } from '../components/LocationEditor';
 import { useRouterDevice } from '../context/RouterContext';
+import { formatTrafficPair } from '../lib/traffic';
 
 interface PUser {
   id: number;
@@ -23,6 +24,8 @@ interface PUser {
   online?: boolean | number;
   sessionOnline?: boolean;
   mikrotikProfile?: string | null;
+  downloadBps?: number;
+  uploadBps?: number;
 }
 
 const TABS = [
@@ -71,8 +74,10 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
   const routerQ = current?.id ? `&routerId=${current.id}` : '';
   const routerParams = current?.id ? { routerId: current.id } : {};
 
-  const loadUsers = () =>
-    api.get(`/pppoe/users?service=${service}${routerQ}`).then((r) => setUsers(r.data)).catch(() => setUsers([]));
+  const loadUsers = (opts?: { silent?: boolean }) =>
+    api.get(`/pppoe/users?service=${service}${routerQ}`).then((r) => setUsers(r.data)).catch(() => {
+      if (!opts?.silent) setUsers([]);
+    });
 
   const loadProfiles = () =>
     api
@@ -80,9 +85,11 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
       .then((r) => setProfiles(Array.isArray(r.data) ? r.data : r.data.profiles || []))
       .catch(() => setProfiles([]));
 
-  const loadActive = () => {
-    setTabBusy(true);
-    setTabError('');
+  const loadActive = (opts?: { silent?: boolean }) => {
+    if (!opts?.silent) {
+      setTabBusy(true);
+      setTabError('');
+    }
     return api
       .get('/pppoe/active', { params: { service, ...routerParams } })
       .then((r) => {
@@ -90,10 +97,14 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
         if (r.data.error) setTabError(r.data.error);
       })
       .catch((e) => {
-        setActive([]);
-        setTabError(e?.response?.data?.error || 'Could not load active sessions');
+        if (!opts?.silent) {
+          setActive([]);
+          setTabError(e?.response?.data?.error || 'Could not load active sessions');
+        }
       })
-      .finally(() => setTabBusy(false));
+      .finally(() => {
+        if (!opts?.silent) setTabBusy(false);
+      });
   };
 
   const loadServers = () => {
@@ -168,6 +179,19 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
     if (tab === 'plans') loadPlans();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, current?.id]);
+
+  // Live traffic polling on Users / Offline / Active tabs
+  useEffect(() => {
+    if (!current?.id) return;
+    if (tab !== 'users' && tab !== 'offline' && tab !== 'active') return;
+    const tick = () => {
+      if (tab === 'active') loadActive({ silent: true });
+      else loadUsers({ silent: true });
+    };
+    const id = setInterval(tick, 3000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, current?.id, service]);
 
   const filtered = users.filter(
     (u) =>
@@ -308,7 +332,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                     placeholder={`Search ${service.toUpperCase()} user…`}
                     className="w-64"
                   />
-                  <button type="button" className="btn-secondary" onClick={loadUsers} title="Refresh users">
+                  <button type="button" className="btn-secondary" onClick={() => loadUsers()} title="Refresh users">
                     <RefreshCw size={16} /> Refresh
                   </button>
                   <button
@@ -350,6 +374,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                   { key: 'account', label: 'Account #' },
                   { key: 'profile', label: 'Profile' },
                   { key: 'status', label: 'Status' },
+                  { key: 'traffic', label: 'Traffic ↓/↑' },
                   { key: 'due', label: 'Subscription Due' },
                   { key: 'actions', label: 'Actions', align: 'right' },
                 ]}
@@ -360,6 +385,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                     account: u.account,
                     profile: u.mikrotikProfile || u.profile,
                     status: userStatusLabel(u),
+                    traffic: (Number(u.downloadBps) || 0) + (Number(u.uploadBps) || 0),
                     due: u.subscriptionDue,
                   },
                   cells: [
@@ -378,6 +404,11 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                     <span className="text-slate-500">{u.account}</span>,
                     <span className="text-slate-600 font-medium">{u.mikrotikProfile || u.profile}</span>,
                     <StatusBadge status={userStatusLabel(u)} />,
+                    <span className="text-xs font-medium text-slate-700 whitespace-nowrap">
+                      {u.sessionOnline || u.online === 1 || u.online === true
+                        ? formatTrafficPair(u.downloadBps, u.uploadBps)
+                        : '—'}
+                    </span>,
                     <span className="text-slate-500">{u.subscriptionDue}</span>,
                     <div key="a" className="flex items-center justify-end gap-1">
                       <IconAction icon={ReceiptText} title="Process Payment" tone="emerald" onClick={() => setPayFor(u)} />
@@ -410,7 +441,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
               right={
                 <>
                   <SearchInput value={search} onChange={setSearch} placeholder="Search user / IP / MAC…" className="w-64" />
-                  <button type="button" className="btn-secondary" onClick={loadActive} disabled={tabBusy || !current}>
+                  <button type="button" className="btn-secondary" onClick={() => loadActive()} disabled={tabBusy || !current}>
                     <RefreshCw size={16} className={tabBusy ? 'animate-spin' : ''} /> Refresh
                   </button>
                 </>
@@ -448,13 +479,6 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                   .map((a, i) => {
                     const down = Number(a.downloadBps) || 0;
                     const up = Number(a.uploadBps) || 0;
-                    const fmt = (bps: number) => {
-                      const mbps = bps / 1_000_000;
-                      if (mbps >= 10) return `${Math.round(mbps)} Mbps`;
-                      if (mbps >= 0.1) return `${mbps.toFixed(1)} Mbps`;
-                      const kbps = bps / 1000;
-                      return kbps >= 1 ? `${Math.round(kbps)} Kbps` : `${Math.round(bps)} bps`;
-                    };
                     return {
                       key: i,
                       sortValues: {
@@ -472,7 +496,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                         a.profile,
                         <span className="font-mono text-xs">{a.address}</span>,
                         <span className="text-xs font-medium text-slate-700 whitespace-nowrap">
-                          {fmt(down)} ↓ / {fmt(up)} ↑
+                          {formatTrafficPair(down, up)}
                         </span>,
                         a.uptime,
                         <span className="font-mono text-sm text-sky-700">{a.caller}</span>,
@@ -1051,6 +1075,10 @@ function UserFormModal({
   const save = async () => {
     if (!form.username.trim()) {
       setError('Username is required');
+      return;
+    }
+    if (!isEdit && !form.password.trim()) {
+      setError('Password is required to create the MikroTik PPP secret');
       return;
     }
     if (!isEdit && !routerId) {
