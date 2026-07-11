@@ -16,6 +16,7 @@
 #
 # Options:
 #   --run          run mt-billing-update.sh after download
+#   --reinstall    run mt-billing-reinstall.sh after download (big update / factory reset)
 #   --enable-timer install systemd timer units and enable auto-update
 #
 # Environment:
@@ -32,14 +33,16 @@ INSTALL_DIR="${var_install_dir:-${INSTALL_DIR:-/opt/mt-billing}}"
 RAW_BASE="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${BRANCH}"
 
 RUN_AFTER=0
+RUN_REINSTALL=0
 ENABLE_TIMER=0
 
 for arg in "$@"; do
   case "$arg" in
     --run) RUN_AFTER=1 ;;
+    --reinstall) RUN_REINSTALL=1 ;;
     --enable-timer) ENABLE_TIMER=1 ;;
     -h|--help)
-      sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
   esac
@@ -47,6 +50,7 @@ done
 
 UPDATE_FILES=(
   install/mt-billing-update.sh
+  install/mt-billing-reinstall.sh
   install/mt-billing-auto-update.service
   install/mt-billing-auto-update.timer
 )
@@ -87,6 +91,11 @@ guest_enable_timer() {
 guest_run() {
   local root="$1"
   bash "${root}/install/mt-billing-update.sh"
+}
+
+guest_reinstall() {
+  local root="$1"
+  bash "${root}/install/mt-billing-reinstall.sh" --yes
 }
 
 # --- Proxmox host: pct exec into container ---
@@ -146,6 +155,9 @@ if [[ -n "${CTID:-}" ]] || command -v pct >/dev/null 2>&1 && [[ "$(id -u)" -eq 0
     if [[ "$RUN_AFTER" == "1" ]]; then
       pct exec "$CTID" -- bash "${INSTALL_DIR}/install/mt-billing-update.sh"
     fi
+    if [[ "$RUN_REINSTALL" == "1" ]]; then
+      pct exec "$CTID" -- bash "${INSTALL_DIR}/install/mt-billing-reinstall.sh" --yes
+    fi
     echo "Done."
     exit 0
   fi
@@ -161,6 +173,10 @@ fi
 
 if [[ "$RUN_AFTER" == "1" ]]; then
   guest_run "$INSTALL_DIR"
+fi
+
+if [[ "$RUN_REINSTALL" == "1" ]]; then
+  guest_reinstall "$INSTALL_DIR"
 fi
 
 echo "Update scripts ready under ${INSTALL_DIR}/install/"

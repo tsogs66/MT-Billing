@@ -46,6 +46,8 @@ Guest install script: `install/mt-billing-install.sh` (also embedded in `ct/mt-b
 
 **Updates:** new commits on `main` are applied automatically every 10 minutes via `mt-billing-auto-update.timer` (enabled by default). Manual update from the Proxmox host: `sudo bash scripts/proxmox-update.sh`.
 
+**Big updates / factory reinstall:** `sudo bash scripts/proxmox-reinstall.sh --yes` (backs up data, reclones from GitHub, rebuilds; use `--keep-db` to preserve SQLite). Guest script: `install/mt-billing-reinstall.sh`.
+
 ---
 
 ## Raspberry Pi / Orange Pi (flash image)

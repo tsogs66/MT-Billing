@@ -136,6 +136,7 @@ msg_ok "Configured nginx"
 
 msg_info "Installing update scripts"
 $STD chmod +x "$INSTALL_DIR/install/mt-billing-update.sh"
+$STD chmod +x "$INSTALL_DIR/install/mt-billing-reinstall.sh" 2>/dev/null || true
 msg_ok "Update script ready at install/mt-billing-update.sh"
 
 AUTO_UPDATE="${var_auto_update:-1}"

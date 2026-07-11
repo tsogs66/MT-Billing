@@ -95,8 +95,10 @@ data otherwise).
 | `npm --prefix server run start` | Run the compiled backend |
 | `scripts/proxmox-install.sh` | Proxmox host helper → `ct/mt-billing.sh` |
 | `scripts/proxmox-update.sh` | Proxmox host helper → pull/build/restart inside LXC |
+| `scripts/proxmox-reinstall.sh` | Proxmox host helper → clean reinstall to Git defaults |
 | `scripts/fetch-update-from-github.sh` | Copy updater files from GitHub raw into `install/` |
 | `install/mt-billing-update.sh` | Guest update script (git pull + build + restart) |
+| `install/mt-billing-reinstall.sh` | Guest reinstall script (wipe + reclone + optional DB reset) |
 | `scripts/build-rpi-img.sh` | Build Raspberry Pi `.img` (+ `.img.xz`) for Etcher/Rufus |
 | `scripts/build-opi-img.sh` | Build Orange Pi `.img` (+ `.img.xz`) for Etcher/Rufus |
 | `scripts/build-sbc-flash-image.sh` | Shared builder (`--board rpi\|opi\|all`) |
@@ -185,6 +187,35 @@ bash /opt/mt-billing/install/mt-billing-update.sh --check
 ```
 
 Disable auto-update on install: `var_auto_update=0 bash ct/mt-billing.sh`
+
+### Reinstall to defaults (big Git update)
+
+Use this when a normal pull is not enough (major schema/UI rewrite, broken tree, or you want a factory-fresh panel). Backs up `server/data` + `.env` under `/var/backups/mt-billing/`, reclones `main`, rebuilds, and by default **resets the SQLite DB** to seeded defaults.
+
+**From the Proxmox host:**
+
+```bash
+sudo bash scripts/proxmox-reinstall.sh --yes
+# or: CTID=101 sudo bash scripts/proxmox-reinstall.sh --yes --reset-db
+# keep existing clients/routers DB:
+CTID=101 sudo bash scripts/proxmox-reinstall.sh --yes --keep-db
+```
+
+**Inside the LXC:**
+
+```bash
+sudo bash /opt/mt-billing/install/mt-billing-reinstall.sh --yes
+# keep database:
+sudo bash /opt/mt-billing/install/mt-billing-reinstall.sh --yes --keep-db
+# regenerate admin password / JWT:
+sudo bash /opt/mt-billing/install/mt-billing-reinstall.sh --yes --fresh-env
+```
+
+One-liner from GitHub (inside LXC):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tsogs66/MT-Billing/main/install/mt-billing-reinstall.sh | sudo bash -s -- --yes
+```
 
 **Enable on an existing LXC** (after pulling this repo change):
 
