@@ -84,7 +84,13 @@ export default function Sidebar() {
 
   const sections = NAV_SECTIONS.map((section) => ({
     ...section,
-    items: section.items.filter((item) => canAccess(item.permission)),
+    items: section.items
+      .filter((item) => canAccess(item.permission))
+      .map((item) =>
+        item.to === '/'
+          ? { ...item, label: user?.licenseActivated ? 'Dashboard' : 'System Overview' }
+          : item
+      ),
   })).filter((s) => s.items.length > 0);
 
   return (
