@@ -134,6 +134,24 @@ $STD systemctl enable nginx
 $STD systemctl reload nginx
 msg_ok "Configured nginx"
 
+msg_info "Installing update scripts"
+$STD chmod +x "$INSTALL_DIR/install/mt-billing-update.sh"
+msg_ok "Update script ready at install/mt-billing-update.sh"
+
+AUTO_UPDATE="${var_auto_update:-1}"
+if [[ "$AUTO_UPDATE" == "1" ]]; then
+  msg_info "Enabling auto-update timer (checks GitHub every 10 minutes)"
+  sed "s|var_repo_branch=main|var_repo_branch=${REPO_BRANCH}|g" \
+    "$INSTALL_DIR/install/mt-billing-auto-update.service" \
+    >/etc/systemd/system/mt-billing-auto-update.service
+  $STD install -m 644 "$INSTALL_DIR/install/mt-billing-auto-update.timer" /etc/systemd/system/
+  $STD systemctl daemon-reload
+  $STD systemctl enable --now mt-billing-auto-update.timer
+  msg_ok "Auto-update enabled (systemctl status mt-billing-auto-update.timer)"
+else
+  msg_info "Auto-update disabled (set var_auto_update=1 to enable)"
+fi
+
 motd_ssh
 customize
 cleanup_lxc

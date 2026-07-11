@@ -99,6 +99,15 @@ function update_script() {
   check_container_storage
   check_container_resources
 
+  local dir="${var_install_dir:-/opt/mt-billing}"
+  local updater="$dir/install/mt-billing-update.sh"
+  if [[ -f "$updater" ]]; then
+    msg_info "Running MT-Billing update script"
+    MT_BILLING_AUTO_ONLY=0 bash "$updater"
+    msg_ok "Updated successfully!"
+    exit
+  fi
+
   if [[ ! -f /etc/systemd/system/mt-billing-api.service ]]; then
     msg_error "No ${APP} installation found!"
     exit 1
@@ -110,7 +119,6 @@ function update_script() {
 
   NODE_VERSION="22" setup_nodejs
 
-  local dir="${var_install_dir:-/opt/mt-billing}"
   local branch="${var_repo_branch:-main}"
   msg_info "Updating application from ${var_repo_url} (${branch})"
   if [[ -d "$dir/.git" ]]; then
@@ -298,6 +306,24 @@ $STD nginx -t
 $STD systemctl enable nginx
 $STD systemctl reload nginx
 msg_ok "Configured nginx"
+
+msg_info "Installing update scripts"
+$STD chmod +x "$INSTALL_DIR/install/mt-billing-update.sh"
+msg_ok "Update script ready at install/mt-billing-update.sh"
+
+AUTO_UPDATE="${var_auto_update:-1}"
+if [[ "$AUTO_UPDATE" == "1" ]]; then
+  msg_info "Enabling auto-update timer (checks GitHub every 10 minutes)"
+  sed "s|var_repo_branch=main|var_repo_branch=${REPO_BRANCH}|g" \
+    "$INSTALL_DIR/install/mt-billing-auto-update.service" \
+    >/etc/systemd/system/mt-billing-auto-update.service
+  $STD install -m 644 "$INSTALL_DIR/install/mt-billing-auto-update.timer" /etc/systemd/system/
+  $STD systemctl daemon-reload
+  $STD systemctl enable --now mt-billing-auto-update.timer
+  msg_ok "Auto-update enabled (systemctl status mt-billing-auto-update.timer)"
+else
+  msg_info "Auto-update disabled (set var_auto_update=1 to enable)"
+fi
 
 motd_ssh
 customize

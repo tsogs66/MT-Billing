@@ -94,6 +94,8 @@ data otherwise).
 | `npm --prefix server run build` | Compile the backend to `server/dist` |
 | `npm --prefix server run start` | Run the compiled backend |
 | `scripts/proxmox-install.sh` | Proxmox host helper → `ct/mt-billing.sh` |
+| `scripts/proxmox-update.sh` | Proxmox host helper → pull/build/restart inside LXC |
+| `install/mt-billing-update.sh` | Guest update script (git pull + build + restart) |
 | `scripts/build-rpi-img.sh` | Build Raspberry Pi `.img` (+ `.img.xz`) for Etcher/Rufus |
 | `scripts/build-opi-img.sh` | Build Orange Pi `.img` (+ `.img.xz`) for Etcher/Rufus |
 | `scripts/build-sbc-flash-image.sh` | Shared builder (`--board rpi\|opi\|all`) |
@@ -135,8 +137,52 @@ Optional environment variables:
 | `var_admin_user` | `admin` | First-run admin username |
 | `var_admin_pass` | `admin123` | First-run admin password |
 | `var_jwt_secret` | *(random)* | JWT signing secret |
+| `var_auto_update` | `1` | Enable systemd timer to pull `main` every 10 minutes |
 
 Uses [community-scripts](https://github.com/community-scripts/ProxmoxVE) `build.func` for storage/network prompts and container creation. Guest install script: `install/mt-billing-install.sh`.
+
+### Updating after new commits (Proxmox)
+
+**Automatic (default on new installs):** a systemd timer inside the LXC polls GitHub every 10 minutes and applies fast-forward updates when `main` moves.
+
+```bash
+# Inside the LXC
+systemctl status mt-billing-auto-update.timer
+journalctl -u mt-billing-auto-update.service -n 50
+```
+
+**Manual — from Proxmox host:**
+
+```bash
+sudo bash scripts/proxmox-update.sh
+# or: CTID=101 sudo bash scripts/proxmox-update.sh
+```
+
+**Manual — inside the LXC/VM:**
+
+```bash
+sudo bash /opt/mt-billing/install/mt-billing-update.sh
+```
+
+Check only (exit 0 if an update is available):
+
+```bash
+bash /opt/mt-billing/install/mt-billing-update.sh --check
+```
+
+Disable auto-update on install: `var_auto_update=0 bash ct/mt-billing.sh`
+
+**Enable on an existing LXC** (after pulling this repo change):
+
+```bash
+# Inside the LXC
+cd /opt/mt-billing && git pull
+sudo chmod +x install/mt-billing-update.sh
+sudo cp install/mt-billing-auto-update.timer /etc/systemd/system/
+sudo sed "s|var_repo_branch=main|var_repo_branch=main|g" install/mt-billing-auto-update.service | sudo tee /etc/systemd/system/mt-billing-auto-update.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now mt-billing-auto-update.timer
+```
 
 ### Manual install (inside an existing VM/LXC)
 

@@ -44,6 +44,8 @@ Unattended: `mode=default sudo bash scripts/proxmox-install.sh`
 
 Guest install script: `install/mt-billing-install.sh` (also embedded in `ct/mt-billing.sh`).
 
+**Updates:** new commits on `main` are applied automatically every 10 minutes via `mt-billing-auto-update.timer` (enabled by default). Manual update from the Proxmox host: `sudo bash scripts/proxmox-update.sh`.
+
 ---
 
 ## Raspberry Pi / Orange Pi (flash image)
