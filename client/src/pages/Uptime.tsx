@@ -123,9 +123,9 @@ export default function Uptime() {
         <div className="flex items-start gap-2">
           <Globe2 size={16} className="mt-0.5 shrink-0 text-sky-600" />
           <div>
-            <span className="font-semibold">Global / regional status</span>
-            {' — '}status is taken from worldwide outage feeds and official status pages (APAC where available),
-            not from whether this panel can reach the site on the local network.
+            <span className="font-semibold">Global / Southeast Asia status</span>
+            {' — '}status is taken from worldwide outage feeds and official status pages
+            focused on <b>Southeast Asia</b> PoPs where available — not from local network reachability.
           </div>
         </div>
       </div>
@@ -148,7 +148,7 @@ export default function Uptime() {
       <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
         <div className="text-sm text-slate-500">
           Last check: <span className="font-medium text-slate-700">{ago(summary?.lastRun ?? null)}</span>
-          {' · '}auto-refreshes every 30s · source: global / APAC status feeds
+          {' · '}auto-refreshes every 30s · source: global / Southeast Asia status feeds
         </div>
         <button type="button" className="btn-primary" onClick={refresh} disabled={checking}>
           <RefreshCw size={16} className={checking ? 'animate-spin' : ''} /> {checking ? 'Checking…' : 'Check now'}
@@ -174,7 +174,7 @@ export default function Uptime() {
                     <div className="hidden sm:block"><Sparkline history={m.history} /></div>
                     <div className="text-right w-20 shrink-0">
                       <div className="text-sm font-semibold text-slate-700">
-                        {reports > 0 ? `${reports} rpt` : m.regionStatus && m.regionStatus !== 'unknown' ? 'APAC' : 'Global'}
+                        {reports > 0 ? `${reports} rpt` : m.regionStatus && m.regionStatus !== 'unknown' ? 'SEA' : 'Global'}
                       </div>
                       <div className="text-[11px] text-slate-400">{m.uptimePct}% up</div>
                     </div>

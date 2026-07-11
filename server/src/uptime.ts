@@ -3,7 +3,7 @@
  *
  * Sources:
  *  1. DownStatus (isitdownstatus.com) — crowdsourced + official indicators worldwide
- *  2. Optional Atlassian Statuspage summaries — regional component health (APAC focus)
+ *  2. Optional Atlassian Statuspage summaries — Southeast Asia regional component health
  *
  * This deliberately does NOT probe service URLs from the panel host, so a local
  * uplink outage does not make every site look "down".
@@ -42,7 +42,7 @@ export interface MonitorState extends MonitorTarget {
   reportCount1h: number;
   reportCount24h: number;
   officialIndicator: string | null;
-  /** APAC / regional component summary when available. */
+  /** Southeast Asia / regional component summary when available. */
   regionStatus: 'up' | 'down' | 'degraded' | 'unknown';
   regionDetail: string;
 }
@@ -110,29 +110,46 @@ const TARGETS: MonitorTarget[] = [
   { id: 'amazon', name: 'Amazon', category: 'Developer & Shopping', slug: 'amazon', url: 'https://www.amazon.com' },
 ];
 
-/** Component name fragments that indicate Asia / Pacific / SEA regions. */
-const APAC_HINTS = [
-  'asia',
-  'apac',
-  'pacific',
+/** Component name fragments for Southeast Asia (SEA) PoPs / regions. */
+const SEA_HINTS = [
+  'southeast asia',
+  'south-east asia',
+  'southeast-asia',
   'singapore',
-  'tokyo',
-  'osaka',
-  'seoul',
-  'hong kong',
-  'mumbai',
-  'sydney',
-  'melbourne',
-  'jakarta',
   'manila',
+  'cebu',
+  'cagayan',
+  'tarlac',
   'philippines',
-  'southeast',
-  'sea ',
-  'ap-southeast',
-  'ap-northeast',
-  'ap-south',
-  'taiwan',
+  'jakarta',
+  'denpasar',
+  'yogyakarta',
+  'malang',
+  'indonesia',
   'bangkok',
+  'chiang mai',
+  'surat thani',
+  'thailand',
+  'kuala lumpur',
+  'johor',
+  'kuching',
+  'malaysia',
+  'ho chi minh',
+  'hanoi',
+  'da nang',
+  'vietnam',
+  'phnom penh',
+  'cambodia',
+  'vientiane',
+  'laos',
+  'bandar seri begawan',
+  'brunei',
+  'yangon',
+  'myanmar',
+  'rangoon',
+  'ap-southeast',
+  'asia pacific (singapore)',
+  'asia pacific (jakarta)',
 ];
 
 const HISTORY_CAP = 60;
@@ -187,9 +204,9 @@ function worse(a: StatusLevel, b: StatusLevel): StatusLevel {
   return rank[b] > rank[a] ? b : a;
 }
 
-function isApacName(name: string): boolean {
+function isSeaName(name: string): boolean {
   const n = name.toLowerCase();
-  return APAC_HINTS.some((h) => n.includes(h));
+  return SEA_HINTS.some((h) => n.includes(h));
 }
 
 async function fetchJson(url: string, timeoutMs = 10000): Promise<any | null> {
@@ -264,26 +281,17 @@ async function fetchRegionalStatus(statusPageUrl: string): Promise<{
   const data = await fetchJson(statusPageUrl);
   if (!data?.components) return { status: 'up', detail: '', ok: false };
 
-  const apac = (data.components as any[]).filter(
-    (c) => c && !c.group && typeof c.name === 'string' && isApacName(c.name)
+  const sea = (data.components as any[]).filter(
+    (c) => c && !c.group && typeof c.name === 'string' && isSeaName(c.name)
   );
-  if (!apac.length) {
-    // Fall back to overall page indicator when no APAC components exist.
-    const ind = data.status?.indicator as string | undefined;
-    if (ind && ind !== 'none') {
-      const status = mapOfficialIndicator(ind) || 'up';
-      return {
-        status,
-        detail: `Official: ${data.status?.description || ind}`,
-        ok: true,
-      };
-    }
-    return { status: 'up', detail: 'No APAC components listed', ok: true };
+  if (!sea.length) {
+    // No SEA PoPs listed — do not treat other world regions as our region.
+    return { status: 'up', detail: 'No Southeast Asia components listed', ok: true };
   }
 
   let worst: StatusLevel = 'up';
   const issues: string[] = [];
-  for (const c of apac) {
+  for (const c of sea) {
     const st = mapComponentStatus(c.status);
     worst = worse(worst, st);
     if (st !== 'up') issues.push(`${c.name}: ${c.status}`);
@@ -292,8 +300,8 @@ async function fetchRegionalStatus(statusPageUrl: string): Promise<{
     status: worst,
     detail:
       worst === 'up'
-        ? `APAC regions operational (${apac.length} checked)`
-        : `APAC: ${issues.slice(0, 3).join('; ')}${issues.length > 3 ? '…' : ''}`,
+        ? `Southeast Asia operational (${sea.length} checked)`
+        : `Southeast Asia: ${issues.slice(0, 3).join('; ')}${issues.length > 3 ? '…' : ''}`,
     ok: true,
   };
 }
@@ -402,7 +410,7 @@ export function getUptimeSummary() {
     down,
     avgMs: null as number | null,
     reports1h,
-    mode: 'global' as const,
+    mode: 'global-sea' as const,
     lastRun: Math.max(0, ...all.map((m) => m.lastChecked || 0)) || null,
   };
 }
