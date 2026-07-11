@@ -621,6 +621,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
           profiles={profiles}
           naps={undefined}
           editUser={null}
+          routerId={current?.id}
           onClose={() => setShowAdd(false)}
           onSaved={() => {
             setShowAdd(false);
@@ -636,6 +637,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
           profiles={profiles}
           naps={undefined}
           editUser={editFor}
+          routerId={current?.id}
           onClose={() => setEditFor(null)}
           onSaved={() => {
             setEditFor(null);
@@ -978,6 +980,7 @@ function UserFormModal({
   service,
   profiles,
   editUser,
+  routerId,
   onClose,
   onSaved,
 }: {
@@ -985,17 +988,20 @@ function UserFormModal({
   profiles: any[];
   naps?: any;
   editUser?: PUser | null;
+  routerId?: number;
   onClose: () => void;
   onSaved: () => void;
 }) {
   const isEdit = !!editUser;
   const defaultPlan = profiles.find((p) => p.name === 'UNLI500')?.name || profiles[0]?.name || '15mbps';
+  const defaultExpire =
+    profiles.find((p) => /non.?pay/i.test(String(p.name)))?.name || 'non-payments';
   const [form, setForm] = useState({
     username: '',
     password: '',
     profile: defaultPlan,
     subscription_due: '',
-    expiration_profile: 'default',
+    expiration_profile: defaultExpire,
     customer_name: '',
     address: '',
     contact: '',
@@ -1021,7 +1027,7 @@ function UserFormModal({
           password: u.password || '',
           profile: u.profile || defaultPlan,
           subscription_due: (u.subscription_due || '').slice(0, 10),
-          expiration_profile: u.expiration_profile || 'default',
+          expiration_profile: u.expiration_profile || defaultExpire,
           customer_name: u.customer_name || '',
           address: u.address || '',
           contact: u.contact || '',
@@ -1047,10 +1053,19 @@ function UserFormModal({
       setError('Username is required');
       return;
     }
+    if (!isEdit && !routerId) {
+      setError('Select a router in the top bar before adding a user.');
+      return;
+    }
     setSaving(true);
     setError('');
     try {
-      const payload = { ...form, nap_id: form.nap_id ? Number(form.nap_id) : null, service };
+      const payload = {
+        ...form,
+        nap_id: form.nap_id ? Number(form.nap_id) : null,
+        service,
+        routerId: routerId || undefined,
+      };
       if (isEdit) {
         await api.put(`/pppoe/users/${editUser!.id}`, payload);
       } else {
@@ -1113,8 +1128,11 @@ function UserFormModal({
             </FormField>
             <FormField label="Expiration Profile">
               <select className="input" value={form.expiration_profile} onChange={(e) => set({ expiration_profile: e.target.value })}>
+                <option value="non-payments">non-payments</option>
                 <option value="default">default</option>
-                {profiles.map((p) => <option key={p.id} value={p.name}>{p.name}</option>)}
+                {profiles.filter((p) => !/^(non-payments|default)$/i.test(String(p.name))).map((p) => (
+                  <option key={p.id} value={p.name}>{p.name}</option>
+                ))}
               </select>
             </FormField>
           </div>

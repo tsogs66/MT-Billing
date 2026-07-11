@@ -788,6 +788,127 @@ export async function setPppSecretEnabled(conn: RouterConn, nameOrId: string, en
   );
 }
 
+export async function addPppSecret(
+  conn: RouterConn,
+  fields: {
+    name: string;
+    password: string;
+    profile?: string;
+    service?: string;
+    comment?: string;
+    disabled?: boolean;
+  }
+): Promise<void> {
+  const args = [
+    `=name=${fields.name}`,
+    `=password=${fields.password || ''}`,
+    `=service=${fields.service || 'pppoe'}`,
+  ];
+  if (fields.profile) args.push(`=profile=${fields.profile}`);
+  if (fields.comment != null) args.push(`=comment=${fields.comment}`);
+  if (fields.disabled) args.push('=disabled=yes');
+  await withRouter(conn, (api) => api.write('/ppp/secret/add', args));
+}
+
+export async function updatePppSecret(
+  conn: RouterConn,
+  nameOrId: string,
+  fields: {
+    password?: string;
+    profile?: string;
+    service?: string;
+    comment?: string;
+    disabled?: boolean;
+  }
+): Promise<void> {
+  const args = [`=.id=${nameOrId}`];
+  // Prefer matching by name when Winbox-style names are used.
+  if (!String(nameOrId).startsWith('*')) {
+    args[0] = `=numbers=${nameOrId}`;
+  }
+  if (fields.password != null) args.push(`=password=${fields.password}`);
+  if (fields.profile != null) args.push(`=profile=${fields.profile}`);
+  if (fields.service != null) args.push(`=service=${fields.service}`);
+  if (fields.comment != null) args.push(`=comment=${fields.comment}`);
+  if (fields.disabled != null) args.push(`=disabled=${fields.disabled ? 'yes' : 'no'}`);
+  await withRouter(conn, (api) => api.write('/ppp/secret/set', args));
+}
+
+export async function removePppSecret(conn: RouterConn, nameOrId: string): Promise<void> {
+  await withRouter(conn, (api) => api.write('/ppp/secret/remove', [`=numbers=${nameOrId}`]));
+}
+
+/**
+ * Billing metadata stored in /ppp/secret comment (JSON).
+ * Matches the format used by fetch-from-MikroTik import.
+ */
+export function buildPppSecretComment(input: {
+  plan?: string | null;
+  dueDate?: string | null;
+  expireProfile?: string | null;
+  accountNumber?: string | number | null;
+  customer?: {
+    fullName?: string | null;
+    address?: string | null;
+    contactNumber?: string | null;
+    email?: string | null;
+    napId?: string | number | null;
+    status?: string | null;
+    plcPort?: string | number | null;
+    latitude?: number | null;
+    longitude?: number | null;
+  };
+}): string {
+  const cust = input.customer || {};
+  const statusRaw = String(cust.status || 'active').toLowerCase();
+  const status =
+    statusRaw === 'active' || statusRaw === 'enabled' || statusRaw === 'online'
+      ? 'active'
+      : statusRaw === 'non-payment' || statusRaw === 'nonpayment'
+        ? 'non-payment'
+        : statusRaw === 'expired'
+          ? 'expired'
+          : statusRaw === 'disabled'
+            ? 'disabled'
+            : statusRaw || 'active';
+
+  const acct = input.accountNumber;
+  let accountNumber: string | number | null = acct == null || acct === '' ? null : acct;
+  if (typeof accountNumber === 'string' && /^\d+$/.test(accountNumber) && accountNumber.length <= 15) {
+    accountNumber = Number(accountNumber);
+  }
+
+  const napId =
+    cust.napId == null || cust.napId === ''
+      ? null
+      : typeof cust.napId === 'number'
+        ? `nap_${cust.napId}`
+        : String(cust.napId).startsWith('nap_')
+          ? String(cust.napId)
+          : /^\d+$/.test(String(cust.napId))
+            ? `nap_${cust.napId}`
+            : String(cust.napId);
+
+  const payload: Record<string, unknown> = {
+    plan: input.plan || null,
+    dueDate: input.dueDate ? String(input.dueDate).slice(0, 10) : null,
+    expireProfile: input.expireProfile || 'non-payments',
+    customer: {
+      fullName: cust.fullName || null,
+      address: cust.address || null,
+      contactNumber: cust.contactNumber || null,
+      email: cust.email || null,
+      napId,
+      status,
+      plcPort: cust.plcPort != null && cust.plcPort !== '' ? String(cust.plcPort) : null,
+      latitude: cust.latitude != null && Number.isFinite(Number(cust.latitude)) ? Number(cust.latitude) : null,
+      longitude: cust.longitude != null && Number.isFinite(Number(cust.longitude)) ? Number(cust.longitude) : null,
+    },
+    accountNumber,
+  };
+  return JSON.stringify(payload);
+}
+
 export async function fetchPppoeServers(conn: RouterConn): Promise<PppoeServerRow[]> {
   return withRouter(conn, async (api) => {
     const rows = (await api.write('/interface/pppoe-server/server/print')) as Record<string, string>[];

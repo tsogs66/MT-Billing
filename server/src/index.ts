@@ -27,6 +27,10 @@ import {
   updatePppProfile,
   removePppProfile,
   setPppSecretEnabled,
+  addPppSecret,
+  updatePppSecret,
+  removePppSecret,
+  buildPppSecretComment,
   fetchPppoeServers,
   fetchDhcpLeases,
   fetchDhcpServers,
@@ -542,6 +546,50 @@ function getRouterById(routerId: number | null | undefined) {
   return db.prepare('SELECT * FROM routers WHERE id = ?').get(routerId) as any;
 }
 
+/** Billing JSON for /ppp/secret comment — same shape as fetch-from-MikroTik import. */
+function commentFromPppoeUser(u: {
+  profile?: string | null;
+  subscription_due?: string | null;
+  expiration_profile?: string | null;
+  account_number?: string | number | null;
+  customer_name?: string | null;
+  address?: string | null;
+  contact?: string | null;
+  email?: string | null;
+  nap_id?: string | number | null;
+  status?: string | null;
+  plc_port?: string | number | null;
+  lat?: number | null;
+  lng?: number | null;
+}) {
+  return buildPppSecretComment({
+    plan: u.profile,
+    dueDate: u.subscription_due,
+    expireProfile: u.expiration_profile || 'non-payments',
+    accountNumber: u.account_number,
+    customer: {
+      fullName: u.customer_name,
+      address: u.address,
+      contactNumber: u.contact,
+      email: u.email,
+      napId: u.nap_id,
+      status: u.status,
+      plcPort: u.plc_port,
+      latitude: u.lat,
+      longitude: u.lng,
+    },
+  });
+}
+
+function routerHasApi(router: any): boolean {
+  return !!(router?.host && router?.api_user);
+}
+
+function secretDisabledFromStatus(status: unknown): boolean {
+  const s = String(status || '').toLowerCase();
+  return s === 'disabled' || s === 'expired' || s === 'non-payment' || s === 'nonpayment';
+}
+
 app.get('/api/pppoe/users', async (req, res) => {
   const service = String(req.query.service || 'pppoe');
   const routerId = req.query.routerId ? Number(req.query.routerId) : null;
@@ -596,7 +644,7 @@ function generateAccountNumber(): string {
   return String(Date.now()).slice(-12).padStart(12, '0');
 }
 
-app.post('/api/pppoe/users', (req, res) => {
+app.post('/api/pppoe/users', async (req, res) => {
   const b = req.body || {};
   const {
     username, password, customer_name, profile, status, subscription_due, price, service,
@@ -604,44 +652,82 @@ app.post('/api/pppoe/users', (req, res) => {
   } = b;
   if (!username) return res.status(400).json({ error: 'username is required' });
 
+  const routerId = Number(b.router_id || b.routerId || 0);
+  if (!routerId) {
+    return res.status(400).json({ error: 'Select a router first (routerId required to create PPP secret).' });
+  }
+  const router = getRouterById(routerId);
+  if (!router) return res.status(404).json({ error: 'Router not found' });
+
   const prof = db.prepare('SELECT price FROM profiles WHERE name = ?').get(profile) as { price: number } | undefined;
   const account = generateAccountNumber();
-  const info = db
-    .prepare(
-      `INSERT INTO pppoe_users
-        (username, password, customer_name, account_number, profile, status, subscription_due, price,
-         router_id, service, expiration_profile, contact, email, nap_id, plc_port, address, lat, lng, online)
-       VALUES (@username, @password, @customer_name, @account, @profile, @status, @subscription_due, @price,
-         1, @service, @expiration_profile, @contact, @email, @nap_id, @plc_port, @address, @lat, @lng, 1)`
-    )
-    .run({
-      username,
-      password: password || '',
-      customer_name: customer_name || username,
-      account,
-      profile: profile || '15mbps',
-      status: status || 'Active',
-      subscription_due: subscription_due || new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10),
-      price: price ?? prof?.price ?? 0,
-      service: service || 'pppoe',
-      expiration_profile: expiration_profile || 'default',
-      contact: contact || null,
-      email: email || null,
-      nap_id: nap_id || null,
-      plc_port: plc_port || null,
-      address: address || null,
-      lat: lat != null && lat !== '' ? Number(lat) : null,
-      lng: lng != null && lng !== '' ? Number(lng) : null,
-    });
+  let insertedId: number | null = null;
+  try {
+    const info = db
+      .prepare(
+        `INSERT INTO pppoe_users
+          (username, password, customer_name, account_number, profile, status, subscription_due, price,
+           router_id, service, expiration_profile, contact, email, nap_id, plc_port, address, lat, lng, online)
+         VALUES (@username, @password, @customer_name, @account, @profile, @status, @subscription_due, @price,
+           @router_id, @service, @expiration_profile, @contact, @email, @nap_id, @plc_port, @address, @lat, @lng, 1)`
+      )
+      .run({
+        username,
+        password: password || '',
+        customer_name: customer_name || username,
+        account,
+        profile: profile || '15mbps',
+        status: status || 'Active',
+        subscription_due: subscription_due || new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10),
+        price: price ?? prof?.price ?? 0,
+        router_id: routerId,
+        service: service || 'pppoe',
+        expiration_profile: expiration_profile || 'non-payments',
+        contact: contact || null,
+        email: email || null,
+        nap_id: nap_id || null,
+        plc_port: plc_port || null,
+        address: address || null,
+        lat: lat != null && lat !== '' ? Number(lat) : null,
+        lng: lng != null && lng !== '' ? Number(lng) : null,
+      });
+    insertedId = Number(info.lastInsertRowid);
+  } catch (e: any) {
+    if (String(e?.message || '').includes('UNIQUE')) {
+      return res.status(409).json({ error: 'Username already exists' });
+    }
+    throw e;
+  }
+
+  const row = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(insertedId) as any;
+
+  if (routerHasApi(router)) {
+    try {
+      await addPppSecret(router, {
+        name: row.username,
+        password: row.password || '',
+        profile: row.profile || undefined,
+        service: row.service === 'ipoe' ? 'pppoe' : row.service || 'pppoe',
+        comment: commentFromPppoeUser(row),
+        disabled: secretDisabledFromStatus(row.status),
+      });
+    } catch (e: any) {
+      db.prepare('DELETE FROM pppoe_users WHERE id = ?').run(insertedId);
+      return res.status(502).json({
+        error: e?.message || 'Failed to create PPP secret on MikroTik',
+      });
+    }
+  }
+
   db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
     'info',
     'pppoe',
-    `Created ${service || 'pppoe'} user ${username} (acct ${account})`
+    `Created ${row.service || 'pppoe'} user ${username} (acct ${account})${routerHasApi(router) ? ' + MikroTik secret' : ''}`
   );
-  res.status(201).json(db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(info.lastInsertRowid));
+  res.status(201).json(row);
 });
 
-app.put('/api/pppoe/users/:id', (req, res) => {
+app.put('/api/pppoe/users/:id', async (req, res) => {
   const id = Number(req.params.id);
   const existing = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(id) as any;
   if (!existing) return res.status(404).json({ error: 'not found' });
@@ -680,7 +766,27 @@ app.put('/api/pppoe/users/:id', (req, res) => {
     lat: b.lat != null && b.lat !== '' ? Number(b.lat) : b.lat === '' ? null : existing.lat,
     lng: b.lng != null && b.lng !== '' ? Number(b.lng) : b.lng === '' ? null : existing.lng,
   });
-  res.json(db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(id));
+
+  const row = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(id) as any;
+  const router = getRouterById(row.router_id);
+  if (routerHasApi(router)) {
+    try {
+      await updatePppSecret(router, existing.username, {
+        password: b.password != null ? row.password : undefined,
+        profile: row.profile || undefined,
+        service: row.service === 'ipoe' ? 'pppoe' : row.service || undefined,
+        comment: commentFromPppoeUser(row),
+        disabled: secretDisabledFromStatus(row.status),
+      });
+    } catch (e: any) {
+      return res.status(502).json({
+        error: e?.message || 'Failed to update PPP secret on MikroTik',
+        user: row,
+      });
+    }
+  }
+
+  res.json(row);
 });
 
 // Enable/disable the client account on MikroTik (/ppp/secret) and in the DB.
@@ -710,8 +816,21 @@ app.post('/api/pppoe/users/:id/toggle-enabled', async (req, res) => {
   res.json({ ok: true, status: disabling ? 'disabled' : 'Active', user: db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(id) });
 });
 
-app.delete('/api/pppoe/users/:id', (req, res) => {
-  db.prepare('DELETE FROM pppoe_users WHERE id = ?').run(Number(req.params.id));
+app.delete('/api/pppoe/users/:id', async (req, res) => {
+  const id = Number(req.params.id);
+  const existing = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(id) as any;
+  if (!existing) return res.status(404).json({ error: 'not found' });
+
+  const router = getRouterById(existing.router_id);
+  if (routerHasApi(router)) {
+    try {
+      await removePppSecret(router, existing.username);
+    } catch {
+      /* still delete from panel if secret already gone */
+    }
+  }
+
+  db.prepare('DELETE FROM pppoe_users WHERE id = ?').run(id);
   res.json({ ok: true });
 });
 
@@ -737,7 +856,7 @@ app.post('/api/pppoe/users/bulk-disable', (req, res) => {
   res.json({ ok: true, count });
 });
 
-app.post('/api/pppoe/users/bulk-delete', (req, res) => {
+app.post('/api/pppoe/users/bulk-delete', async (req, res) => {
   const ids = (Array.isArray(req.body?.ids) ? req.body.ids : [])
     .map((id: unknown) => Number(id))
     .filter((id: number) => Number.isFinite(id) && id > 0);
@@ -746,6 +865,16 @@ app.post('/api/pppoe/users/bulk-delete', (req, res) => {
   const stmt = db.prepare('DELETE FROM pppoe_users WHERE id = ?');
   let count = 0;
   for (const id of ids) {
+    const u = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(id) as any;
+    if (!u) continue;
+    const router = getRouterById(u.router_id);
+    if (routerHasApi(router)) {
+      try {
+        await removePppSecret(router, u.username);
+      } catch {
+        /* continue */
+      }
+    }
     const info = stmt.run(id);
     if (info.changes) count++;
   }
@@ -819,6 +948,21 @@ app.post('/api/pppoe/users/:id/payment', async (req, res) => {
     total,
   };
 
+  const updatedUser = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(id) as any;
+  const payRouter = getRouterById(updatedUser.router_id);
+  if (routerHasApi(payRouter)) {
+    try {
+      await updatePppSecret(payRouter, updatedUser.username, {
+        profile: updatedUser.profile || undefined,
+        comment: commentFromPppoeUser(updatedUser),
+        disabled: false,
+      });
+      await setPppSecretEnabled(payRouter, updatedUser.username, true);
+    } catch {
+      /* payment recorded; MikroTik sync best-effort */
+    }
+  }
+
   // Optionally email the receipt if requested and an address is on file.
   let emailed = false;
   if (b.send_receipt && user.email) {
@@ -839,7 +983,7 @@ app.post('/api/pppoe/users/:id/payment', async (req, res) => {
     amount: total,
     emailed,
     receipt,
-    user: db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(id),
+    user: updatedUser,
   });
 });
 
