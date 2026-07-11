@@ -58,6 +58,55 @@ run() { if [[ -n "${STD:-}" ]]; then $STD "$@"; else "$@"; fi; }
 SERVICE_UNIT="/etc/systemd/system/mt-billing-api.service"
 STATE_DIR="${INSTALL_DIR}/server/data"
 STATE_FILE="${STATE_DIR}/.last-update.json"
+PANEL_UPDATE_UNIT="/etc/systemd/system/mt-billing-panel-update.service"
+SUDOERS_FILE="/etc/sudoers.d/mt-billing"
+
+# Allow the API service user to trigger updates from the panel UI.
+install_panel_update_privs() {
+  local svc_user
+  svc_user="$(service_user)"
+  svc_user="${svc_user:-mtbilling}"
+
+  if [[ -f "${INSTALL_DIR}/install/mt-billing-panel-update.service" ]]; then
+    sed "s|/opt/mt-billing|${INSTALL_DIR}|g" \
+      "${INSTALL_DIR}/install/mt-billing-panel-update.service" >"${PANEL_UPDATE_UNIT}"
+  else
+    cat >"${PANEL_UPDATE_UNIT}" <<EOF
+[Unit]
+Description=MT-Billing panel update (triggered from Application Updater UI)
+After=network-online.target
+
+[Service]
+Type=oneshot
+Nice=5
+Environment=var_install_dir=${INSTALL_DIR}
+Environment=var_repo_branch=${REPO_BRANCH}
+Environment=MT_BILLING_AUTO_ONLY=0
+ExecStart=/bin/bash ${INSTALL_DIR}/install/mt-billing-update.sh
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  fi
+
+  cat >"${SUDOERS_FILE}" <<EOF
+# MT-Billing — allow panel service user to start the root update oneshot
+Defaults:${svc_user} !requiretty
+${svc_user} ALL=(root) NOPASSWD: /bin/systemctl start mt-billing-panel-update.service, /bin/systemctl start --no-block mt-billing-panel-update.service, /usr/bin/systemctl start mt-billing-panel-update.service, /usr/bin/systemctl start --no-block mt-billing-panel-update.service
+EOF
+  chmod 440 "${SUDOERS_FILE}"
+  if command -v visudo >/dev/null 2>&1; then
+    if ! visudo -cf "${SUDOERS_FILE}" >/dev/null 2>&1; then
+      log_err "Invalid sudoers file — removing ${SUDOERS_FILE}"
+      rm -f "${SUDOERS_FILE}"
+      return 1
+    fi
+  fi
+  systemctl daemon-reload 2>/dev/null || true
+  log_ok "Panel updater privileges installed (${svc_user} → ${PANEL_UPDATE_UNIT})"
+}
 
 service_user() {
   if [[ -f "$SERVICE_UNIT" ]]; then
@@ -206,4 +255,10 @@ log_ok "Services started"
 
 trap - ERR
 write_state "updated" "$BEFORE" "$AFTER" "Update complete."
+
+# Ensure UI-triggered updates work after this pull (sudoers + oneshot unit)
+if [[ "$(id -u)" -eq 0 ]]; then
+  install_panel_update_privs || true
+fi
+
 log_ok "Update complete (${BEFORE:0:12} → ${AFTER:0:12})"

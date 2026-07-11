@@ -263,14 +263,15 @@ export async function applyUpdate(): Promise<{
   const remote = await fetchGithubJson(UPDATE_REPO.apiCommits());
   const targetSha = remote?.sha ? String(remote.sha) : null;
 
-  const existing = readUpdateJob(installDir);
+  const existing = readUpdateJobRaw(installDir);
   if (existing?.status === 'running') {
     const started = existing.startedAt || existing.at;
     const age = started ? Date.now() - Date.parse(started) : 0;
-    if (age > 0 && age < 20 * 60 * 1000) {
+    // Allow retry after 2 minutes — UI/panel may leave a stale "running" marker
+    if (age > 0 && age < 2 * 60 * 1000) {
       return {
         ok: false,
-        message: 'An update is already in progress. Wait for it to finish.',
+        message: 'An update is already in progress. Wait a moment, or run: sudo bash /opt/mt-billing/install/mt-billing-update.sh',
         job: existing,
       };
     }
@@ -296,45 +297,145 @@ export async function applyUpdate(): Promise<{
     '/opt/mt-billing/install/mt-billing-update.sh',
   ];
   const script = scriptCandidates.find((p) => fs.existsSync(p));
+  const unit = 'mt-billing-panel-update.service';
+  const logFile = path.join(installDir, 'server/data/update-ui.log');
 
-  if (script) {
-    // Fire-and-forget — script stops the API service and writes job status
-    const child = spawn('bash', [script], {
-      env: {
-        ...process.env,
-        INSTALL_DIR: installDir,
-        REPO_URL: UPDATE_REPO.gitUrl,
-        REPO_BRANCH: UPDATE_REPO.branch,
-        var_install_dir: installDir,
-        var_repo_url: UPDATE_REPO.gitUrl,
-        var_repo_branch: UPDATE_REPO.branch,
-        UPDATE_STARTED_AT: job.startedAt || new Date().toISOString(),
-      },
-      detached: true,
-      stdio: 'ignore',
-      cwd: installDir,
-    });
-    child.unref();
-    return {
-      ok: true,
-      queued: true,
-      job,
-      fromSha,
-      targetSha,
-      message: `Update started from ${UPDATE_REPO.url} (${UPDATE_REPO.branch}). Keep this page open until it finishes.`,
-    };
-  }
-
-  if (!fs.existsSync(path.join(installDir, '.git'))) {
+  const markFailed = (message: string) => {
     writeUpdateJob(
       {
         status: 'failed',
         from: fromSha,
         to: targetSha,
-        message: `No update script and no git checkout at ${installDir}.`,
+        message,
       },
       installDir
     );
+    dbLog(message);
+  };
+
+  /** Prefer root oneshot via sudo+systemctl so the API user can update. */
+  const trySystemdUpdate = (): boolean => {
+    try {
+      const child = spawn(
+        'sudo',
+        ['-n', 'systemctl', 'start', '--no-block', unit],
+        {
+          detached: true,
+          stdio: 'ignore',
+          env: {
+            ...process.env,
+            INSTALL_DIR: installDir,
+            REPO_URL: UPDATE_REPO.gitUrl,
+            REPO_BRANCH: UPDATE_REPO.branch,
+            var_install_dir: installDir,
+            var_repo_url: UPDATE_REPO.gitUrl,
+            var_repo_branch: UPDATE_REPO.branch,
+          },
+        }
+      );
+      child.unref();
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  /** Fallback: sudo the update script directly (needs sudoers or root). */
+  const trySudoScript = (): boolean => {
+    if (!script) return false;
+    try {
+      fs.mkdirSync(path.dirname(logFile), { recursive: true });
+      const out = fs.openSync(logFile, 'a');
+      const child = spawn('sudo', ['-n', 'bash', script], {
+        detached: true,
+        stdio: ['ignore', out, out],
+        cwd: installDir,
+        env: {
+          ...process.env,
+          INSTALL_DIR: installDir,
+          REPO_URL: UPDATE_REPO.gitUrl,
+          REPO_BRANCH: UPDATE_REPO.branch,
+          var_install_dir: installDir,
+          var_repo_url: UPDATE_REPO.gitUrl,
+          var_repo_branch: UPDATE_REPO.branch,
+          UPDATE_STARTED_AT: job.startedAt || new Date().toISOString(),
+        },
+      });
+      child.unref();
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  if (script || fs.existsSync('/etc/systemd/system/mt-billing-panel-update.service')) {
+    // Probe passwordless sudo for the API service user
+    let sudoOk = false;
+    try {
+      await execFileAsync('sudo', ['-n', 'true'], { timeout: 5000 });
+      sudoOk = true;
+    } catch {
+      sudoOk = false;
+    }
+
+    if (sudoOk && trySystemdUpdate()) {
+      return {
+        ok: true,
+        queued: true,
+        job,
+        fromSha,
+        targetSha,
+        message: `Update started via ${unit}. Keep this page open until it finishes.`,
+      };
+    }
+
+    if (sudoOk && trySudoScript()) {
+      return {
+        ok: true,
+        queued: true,
+        job,
+        fromSha,
+        targetSha,
+        message: `Update started with sudo. Keep this page open until it finishes.`,
+      };
+    }
+
+    // Last resort: spawn script without sudo (works only if API already runs as root)
+    if (script && typeof process.getuid === 'function' && process.getuid() === 0) {
+      const child = spawn('bash', [script], {
+        env: {
+          ...process.env,
+          INSTALL_DIR: installDir,
+          REPO_URL: UPDATE_REPO.gitUrl,
+          REPO_BRANCH: UPDATE_REPO.branch,
+          var_install_dir: installDir,
+          var_repo_url: UPDATE_REPO.gitUrl,
+          var_repo_branch: UPDATE_REPO.branch,
+          UPDATE_STARTED_AT: job.startedAt || new Date().toISOString(),
+        },
+        detached: true,
+        stdio: 'ignore',
+        cwd: installDir,
+      });
+      child.unref();
+      return {
+        ok: true,
+        queued: true,
+        job,
+        fromSha,
+        targetSha,
+        message: `Update started from ${UPDATE_REPO.url} (${UPDATE_REPO.branch}). Keep this page open until it finishes.`,
+      };
+    }
+
+    const hint =
+      'Panel update needs root once. On the LXC run: curl -fsSL https://raw.githubusercontent.com/tsogs66/MT-Billing/main/install/mt-billing-update.sh | sudo bash';
+    markFailed(hint);
+    return { ok: false, message: hint, job: readUpdateJob(installDir) || undefined };
+  }
+
+  if (!fs.existsSync(path.join(installDir, '.git'))) {
+    markFailed(`No update script and no git checkout at ${installDir}.`);
     return {
       ok: false,
       message: `No update script and no git checkout at ${installDir}. Clone from ${UPDATE_REPO.gitUrl}.`,

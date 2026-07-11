@@ -1196,7 +1196,7 @@ export async function fetchPppActiveTraffic(
 
 /**
  * Live rx/tx for IPoE/DHCP leases by matching simple-queue targets to lease IPs.
- * Falls back to empty rates when no per-IP queue exists.
+ * MikroTik simple-queue `rate` is upload/download (from the target/client perspective).
  */
 export async function fetchLeaseTrafficByIp(
   conn: RouterConn,
@@ -1215,9 +1215,9 @@ export async function fetchLeaseTrafficByIp(
       if (!ip || !want.has(ip)) continue;
       const raw = String(q.rate || '');
       const parts = raw.split('/');
-      const download = parseRosRate(parts[0]);
-      const upload = parseRosRate(parts[1] || parts[0]);
-      // Prefer higher of existing vs this queue (multiple queues rare)
+      // rate = upload/download for a client-targeted queue
+      const upload = parseRosRate(parts[0]);
+      const download = parseRosRate(parts[1] || parts[0]);
       const prev = out[ip];
       out[ip] = {
         download: Math.max(prev?.download || 0, download),

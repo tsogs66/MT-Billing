@@ -100,6 +100,34 @@ $STD systemctl enable mt-billing-api
 $STD systemctl restart mt-billing-api
 msg_ok "Created systemd service"
 
+msg_info "Allowing panel UI to trigger updates (sudoers + oneshot)"
+SVC_USER_FOR_SUDO="${SERVICE_USER:-mtbilling}"
+cat >/etc/systemd/system/mt-billing-panel-update.service <<EOF
+[Unit]
+Description=MT-Billing panel update (triggered from Application Updater UI)
+After=network-online.target
+
+[Service]
+Type=oneshot
+Nice=5
+Environment=var_install_dir=${INSTALL_DIR}
+Environment=var_repo_branch=${REPO_BRANCH}
+Environment=MT_BILLING_AUTO_ONLY=0
+ExecStart=/bin/bash ${INSTALL_DIR}/install/mt-billing-update.sh
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+cat >/etc/sudoers.d/mt-billing <<EOF
+Defaults:${SVC_USER_FOR_SUDO} !requiretty
+${SVC_USER_FOR_SUDO} ALL=(root) NOPASSWD: /bin/systemctl start mt-billing-panel-update.service, /bin/systemctl start --no-block mt-billing-panel-update.service, /usr/bin/systemctl start mt-billing-panel-update.service, /usr/bin/systemctl start --no-block mt-billing-panel-update.service
+EOF
+chmod 440 /etc/sudoers.d/mt-billing
+$STD systemctl daemon-reload
+msg_ok "Panel updater privileges ready"
+
 msg_info "Configuring nginx (port ${PANEL_PORT})"
 cat >/etc/nginx/sites-available/mt-billing <<EOF
 server {

@@ -52,6 +52,8 @@ UPDATE_FILES=(
   install/mt-billing-update.sh
   install/mt-billing-reinstall.sh
   install/mt-billing-public-host.sh
+  install/mt-billing-panel-update.service
+  install/mt-billing-sudoers
   install/mt-billing-auto-update.service
   install/mt-billing-auto-update.timer
 )
