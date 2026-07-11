@@ -1220,3 +1220,65 @@ export async function fetchLeaseTrafficByIp(
     return out;
   }, { timeoutSec: 20 });
 }
+
+/** Cumulative byte counters on dynamic PPPoE interfaces. */
+export async function fetchPppInterfaceBytes(
+  conn: RouterConn,
+  usernames: string[]
+): Promise<Record<string, { rxBytes: number; txBytes: number }>> {
+  if (!usernames.length) return {};
+  return withRouter(conn, async (api) => {
+    const ifaces = (await api.write('/interface/print')) as Record<string, string>[];
+    const byUser = new Map<string, { rxBytes: number; txBytes: number }>();
+    const want = new Set(usernames.map((u) => pppNameKey(u)));
+    for (const iface of ifaces || []) {
+      const name = iface.name || '';
+      const m = name.match(/^<pppoe-(.+)>$/i) || name.match(/^pppoe-(.+)$/i);
+      if (!m) continue;
+      const key = pppNameKey(m[1]);
+      if (!want.has(key)) continue;
+      byUser.set(key, {
+        rxBytes: Number(iface['rx-byte'] || iface['rx-bytes'] || 0) || 0,
+        txBytes: Number(iface['tx-byte'] || iface['tx-bytes'] || 0) || 0,
+      });
+    }
+    const out: Record<string, { rxBytes: number; txBytes: number }> = {};
+    for (const u of usernames) {
+      const t = byUser.get(pppNameKey(u));
+      if (t) out[u] = t;
+    }
+    return out;
+  }, { timeoutSec: 20 });
+}
+
+/** DNS cache names — used to estimate popular platforms/services. */
+export async function fetchDnsCacheNames(conn: RouterConn): Promise<string[]> {
+  return withRouter(conn, async (api) => {
+    try {
+      const rows = (await api.write('/ip/dns/cache/print')) as Record<string, string>[];
+      return (rows || []).map((r) => String(r.name || r['data'] || '')).filter(Boolean);
+    } catch {
+      return [];
+    }
+  }, { timeoutSec: 15 });
+}
+
+/** Sample active connections' destination addresses (capped). */
+export async function fetchConnectionDestinations(
+  conn: RouterConn,
+  limit = 400
+): Promise<{ dst: string; protocol: string }[]> {
+  return withRouter(conn, async (api) => {
+    try {
+      const rows = (await api.write('/ip/firewall/connection/print', [
+        '=.proplist=dst-address,protocol',
+      ])) as Record<string, string>[];
+      return (rows || []).slice(0, limit).map((r) => ({
+        dst: String(r['dst-address'] || '').split(':')[0],
+        protocol: String(r.protocol || ''),
+      }));
+    } catch {
+      return [];
+    }
+  }, { timeoutSec: 20 });
+}

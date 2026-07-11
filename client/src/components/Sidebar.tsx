@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Bot, TerminalSquare, Network, Users, Share2, Map,
   BarChart3, Boxes, Wifi, FileCode2, Globe, Building2, Settings, ShieldCheck,
   DownloadCloud, ServerCog, ScrollText, KeyRound, Activity, Bell, ChevronDown,
-  X,
+  X, Link2, PieChart, ShieldAlert,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import Logo from './Logo';
@@ -40,6 +40,9 @@ const NAV_SECTIONS: NavSection[] = [
     title: 'Business',
     items: [
       { to: '/sales', label: 'Sales Report', icon: BarChart3, permission: 'sales' },
+      { to: '/pay-portal', label: 'Payment Links', icon: Link2, permission: 'sales' },
+      { to: '/usage', label: 'Usage Stats', icon: PieChart, permission: 'pppoe' },
+      { to: '/fair-use', label: 'Fair Use Alerts', icon: ShieldAlert, permission: 'pppoe' },
       { to: '/inventory', label: 'Stock & Inventory', icon: Boxes, permission: 'inventory' },
       { to: '/hotspot', label: 'Hotspot', icon: Wifi, permission: 'hotspot' },
       { to: '/notifications', label: 'Notifications', icon: Bell, permission: 'notifications' },
@@ -217,6 +220,9 @@ export function permissionForPath(pathname: string): string {
     '/super-router': 'super-router',
     '/files': 'files',
     '/sales': 'sales',
+    '/pay-portal': 'sales',
+    '/usage': 'pppoe',
+    '/fair-use': 'pppoe',
     '/inventory': 'inventory',
     '/hotspot': 'hotspot',
     '/notifications': 'notifications',

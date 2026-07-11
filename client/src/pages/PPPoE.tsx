@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Users, WifiOff, Activity, Layers, Server, ReceiptText, Plus, Pencil, Trash2, KeyRound, Eye, EyeOff, MapPin, DownloadCloud, RefreshCw } from 'lucide-react';
+import { Users, WifiOff, Activity, Layers, Server, ReceiptText, Plus, Pencil, Trash2, KeyRound, Eye, EyeOff, MapPin, DownloadCloud, RefreshCw, Link2 } from 'lucide-react';
 import Layout from '../components/Layout';
 import {
   StatusBadge, TabBar, Toolbar, SearchInput, DataTable, IconAction, Toast,
@@ -158,6 +158,21 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
       loadUsers();
     } catch (e: any) {
       showToast(e?.response?.data?.error || 'Toggle failed.');
+    }
+  };
+
+  const copyPayLink = async (u: PUser) => {
+    try {
+      const r = await api.post(`/payment-links/for-user/${u.id}`, { baseUrl: window.location.origin });
+      const full = r.data.url?.startsWith('http') ? r.data.url : `${window.location.origin}${r.data.path || r.data.url}`;
+      try {
+        await navigator.clipboard.writeText(full);
+        showToast(`Pay link copied for ${u.username}`);
+      } catch {
+        showToast(full);
+      }
+    } catch (e: any) {
+      showToast(e?.response?.data?.error || 'Could not create pay link');
     }
   };
 
@@ -415,6 +430,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                     </span>,
                     <span className="text-slate-500">{u.subscriptionDue}</span>,
                     <div key="a" className="flex items-center justify-end gap-1">
+                      <IconAction icon={Link2} title="Copy pay link" tone="sky" onClick={() => copyPayLink(u)} />
                       <IconAction icon={ReceiptText} title="Process Payment" tone="emerald" onClick={() => setPayFor(u)} />
                       <IconAction icon={Pencil} title="Edit user" tone="sky" onClick={() => setEditFor(u)} />
                       <IconAction

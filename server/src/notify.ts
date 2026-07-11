@@ -254,6 +254,17 @@ async function notifyClient(client: Client, channels: ('email' | 'sms')[], subje
   return results;
 }
 
+/** Public wrapper used by fair-use / billing modules. */
+export async function notifyClientChannels(
+  client: any,
+  channels: ('email' | 'sms')[],
+  subject: string,
+  message: string,
+  type: string
+) {
+  return notifyClient(client as Client, channels, subject, message, type);
+}
+
 /** Manual broadcast/one-off send initiated from the Notifications page. */
 export async function sendManual(opts: {
   channel: 'email' | 'sms' | 'both';
@@ -289,52 +300,116 @@ export async function sendManual(opts: {
   return { recipients: clients.length, sent, skipped };
 }
 
-/** Reminder (N days before expiry) + auto-disable after X hours non-payment. */
+/** Reminder (N days before expiry) + expire-profile switch + auto-disable on MikroTik. */
 export async function runAutomations() {
   const s = getSettings();
   const now = Date.now();
-  const summary = { remindersSent: 0, marked: 0, disabled: 0 };
+  const summary = { remindersSent: 0, marked: 0, profileSwitched: 0, disabled: 0, routerErrors: 0 };
+
+  // Lazy import to avoid circular deps at module load.
+  const { syncUserToRouter, ensureFreshPayLink } = await import('./billing.js');
+
+  const baseUrl =
+    process.env.PUBLIC_BASE_URL ||
+    (db.prepare('SELECT ngrok_url FROM app_settings WHERE id = 1').get() as { ngrok_url?: string } | undefined)?.ngrok_url ||
+    '';
 
   const all = db
     .prepare(
-      `SELECT id, username, customer_name, profile, status, email, contact, subscription_due, nonpayment_since, reminder_sent
-       FROM pppoe_users`
+      `SELECT * FROM pppoe_users`
     )
-    .all() as (Client & { status: string; profile: string; nonpayment_since: string | null; reminder_sent: string | null })[];
+    .all() as (Client & {
+      status: string;
+      profile: string;
+      password?: string;
+      expiration_profile?: string;
+      router_id?: number;
+      nonpayment_since: string | null;
+      reminder_sent: string | null;
+      address?: string;
+      nap_id?: number;
+      plc_port?: string;
+      lat?: number;
+      lng?: number;
+    })[];
 
   for (const u of all) {
     const d = daysUntil(u.subscription_due);
     if (d == null) continue;
 
-    // Expiry reminder
+    // Expiry reminder + pay link
     if (s.reminder_enabled && u.status === 'Active' && d >= 0 && d <= s.days_before && u.reminder_sent !== u.subscription_due) {
       const channels: ('email' | 'sms')[] = [];
       if (s.email_enabled) channels.push('email');
       if (s.sms_enabled) channels.push('sms');
       if (channels.length) {
+        let payUrl = '';
+        try {
+          const link = ensureFreshPayLink(u.id, baseUrl || undefined);
+          payUrl = link.url.startsWith('http') ? link.url : baseUrl ? `${baseUrl.replace(/\/$/, '')}${link.path}` : link.path;
+        } catch {
+          /* optional */
+        }
         const subject = 'Your internet plan is about to expire';
-        const msg = `Hi ${u.customer_name || u.username}, your ${u.profile} plan expires on ${u.subscription_due} (in ${d} day${d === 1 ? '' : 's'}). Please settle your payment to avoid disconnection.`;
+        const msg = `Hi ${u.customer_name || u.username}, your ${u.profile} plan expires on ${u.subscription_due} (in ${d} day${d === 1 ? '' : 's'}). Please settle your payment to avoid disconnection.${payUrl ? ` Pay online: ${payUrl}` : ''}`;
         await notifyClient(u, channels, subject, msg, 'expiry_reminder');
         db.prepare('UPDATE pppoe_users SET reminder_sent = ? WHERE id = ?').run(u.subscription_due, u.id);
         summary.remindersSent++;
       }
     }
 
-    // Non-payment tracking + auto-disable
+    // Non-payment: switch expire profile, then disable after X hours
     if (d < 0 && u.status !== 'disabled') {
       if (!u.nonpayment_since) {
-        db.prepare("UPDATE pppoe_users SET nonpayment_since = ?, status = 'non-payment' WHERE id = ?").run(new Date(now).toISOString(), u.id);
+        db.prepare("UPDATE pppoe_users SET nonpayment_since = ?, status = 'non-payment' WHERE id = ?").run(
+          new Date(now).toISOString(),
+          u.id
+        );
         summary.marked++;
+        const full = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(u.id) as any;
+        const sync = await syncUserToRouter(full, 'expire');
+        if (sync.ok) summary.profileSwitched++;
+        else summary.routerErrors++;
+
+        const channels: ('email' | 'sms')[] = [];
+        if (s.email_enabled) channels.push('email');
+        if (s.sms_enabled) channels.push('sms');
+        if (channels.length) {
+          let payUrl = '';
+          try {
+            const link = ensureFreshPayLink(u.id, baseUrl || undefined);
+            payUrl = link.url.startsWith('http') ? link.url : baseUrl ? `${baseUrl.replace(/\/$/, '')}${link.path}` : link.path;
+          } catch {
+            /* optional */
+          }
+          const msg = `Hi ${u.customer_name || u.username}, your subscription is overdue (due ${u.subscription_due}). Your account was moved to the non-payment profile. Pay now to restore full speed.${payUrl ? ` ${payUrl}` : ''}`;
+          await notifyClient(u, channels, 'Payment overdue — limited access', msg, 'nonpayment_notice');
+        }
       } else if (s.autodisable_enabled) {
         const hours = (now - Date.parse(u.nonpayment_since)) / 3600000;
-        if (hours >= s.autodisable_hours) {
+        if (hours >= s.autodisable_hours && u.status !== 'disabled') {
           db.prepare("UPDATE pppoe_users SET status = 'disabled', online = 0 WHERE id = ?").run(u.id);
+          const full = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(u.id) as any;
+          const sync = await syncUserToRouter(full, 'disable');
+          if (!sync.ok) summary.routerErrors++;
+
           const channels: ('email' | 'sms')[] = [];
           if (s.email_enabled) channels.push('email');
           if (s.sms_enabled) channels.push('sms');
-          const msg = `Hi ${u.customer_name || u.username}, your service has been temporarily disabled due to non-payment for more than ${s.autodisable_hours} hours. Please settle your balance to restore your connection.`;
+          let payUrl = '';
+          try {
+            const link = ensureFreshPayLink(u.id, baseUrl || undefined);
+            payUrl = link.url.startsWith('http') ? link.url : baseUrl ? `${baseUrl.replace(/\/$/, '')}${link.path}` : link.path;
+          } catch {
+            /* optional */
+          }
+          const msg = `Hi ${u.customer_name || u.username}, your service has been disabled due to non-payment for more than ${s.autodisable_hours} hours. Settle your balance to restore your connection.${payUrl ? ` Pay: ${payUrl}` : ''}`;
           if (channels.length) await notifyClient(u, channels, 'Service disabled — payment overdue', msg, 'auto_disable');
-          db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run('warning', 'billing', `Auto-disabled ${u.username} after ${Math.round(hours)}h non-payment`);
+          db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+            'warning',
+            'billing',
+            `Auto-disabled ${u.username} after ${Math.round(hours)}h non-payment${sync.ok ? ' (MikroTik synced)' : ` (router: ${sync.error})`}`
+          );
           summary.disabled++;
         }
       }

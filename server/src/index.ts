@@ -42,16 +42,25 @@ import {
   fetchLeaseTrafficByIp,
 } from './mikrotik.js';
 import { probeOlt } from './olt.js';
+import { getUptime, getUptimeSummary, runUptimeChecks, startUptime, getUptimeScopes, getActiveScope, setActiveScope, type UptimeScope } from './uptime.js';
 import {
-  getUptime,
-  getUptimeSummary,
-  runUptimeChecks,
-  startUptime,
-  getUptimeScopes,
-  getActiveScope,
-  setActiveScope,
-  type UptimeScope,
-} from './uptime.js';
+  recordPppoePayment,
+  createPaymentLink,
+  getPaymentLinkPublic,
+  markPaymentLinkPaid,
+  listPaymentLinks,
+  ensureFreshPayLink,
+} from './billing.js';
+import {
+  startUsageScheduler,
+  getFairUseSettings,
+  updateFairUseSettings,
+  listUsageAlerts,
+  ackUsageAlert,
+  getUsageSummary,
+  getUserUsageHistory,
+  pollUsageAndFairUse,
+} from './usage.js';
 import { getInterfaceNames, getTrafficSnapshot } from './interfaces.js';
 import { settingsRouter } from './settings.js';
 import { aiRouter } from './ai.js';
@@ -189,6 +198,23 @@ app.post('/api/auth/forgot-password-reset', (req, res) => {
     username: defaultUser,
     message: `Panel login reset. Sign in with ${defaultUser} / (your default password).`,
   });
+});
+
+// ---- Public subscriber payment portal (no JWT) ----
+app.get('/api/public/pay/:token', (req, res) => {
+  const data = getPaymentLinkPublic(String(req.params.token));
+  if (!data) return res.status(404).json({ error: 'Payment link not found' });
+  res.json(data);
+});
+
+app.post('/api/public/pay/:token/confirm', async (req, res) => {
+  try {
+    const ref = String(req.body?.reference || req.body?.external_ref || '').trim() || undefined;
+    const result = await markPaymentLinkPaid(String(req.params.token), ref);
+    res.json(result);
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message || 'Payment failed' });
+  }
 });
 
 app.use('/api', requireAuth);
@@ -935,101 +961,100 @@ app.post('/api/pppoe/users/bulk-delete', async (req, res) => {
 // payment day) and records the transaction.
 app.post('/api/pppoe/users/:id/payment', async (req, res) => {
   const id = Number(req.params.id);
-  const user = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(id) as any;
-  if (!user) return res.status(404).json({ error: 'not found' });
   const b = req.body || {};
-
-  const months = Math.max(1, Math.floor(Number(b.months) || 1));
-  const previousDue: string = (user.subscription_due || new Date().toISOString().slice(0, 10)).slice(0, 10);
-  const newDue = addMonthsPreserveDay(previousDue, months);
-
-  // Optional plan change applied at payment time.
-  const plan = b.plan || user.profile;
-  const prof = db.prepare('SELECT price FROM profiles WHERE name = ?').get(plan) as { price: number } | undefined;
-  const unit = prof?.price ?? (Number(user.price) || 0);
-  const subtotal = unit * months;
-
-  // Discount for downtime: credit the daily rate for each downtime day.
-  const discountDays = Math.max(0, Math.floor(Number(b.discount_days) || 0));
-  const dailyRate = unit / 30;
-  const discount = Math.round(dailyRate * discountDays * 100) / 100;
-  const total = Math.max(0, Math.round((subtotal - discount) * 100) / 100);
-
-  const expirationProfile = b.expiration_profile || user.expiration_profile || 'default';
-  const paymentDate = b.payment_date ? new Date(`${String(b.payment_date).slice(0, 10)}T00:00:00Z`).toISOString() : new Date().toISOString();
-
-  db.prepare(
-    `UPDATE pppoe_users SET subscription_due = ?, profile = ?, price = ?, expiration_profile = ?,
-       status = 'Active', online = 1, nonpayment_since = NULL, reminder_sent = NULL WHERE id = ?`
-  ).run(newDue, plan, unit, expirationProfile, id);
-  db.prepare('INSERT INTO transactions (pppoe_user_id, customer_name, amount, type, created_at) VALUES (?, ?, ?, ?, ?)').run(
-    id,
-    user.customer_name || user.username,
-    total,
-    'payment',
-    paymentDate
-  );
-  db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
-    'info',
-    'billing',
-    `Payment for ${user.username}: ${plan} +${months}mo, due ${previousDue} \u2192 ${newDue}, total ${total}`
-  );
-
-  const company = db.prepare('SELECT * FROM company WHERE id = 1').get() as any;
-  const receipt = {
-    company: company?.name || 'Pa-North',
-    account: user.account_number,
-    customer: user.customer_name || user.username,
-    username: user.username,
-    plan,
-    months,
-    paymentDate: paymentDate.slice(0, 10),
-    previousDue,
-    newDue,
-    subtotal,
-    discount,
-    discountDays,
-    total,
-  };
-
-  const updatedUser = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(id) as any;
-  const payRouter = getRouterById(updatedUser.router_id);
-  if (routerHasApi(payRouter)) {
-    try {
-      await updatePppSecret(payRouter, updatedUser.username, {
-        password: updatedUser.password || '',
-        profile: updatedUser.profile || undefined,
-        comment: commentFromPppoeUser(updatedUser),
-        disabled: false,
-      });
-      await setPppSecretEnabled(payRouter, updatedUser.username, true);
-    } catch {
-      /* payment recorded; MikroTik sync best-effort */
+  try {
+    const result = await recordPppoePayment(id, {
+      months: b.months,
+      plan: b.plan,
+      expiration_profile: b.expiration_profile,
+      payment_date: b.payment_date,
+      discount_days: b.discount_days,
+      source: 'admin',
+    });
+    let emailed = false;
+    if (b.send_receipt && result.user?.email) {
+      const receipt = result.receipt;
+      const msg = `Official Receipt\nAccount #: ${receipt.account}\nCustomer: ${receipt.customer}\nPlan: ${receipt.plan}\nPayment date: ${receipt.paymentDate}\nNext due: ${receipt.newDue}\nTOTAL: ${receipt.total.toFixed(2)}`;
+      const r = await sendManual({ channel: 'email', target: 'client', clientId: id, subject: 'Payment Receipt', message: msg });
+      emailed = r.sent > 0;
     }
+    res.json({ ...result, emailed });
+  } catch (e: any) {
+    const code = /not found/i.test(e?.message || '') ? 404 : 400;
+    res.status(code).json({ error: e?.message || 'Payment failed' });
   }
+});
 
-  // Optionally email the receipt if requested and an address is on file.
-  let emailed = false;
-  if (b.send_receipt && user.email) {
-    const msg = `Official Receipt\nAccount #: ${user.account_number}\nCustomer: ${receipt.customer}\nPlan: ${plan}\nPayment date: ${receipt.paymentDate}\nNext due: ${newDue}\nSubtotal: ${subtotal.toFixed(2)}\nDiscount: ${discount.toFixed(2)}\nTOTAL: ${total.toFixed(2)}`;
-    const r = await sendManual({ channel: 'email', target: 'client', clientId: id, subject: 'Payment Receipt', message: msg });
-    emailed = r.sent > 0;
+// ---- Payment links ----
+app.get('/api/payment-links', (_req, res) => {
+  res.json({ links: listPaymentLinks(200) });
+});
+
+app.post('/api/payment-links', (req, res) => {
+  try {
+    const b = req.body || {};
+    const userId = Number(b.userId || b.pppoe_user_id);
+    if (!userId) return res.status(400).json({ error: 'userId required' });
+    const appSettings = db.prepare('SELECT ngrok_url FROM app_settings WHERE id = 1').get() as { ngrok_url?: string } | undefined;
+    const baseUrl = String(b.baseUrl || process.env.PUBLIC_BASE_URL || appSettings?.ngrok_url || '').trim() || undefined;
+    const link = createPaymentLink({
+      pppoeUserId: userId,
+      months: b.months,
+      amount: b.amount,
+      ttlHours: b.ttlHours,
+      baseUrl,
+    });
+    res.status(201).json(link);
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message || 'Could not create link' });
   }
+});
 
-  res.json({
-    ok: true,
-    months,
-    plan,
-    previousDue,
-    subscriptionDue: newDue,
-    subtotal,
-    discount,
-    total,
-    amount: total,
-    emailed,
-    receipt,
-    user: updatedUser,
-  });
+app.post('/api/payment-links/for-user/:id', (req, res) => {
+  try {
+    const appSettings = db.prepare('SELECT ngrok_url FROM app_settings WHERE id = 1').get() as { ngrok_url?: string } | undefined;
+    const baseUrl = String(req.body?.baseUrl || process.env.PUBLIC_BASE_URL || appSettings?.ngrok_url || '').trim() || undefined;
+    const link = ensureFreshPayLink(Number(req.params.id), baseUrl);
+    res.json(link);
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message || 'Could not create link' });
+  }
+});
+
+app.delete('/api/payment-links/:id', (req, res) => {
+  const info = db.prepare('DELETE FROM payment_links WHERE id = ?').run(Number(req.params.id));
+  if (!info.changes) return res.status(404).json({ error: 'not found' });
+  res.json({ ok: true });
+});
+
+// ---- Usage stats & fair-use ----
+app.get('/api/usage/summary', (req, res) => {
+  const days = Math.max(1, Math.min(90, Number(req.query.days) || 7));
+  res.json(getUsageSummary(days));
+});
+
+app.get('/api/usage/users/:id/history', (req, res) => {
+  const user = db.prepare('SELECT username FROM pppoe_users WHERE id = ?').get(Number(req.params.id)) as { username: string } | undefined;
+  if (!user) return res.status(404).json({ error: 'not found' });
+  const days = Math.max(1, Math.min(90, Number(req.query.days) || 30));
+  res.json({ username: user.username, history: getUserUsageHistory(user.username, days) });
+});
+
+app.get('/api/usage/alerts', (_req, res) => {
+  res.json({ alerts: listUsageAlerts(150), settings: getFairUseSettings() });
+});
+
+app.post('/api/usage/alerts/:id/ack', (req, res) => {
+  const row = ackUsageAlert(Number(req.params.id));
+  if (!row) return res.status(404).json({ error: 'not found' });
+  res.json(row);
+});
+
+app.get('/api/usage/settings', (_req, res) => res.json(getFairUseSettings()));
+app.put('/api/usage/settings', (req, res) => res.json(updateFairUseSettings(req.body || {})));
+app.post('/api/usage/poll', async (_req, res) => {
+  const r = await pollUsageAndFairUse();
+  res.json(r);
 });
 
 // Fetch existing subscribers from a live MikroTik router by reading /ppp/secret
@@ -2493,4 +2518,5 @@ server.listen(PORT, () => {
   console.log(`MT-Billing API listening on http://localhost:${PORT}`);
   startUptime(90000);
   startNotifyScheduler(5 * 60 * 1000);
+  startUsageScheduler(60_000);
 });

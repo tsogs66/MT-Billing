@@ -324,6 +324,73 @@ export function migrate() {
   ensureBillingPlans();
   ensureIpoeBillingDefaults();
   ensureFiberInventory();
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS payment_links (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      pppoe_user_id INTEGER NOT NULL,
+      token TEXT UNIQUE NOT NULL,
+      amount REAL,
+      months INTEGER DEFAULT 1,
+      status TEXT DEFAULT 'pending',
+      expires_at TEXT,
+      paid_at TEXT,
+      external_ref TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS fair_use_settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      enabled INTEGER DEFAULT 1,
+      cap_percent INTEGER DEFAULT 95,
+      sustain_minutes INTEGER DEFAULT 10,
+      notify_email INTEGER DEFAULT 1,
+      notify_sms INTEGER DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS usage_alerts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      pppoe_user_id INTEGER,
+      router_id INTEGER,
+      alert_type TEXT,
+      threshold_bps INTEGER,
+      observed_bps INTEGER,
+      profile TEXT,
+      acknowledged INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS usage_samples (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      subject_type TEXT,
+      subject_key TEXT,
+      router_id INTEGER,
+      rx_bytes INTEGER DEFAULT 0,
+      tx_bytes INTEGER DEFAULT 0,
+      rx_bps INTEGER DEFAULT 0,
+      tx_bps INTEGER DEFAULT 0,
+      sampled_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS usage_daily (
+      subject_type TEXT NOT NULL,
+      subject_key TEXT NOT NULL,
+      day TEXT NOT NULL,
+      rx_bytes INTEGER DEFAULT 0,
+      tx_bytes INTEGER DEFAULT 0,
+      peak_rx_bps INTEGER DEFAULT 0,
+      peak_tx_bps INTEGER DEFAULT 0,
+      PRIMARY KEY (subject_type, subject_key, day)
+    );
+    CREATE TABLE IF NOT EXISTS usage_services (
+      day TEXT NOT NULL,
+      service_id TEXT NOT NULL,
+      service_name TEXT,
+      category TEXT,
+      hits INTEGER DEFAULT 0,
+      router_id INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (day, service_id, router_id)
+    );
+  `);
+  if (!(db.prepare('SELECT 1 FROM fair_use_settings WHERE id = 1').get())) {
+    db.prepare('INSERT INTO fair_use_settings (id) VALUES (1)').run();
+  }
 }
 
 /** Wipe seeded demo rows (routers, clients, sales, map, logs, etc.) once per database. Inventory is preserved. */

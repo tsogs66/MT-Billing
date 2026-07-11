@@ -24,6 +24,10 @@ import PanelRoles from './pages/PanelRoles';
 import License from './pages/License';
 import AiScripting from './pages/AiScripting';
 import TerminalPage from './pages/Terminal';
+import SubscriberPay from './pages/SubscriberPay';
+import PayPortal from './pages/PayPortal';
+import UsageStats from './pages/UsageStats';
+import FairUseAlerts from './pages/FairUseAlerts';
 import { Loader2 } from 'lucide-react';
 import Logo from './components/Logo';
 import { useEffect } from 'react';
@@ -78,6 +82,7 @@ export default function App() {
       <DocumentTitle />
       <Routes>
       <Route path="/login" element={user ? <Navigate to="/" replace /> : <Login />} />
+      <Route path="/pay/:token" element={<SubscriberPay />} />
       <Route
         path="/*"
         element={
@@ -89,6 +94,9 @@ export default function App() {
                 <Route path="/ipoe" element={<IPoE />} />
                 <Route path="/map" element={<ClientsMap />} />
                 <Route path="/sales" element={<SalesReport />} />
+                <Route path="/pay-portal" element={<PayPortal />} />
+                <Route path="/usage" element={<UsageStats />} />
+                <Route path="/fair-use" element={<FairUseAlerts />} />
                 <Route path="/routers" element={<Navigate to="/network?tab=routers" replace />} />
                 <Route path="/inventory" element={<Inventory />} />
                 <Route path="/hotspot" element={<Hotspot />} />
