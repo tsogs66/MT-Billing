@@ -43,8 +43,9 @@ function fmtGB(gb?: number): string {
 
 function clientState(c: Client): ClientState {
   const s = (c.status || '').toLowerCase();
+  // Live session wins — connected users are online even if DB status lagged as disabled.
+  if (c.online && !['expired', 'non-payment'].includes(s)) return 'online';
   if (['disabled', 'inactive', 'expired', 'non-payment'].includes(s)) return 'disabled';
-  if (c.online && (s === 'active' || s === '')) return 'online';
   return 'offline';
 }
 

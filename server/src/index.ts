@@ -20,6 +20,8 @@ import {
   fetchRouterInterfaceTraffic,
   fetchPppSecrets,
   fetchPppActive,
+  enrichPppUsersFromLive,
+  pppNameKey,
   fetchPppProfiles,
   addPppProfile,
   updatePppProfile,
@@ -255,19 +257,22 @@ app.get('/api/dashboard/router/:id', async (req, res) => {
     .all(r.id) as { username: string; status: string; online: number }[];
 
   let liveSessions = false;
-  let onlineSet: Set<string> | null = null;
-  let disabledSecrets = new Set<string>();
+  let enriched = users.map((u) => ({ ...u, online: u.online, sessionOnline: false as boolean, mikrotikProfile: null as string | null }));
   if (r.host && r.api_user) {
     try {
       const [secrets, sessions] = await Promise.all([fetchPppSecrets(r), fetchPppActive(r)]);
-      onlineSet = new Set(sessions.map((s) => s.name));
-      disabledSecrets = new Set(secrets.filter((s) => s.disabled).map((s) => s.name));
+      enriched = enrichPppUsersFromLive(users, secrets, sessions);
       liveSessions = true;
-      // Persist live online flags so other DB readers stay closer to reality.
-      const upd = db.prepare('UPDATE pppoe_users SET online = ? WHERE router_id = ? AND username = ?');
+      const updOnline = db.prepare('UPDATE pppoe_users SET online = ? WHERE router_id = ? AND username = ?');
+      const updStatus = db.prepare(
+        "UPDATE pppoe_users SET status = 'Active' WHERE router_id = ? AND username = ? AND lower(status) = 'disabled'"
+      );
       const tx = db.transaction(() => {
-        for (const u of users) {
-          upd.run(onlineSet!.has(u.username) ? 1 : 0, r.id, u.username);
+        for (const u of enriched) {
+          updOnline.run(u.online ? 1 : 0, r.id, u.username);
+          if (String(u.status).toLowerCase() === 'active') {
+            updStatus.run(r.id, u.username);
+          }
         }
       });
       tx();
@@ -276,18 +281,11 @@ app.get('/api/dashboard/router/:id', async (req, res) => {
     }
   }
 
-  const isBillingActive = (u: { username: string; status: string }) => {
-    const s = String(u.status || '').toLowerCase();
-    if (disabledSecrets.has(u.username)) return false;
-    return s === 'active';
-  };
-
-  const activeUsers = users.filter(isBillingActive);
-  const offline = liveSessions
-    ? activeUsers.filter((u) => !onlineSet!.has(u.username)).length
-    : activeUsers.filter((u) => !u.online).length;
-  const liveOnline = liveSessions ? activeUsers.filter((u) => onlineSet!.has(u.username)).length : activeUsers.filter((u) => !!u.online).length;
-  const expired = users.filter((u) => String(u.status || '').toLowerCase() === 'expired').length;
+  const isBillingActive = (u: { status: string }) => String(u.status || '').toLowerCase() === 'active';
+  const activeUsers = enriched.filter(isBillingActive);
+  const offline = activeUsers.filter((u) => !u.online).length;
+  const liveOnline = activeUsers.filter((u) => !!u.online).length;
+  const expired = enriched.filter((u) => String(u.status || '').toLowerCase() === 'expired').length;
 
   const liveStats = await fetchRouterDashboardStats(r);
 
@@ -349,16 +347,29 @@ app.get('/api/dashboard/status', async (req, res) => {
     if (!router?.host || !router?.api_user || !subset.length) return;
     try {
       const [secrets, sessions] = await Promise.all([fetchPppSecrets(router), fetchPppActive(router)]);
-      const byName = new Map(secrets.map((s) => [s.name, s]));
-      const onlineSet = new Set(sessions.map((s) => s.name));
-      for (const u of subset) {
-        const sec = byName.get(u.username);
-        if (sec) {
-          if (sec.disabled) u.status = 'disabled';
-          else if (String(u.status || '').toLowerCase() === 'disabled') u.status = 'Active';
-        }
-        u.online = onlineSet.has(u.username) ? 1 : 0;
+      const enriched = enrichPppUsersFromLive(subset, secrets, sessions);
+      for (let i = 0; i < subset.length; i++) {
+        subset[i].status = enriched[i].status;
+        subset[i].online = enriched[i].online;
       }
+      // Persist corrections so map/dashboard stay aligned after first live read.
+      const updOnline = db.prepare('UPDATE pppoe_users SET online = ? WHERE router_id = ? AND username = ?');
+      const updStatus = db.prepare(
+        "UPDATE pppoe_users SET status = 'Active' WHERE router_id = ? AND username = ? AND lower(status) = 'disabled'"
+      );
+      const tx = db.transaction(() => {
+        for (const u of enriched) {
+          updOnline.run(u.online ? 1 : 0, rid, u.username);
+          if (String(u.status).toLowerCase() === 'active' && u.sessionOnline) {
+            updStatus.run(rid, u.username);
+          } else if (String(u.status).toLowerCase() === 'active') {
+            // Also clear disabled when secret is enabled (even if currently offline).
+            const secEnabled = !secrets.find((s) => pppNameKey(s.name) === pppNameKey(u.username))?.disabled;
+            if (secEnabled) updStatus.run(rid, u.username);
+          }
+        }
+      });
+      tx();
       live = true;
     } catch {
       /* keep DB */
@@ -558,28 +569,7 @@ app.get('/api/pppoe/users', async (req, res) => {
   if (router?.host && router?.api_user) {
     try {
       const [secrets, sessions] = await Promise.all([fetchPppSecrets(router), fetchPppActive(router)]);
-      const byName = new Map(secrets.map((s) => [s.name, s]));
-      const onlineSet = new Set(sessions.map((s) => s.name));
-      rows = rows.map((u) => {
-        const sec = byName.get(u.username);
-        const sessionOnline = onlineSet.has(u.username);
-        let status = u.status;
-        let profile = u.profile;
-        if (sec) {
-          profile = sec.profile || u.profile;
-          if (sec.disabled) status = 'disabled';
-          else if (status === 'disabled') status = 'Active';
-        }
-        return {
-          ...u,
-          profile,
-          status,
-          online: sessionOnline ? 1 : 0,
-          sessionOnline,
-          mikrotikProfile: sec?.profile || null,
-          live: true,
-        };
-      });
+      rows = enrichPppUsersFromLive(rows, secrets, sessions).map((u) => ({ ...u, live: true }));
       live = true;
     } catch {
       /* keep DB rows */
@@ -1647,16 +1637,11 @@ app.get('/api/map', async (req, res) => {
     if (!router?.host || !router?.api_user || subset.length === 0) return;
     try {
       const [secrets, sessions] = await Promise.all([fetchPppSecrets(router), fetchPppActive(router)]);
-      const byName = new Map(secrets.map((s) => [s.name, s]));
-      const onlineSet = new Set(sessions.map((s) => s.name));
-      for (const c of subset) {
-        const sec = byName.get(c.username);
-        const sessionOnline = onlineSet.has(c.username);
-        if (sec) {
-          if (sec.disabled) c.status = 'disabled';
-          else if (String(c.status || '').toLowerCase() === 'disabled') c.status = 'Active';
-        }
-        c.online = sessionOnline;
+      const enriched = enrichPppUsersFromLive(subset, secrets, sessions);
+      for (let i = 0; i < subset.length; i++) {
+        subset[i].status = enriched[i].status;
+        subset[i].online = enriched[i].online;
+        if (enriched[i].profile) subset[i].plan = enriched[i].profile;
       }
     } catch {
       /* keep DB rows */

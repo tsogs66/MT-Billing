@@ -35,9 +35,13 @@ const TABS = [
 ];
 
 function userStatusLabel(u: PUser): string {
-  if (u.status === 'disabled') return 'disabled';
-  if (u.sessionOnline || u.online === 1 || u.online === true) return 'online';
-  if (u.status === 'Active') return 'offline';
+  const s = String(u.status || '').toLowerCase();
+  if (u.sessionOnline || u.online === 1 || u.online === true) {
+    if (s === 'expired' || s === 'non-payment') return s;
+    return 'online';
+  }
+  if (s === 'disabled') return 'disabled';
+  if (u.status === 'Active' || s === 'active') return 'offline';
   return u.status;
 }
 

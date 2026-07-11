@@ -342,8 +342,11 @@ export async function fetchRouterInterfaceTraffic(
   });
 }
 
-function rosBool(v: string | undefined): boolean {
-  return v === 'true' || v === 'yes';
+function rosBool(v: string | boolean | number | undefined | null): boolean {
+  if (v === true || v === 1) return true;
+  if (v === false || v === 0 || v == null) return false;
+  const s = String(v).trim().toLowerCase();
+  return s === 'true' || s === 'yes' || s === '1';
 }
 
 export interface FirewallRuleRow {
@@ -672,6 +675,65 @@ export async function fetchPppActive(conn: RouterConn): Promise<PppActiveRow[]> 
       service: a.service || 'pppoe',
       profile: a.profile || '-',
     }));
+  });
+}
+
+/** Case-insensitive lookup for PPP secret / active session names. */
+export function pppNameKey(name: string | null | undefined): string {
+  return String(name || '').trim().toLowerCase();
+}
+
+export interface PppEnrichInput {
+  username: string;
+  status?: string;
+  profile?: string;
+  online?: number | boolean;
+}
+
+/**
+ * Merge MikroTik PPP secret + active-session state onto panel user rows.
+ * - Username match is case-insensitive (Winbox vs DB casing often differs).
+ * - A live session means the account is effectively enabled → clear stale "disabled".
+ * - Only mark disabled when the secret is disabled AND there is no active session.
+ */
+export function enrichPppUsersFromLive<T extends PppEnrichInput>(
+  users: T[],
+  secrets: PppSecretRow[],
+  sessions: PppActiveRow[]
+): (T & { status: string; online: number; sessionOnline: boolean; mikrotikProfile: string | null })[] {
+  const byName = new Map(secrets.map((s) => [pppNameKey(s.name), s]));
+  const onlineSet = new Set(sessions.map((s) => pppNameKey(s.name)).filter(Boolean));
+
+  return users.map((u) => {
+    const key = pppNameKey(u.username);
+    const sec = byName.get(key);
+    const sessionOnline = onlineSet.has(key);
+    let status = String(u.status || 'Active');
+    let profile = u.profile;
+
+    if (sec) {
+      profile = sec.profile || u.profile;
+      if (sec.disabled && !sessionOnline) {
+        status = 'disabled';
+      } else if (!sec.disabled && status.toLowerCase() === 'disabled') {
+        // Secret is enabled on MikroTik — clear stale billing/DB disabled flag.
+        status = 'Active';
+      } else if (sessionOnline && status.toLowerCase() === 'disabled') {
+        // Connected users cannot be treated as disabled for status tiles / map.
+        status = 'Active';
+      }
+    } else if (sessionOnline && status.toLowerCase() === 'disabled') {
+      status = 'Active';
+    }
+
+    return {
+      ...u,
+      profile,
+      status,
+      online: sessionOnline ? 1 : 0,
+      sessionOnline,
+      mikrotikProfile: sec?.profile || null,
+    };
   });
 }
 
