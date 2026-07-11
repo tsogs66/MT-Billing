@@ -94,6 +94,51 @@ write_state() {
 EOF
 }
 
+# Keep live panel data across hard resets (DB may be tracked in older checkouts).
+PRESERVE_PATHS=(
+  "server/data/mt-billing.db"
+  "server/data/mt-billing.db-wal"
+  "server/data/mt-billing.db-shm"
+  "server/data/.last-update.json"
+  "server/.env"
+)
+
+backup_preserve() {
+  PRESERVE_BACKUP="$(mktemp -d /tmp/mt-billing-preserve.XXXXXX)"
+  local p
+  for p in "${PRESERVE_PATHS[@]}"; do
+    if [[ -e "${INSTALL_DIR}/${p}" ]]; then
+      mkdir -p "${PRESERVE_BACKUP}/$(dirname "$p")"
+      cp -a "${INSTALL_DIR}/${p}" "${PRESERVE_BACKUP}/${p}"
+    fi
+  done
+}
+
+restore_preserve() {
+  local p
+  [[ -n "${PRESERVE_BACKUP:-}" && -d "${PRESERVE_BACKUP}" ]] || return 0
+  for p in "${PRESERVE_PATHS[@]}"; do
+    if [[ -e "${PRESERVE_BACKUP}/${p}" ]]; then
+      mkdir -p "${INSTALL_DIR}/$(dirname "$p")"
+      cp -a "${PRESERVE_BACKUP}/${p}" "${INSTALL_DIR}/${p}"
+    fi
+  done
+  rm -rf "${PRESERVE_BACKUP}"
+  PRESERVE_BACKUP=""
+}
+
+# Appliance update: match origin exactly. Local edits to install scripts / tree must not block pull.
+sync_to_origin() {
+  log_info "Syncing to origin/${REPO_BRANCH} (keeping local DB and .env)"
+  backup_preserve
+  run git -C "$INSTALL_DIR" remote set-url origin "$REPO_URL" || true
+  run git -C "$INSTALL_DIR" fetch origin "$REPO_BRANCH"
+  # Discard dirty working tree so fast-forward / reset cannot abort
+  run git -C "$INSTALL_DIR" checkout -f -B "$REPO_BRANCH" "origin/${REPO_BRANCH}"
+  run git -C "$INSTALL_DIR" reset --hard "origin/${REPO_BRANCH}"
+  restore_preserve
+}
+
 if [[ ! -d "$INSTALL_DIR/.git" ]]; then
   log_err "No git checkout at ${INSTALL_DIR}"
   exit 1
@@ -107,6 +152,7 @@ fi
 SVC_USER="$(service_user)"
 SVC_USER="${SVC_USER:-mtbilling}"
 UPDATE_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+PRESERVE_BACKUP=""
 
 log_info "Checking ${REPO_URL} (${REPO_BRANCH})"
 BEFORE="$(local_sha)"
@@ -131,7 +177,7 @@ if [[ "$AUTO_ONLY" == "1" ]]; then
 fi
 
 write_state "running" "$BEFORE" "$REMOTE" "Update in progress…"
-trap 'write_state "failed" "${BEFORE:-}" "${AFTER:-${REMOTE:-}}" "Update failed."' ERR
+trap 'restore_preserve; write_state "failed" "${BEFORE:-}" "${AFTER:-${REMOTE:-}}" "Update failed."; systemctl start mt-billing-api 2>/dev/null || true' ERR
 
 log_info "Stopping MT-Billing API"
 run systemctl stop mt-billing-api
@@ -142,8 +188,7 @@ if declare -F setup_nodejs &>/dev/null; then
 fi
 
 log_info "Pulling latest code"
-run git -C "$INSTALL_DIR" checkout "$REPO_BRANCH"
-run git -C "$INSTALL_DIR" pull --ff-only origin "$REPO_BRANCH"
+sync_to_origin
 AFTER="$(local_sha)"
 log_ok "Checked out ${AFTER:0:12}"
 
