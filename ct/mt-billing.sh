@@ -3,6 +3,13 @@
 # License: MIT
 # Source: https://github.com/tsogs66/MT-Billing
 #
+# Proxmox VE helper — creates an Ubuntu LXC and installs MT-Billing.
+#
+# System requirements (host):
+#   Proxmox VE 7.4+ (8.x recommended), root shell, ≥32 GB free storage,
+#   network bridge, outbound internet. Defaults: 2 vCPU / 4096 MB / 32 GB /
+#   Ubuntu 24.04. Full table: SYSTEM_REQUIREMENTS.md
+#
 # One-liner (Proxmox host, root) — requires a PUBLIC repo on main:
 #   bash -c "$(curl -fsSL https://raw.githubusercontent.com/tsogs66/MT-Billing/main/ct/mt-billing.sh)"
 #
@@ -11,6 +18,7 @@
 #
 # Private repo or local copy:
 #   git clone https://github.com/tsogs66/MT-Billing.git && cd MT-Billing && sudo bash ct/mt-billing.sh
+#   # or: sudo bash scripts/proxmox-install.sh
 
 set -eo pipefail
 
@@ -162,7 +170,7 @@ description
 exit 0
 
 # @@INSTALL_BEGIN@@
-#!/usr/bin/env bash
+# @@INSTALL_BEGIN@@
 source /dev/stdin <<<"$FUNCTIONS_FILE_PATH"
 color
 verb_ip6
@@ -181,7 +189,15 @@ ADMIN_USER="${var_admin_user:-admin}"
 ADMIN_PASS="${var_admin_pass:-admin123}"
 
 msg_info "Installing Dependencies"
-$STD apt-get install -y curl git ca-certificates openssl build-essential python3 nginx
+$STD apt-get install -y \
+  curl \
+  git \
+  ca-certificates \
+  openssl \
+  build-essential \
+  python3 \
+  libsqlite3-dev \
+  nginx
 msg_ok "Installed Dependencies"
 
 NODE_VERSION="22" setup_nodejs

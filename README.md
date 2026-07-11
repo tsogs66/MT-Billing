@@ -41,8 +41,14 @@ topology), sales reporting, hotspot vouchers, inventory and more.
 
 ## Requirements
 
-- Node.js 20+ (developed on Node 22)
-- npm 10+
+See **[SYSTEM_REQUIREMENTS.md](./SYSTEM_REQUIREMENTS.md)** for full hardware and software minimums.
+
+| Deployment | Minimum |
+|------------|---------|
+| **App (any host)** | 2 CPU · 2 GB RAM · 16 GB disk · Node.js 20+ · Ubuntu 22.04/24.04 or Debian 12 |
+| **Proxmox LXC** | Proxmox VE 7.4+ · **2 vCPU · 4 GB RAM · 32 GB disk** (script defaults) |
+| **Raspberry Pi** | Pi 3/4/5 64-bit · 16 GB+ microSD · flash `mt-billing-rpi-arm64.img.xz` |
+| **Orange Pi** | OPi 5 (or Armbian board image) · 16 GB+ storage · flash `mt-billing-opi-arm64.img.xz` |
 
 ## Getting started (development)
 
@@ -87,7 +93,9 @@ data otherwise).
 | `npm run lint`      | Lint the frontend |
 | `npm --prefix server run build` | Compile the backend to `server/dist` |
 | `npm --prefix server run start` | Run the compiled backend |
-| `scripts/proxmox-install.sh` | Wrapper → `ct/mt-billing.sh` Proxmox one-liner |
+| `scripts/proxmox-install.sh` | Proxmox host helper → `ct/mt-billing.sh` |
+| `scripts/build-sbc-flash-image.sh` | Build RPi/OPi `.img.xz` for Balena Etcher / Rufus |
+| `scripts/sync-proxmox-embed.sh` | Sync `install/` into embedded Proxmox guest script |
 
 ## Deploying on Ubuntu (Proxmox)
 
@@ -142,3 +150,14 @@ Or step by step:
    `npm --prefix server run build`.
 4. Serve `client/dist` with nginx and run the compiled API (`npm --prefix server run start`) via
    `systemd`. Point the reverse proxy at the API on `PORT`.
+
+## Deploying on Raspberry Pi / Orange Pi (flash image)
+
+Build one compressed disk image, then flash it with **Balena Etcher** or **Rufus** (DD mode):
+
+```bash
+sudo bash scripts/build-sbc-flash-image.sh --board rpi   # → dist/flash/mt-billing-rpi-arm64.img.xz
+sudo bash scripts/build-sbc-flash-image.sh --board opi   # → dist/flash/mt-billing-opi-arm64.img.xz
+```
+
+Details: [flash/README.md](./flash/README.md) · [SYSTEM_REQUIREMENTS.md](./SYSTEM_REQUIREMENTS.md).

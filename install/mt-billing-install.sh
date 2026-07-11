@@ -4,6 +4,7 @@
 # Source: https://github.com/tsogs66/MT-Billing
 #
 # Guest install script — executed inside the LXC by community-scripts build.func
+# Keep in sync with the embedded block in ct/mt-billing.sh (run scripts/sync-proxmox-embed.sh).
 
 source /dev/stdin <<<"$FUNCTIONS_FILE_PATH"
 color
@@ -30,6 +31,7 @@ $STD apt-get install -y \
   openssl \
   build-essential \
   python3 \
+  libsqlite3-dev \
   nginx
 msg_ok "Installed Dependencies"
 
