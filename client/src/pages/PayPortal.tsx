@@ -134,7 +134,9 @@ export default function PayPortal() {
           <div className="min-w-0">
             <div className="font-semibold text-slate-800">Public pay portal URL</div>
             <p className="text-sm text-slate-500 mt-0.5">
-              Set a globally reachable HTTPS address (your domain, Cloudflare Tunnel, or ngrok) so subscribers can open pay links from anywhere — not just your LAN.
+              Use your DynDNS / public hostname (e.g. <span className="font-mono text-slate-600">https://yourname.duckdns.org</span>)
+              so subscribers can open pay links from anywhere. On the LXC run{' '}
+              <span className="font-mono text-slate-600">install/mt-billing-public-host.sh</span> to configure nginx.
             </p>
           </div>
         </div>

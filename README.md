@@ -180,6 +180,22 @@ sudo bash scripts/proxmox-update.sh
 sudo bash /opt/mt-billing/install/mt-billing-update.sh
 ```
 
+### Public pay links (DynDNS)
+
+Point a DynDNS (DuckDNS, No-IP, Dynu, etc.) hostname at your public IP, forward
+ports **80** (and **443** for HTTPS) to the MT-Billing LXC, then inside the guest:
+
+```bash
+# HTTP (quick)
+sudo bash /opt/mt-billing/install/mt-billing-public-host.sh yourname.duckdns.org
+
+# HTTPS + pay-only public site (recommended)
+sudo bash /opt/mt-billing/install/mt-billing-public-host.sh yourname.duckdns.org --https --pay-only
+```
+
+This configures nginx for that hostname and sets the panel **Public pay portal URL**
+so copied links look like `https://yourname.duckdns.org/pay/...`.
+
 Check only (exit 0 if an update is available):
 
 ```bash
