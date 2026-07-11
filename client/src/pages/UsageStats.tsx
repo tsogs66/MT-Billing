@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Activity, Globe2, RefreshCw, Users } from 'lucide-react';
 import Layout from '../components/Layout';
-import { Card, TabBar, Toolbar } from '../components/ui';
+import { Card, TabBar, Toolbar, DataTable } from '../components/ui';
 import { api } from '../api';
 import { formatBps, TrafficPair } from '../lib/traffic';
 
@@ -62,14 +62,11 @@ export default function UsageStats() {
       return;
     }
     try {
-      const path = u.userId
-        ? `/usage/users/${u.userId}/history`
-        : null;
-      if (!path) {
+      if (!u.userId) {
         setHistory([]);
         return;
       }
-      const r = await api.get(path, { params: { days: 30 } });
+      const r = await api.get(`/usage/users/${u.userId}/history`, { params: { days: 30 } });
       setHistory(r.data.history || []);
     } catch {
       setHistory([]);
@@ -95,6 +92,103 @@ export default function UsageStats() {
   };
 
   const maxServiceHits = Math.max(1, ...services.map((s) => Number(s.hits) || 0));
+
+  const userColumns = useMemo(
+    () => [
+      { key: 'subscriber', label: 'Subscriber' },
+      { key: 'plan', label: 'Plan' },
+      { key: 'live', label: 'Live', align: 'right' as const },
+      { key: 'download', label: 'Download', align: 'right' as const },
+      { key: 'upload', label: 'Upload', align: 'right' as const },
+      { key: 'peak', label: 'Peak ↓', align: 'right' as const },
+    ],
+    []
+  );
+
+  const userRows = useMemo(
+    () =>
+      users.map((u) => {
+        const liveTotal = (Number(u.downloadBps) || 0) + (Number(u.uploadBps) || 0);
+        return {
+          key: u.username,
+          sortValues: {
+            subscriber: `${u.username} ${u.customer || ''}`,
+            plan: u.profile || '',
+            live: liveTotal,
+            download: Number(u.rxBytes) || 0,
+            upload: Number(u.txBytes) || 0,
+            peak: Number(u.peakRxBps) || 0,
+          },
+          cells: [
+            <button
+              type="button"
+              key="sub"
+              className="text-left w-full"
+              onClick={() => openUser(u)}
+            >
+              <div className="font-semibold text-slate-800">{u.username}</div>
+              <div className="text-xs text-slate-400">{u.customer}</div>
+            </button>,
+            <span key="plan" className="text-slate-600">{u.profile || '—'}</span>,
+            <span key="live" className="inline-block text-right w-full">
+              <TrafficPair downloadBps={u.downloadBps} uploadBps={u.uploadBps} />
+            </span>,
+            <span key="dl" className="font-medium text-emerald-700">
+              {formatBytes(u.rxBytes)}
+            </span>,
+            <span key="ul" className="font-medium text-sky-700">
+              {formatBytes(u.txBytes)}
+            </span>,
+            <span key="peak" className="text-xs text-slate-500">
+              {formatBps(u.peakRxBps)}
+            </span>,
+          ],
+        };
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [users]
+  );
+
+  const serviceColumns = useMemo(
+    () => [
+      { key: 'name', label: 'Platform' },
+      { key: 'category', label: 'Category' },
+      { key: 'hits', label: 'DNS hits', align: 'right' as const },
+      { key: 'share', label: 'Share', align: 'right' as const, sortable: false },
+    ],
+    []
+  );
+
+  const serviceRows = useMemo(
+    () =>
+      services.map((s) => {
+        const hits = Number(s.hits) || 0;
+        const pct = Math.max(4, (hits / maxServiceHits) * 100);
+        return {
+          key: s.id,
+          sortValues: {
+            name: s.name || '',
+            category: s.category || '',
+            hits,
+          },
+          cells: [
+            <span key="n" className="font-semibold text-slate-800">
+              {s.name}
+            </span>,
+            <span key="c" className="text-xs text-slate-500">
+              {s.category}
+            </span>,
+            <span key="h" className="font-semibold text-slate-700">
+              {hits}
+            </span>,
+            <div key="bar" className="min-w-[100px] h-2.5 rounded-full bg-slate-100 overflow-hidden ml-auto">
+              <div className="h-full rounded-full bg-brand-500" style={{ width: `${pct}%` }} />
+            </div>,
+          ],
+        };
+      }),
+    [services, maxServiceHits]
+  );
 
   return (
     <Layout title="Usage Statistics">
@@ -132,53 +226,16 @@ export default function UsageStats() {
           <div className="p-4 pt-0">
             <p className="text-xs text-slate-400 mb-3">
               {note ||
-                'Download/Upload totals are real traffic measured from each subscriber’s <pppoe-*> interface since sampling started. First sample sets a baseline; usage accumulates after that.'}
+                'Download/Upload totals are real traffic measured from each subscriber’s <pppoe-*> interface since sampling started. First sample sets a baseline; usage accumulates after that.'}{' '}
+              Click a column header to sort.
             </p>
             <div className="grid lg:grid-cols-5 gap-4">
-              <div className="lg:col-span-3 overflow-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="text-left text-xs text-slate-400 border-b border-slate-100">
-                      <th className="py-2 font-medium">Subscriber</th>
-                      <th className="py-2 font-medium">Plan</th>
-                      <th className="py-2 font-medium text-right">Live</th>
-                      <th className="py-2 font-medium text-right">Download</th>
-                      <th className="py-2 font-medium text-right">Upload</th>
-                      <th className="py-2 font-medium text-right">Peak ↓</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {users.map((u) => (
-                      <tr
-                        key={u.username}
-                        className={`border-b border-slate-50 cursor-pointer hover:bg-slate-50 ${
-                          selected?.username === u.username ? 'bg-brand-50/50' : ''
-                        }`}
-                        onClick={() => openUser(u)}
-                      >
-                        <td className="py-2.5">
-                          <div className="font-semibold text-slate-800">{u.username}</div>
-                          <div className="text-xs text-slate-400">{u.customer}</div>
-                        </td>
-                        <td className="py-2.5 text-slate-600">{u.profile || '—'}</td>
-                        <td className="py-2.5 text-right">
-                          <TrafficPair downloadBps={u.downloadBps} uploadBps={u.uploadBps} />
-                        </td>
-                        <td className="py-2.5 text-right font-medium text-emerald-700">{formatBytes(u.rxBytes)}</td>
-                        <td className="py-2.5 text-right font-medium text-sky-700">{formatBytes(u.txBytes)}</td>
-                        <td className="py-2.5 text-right text-xs text-slate-500">{formatBps(u.peakRxBps)}</td>
-                      </tr>
-                    ))}
-                    {users.length === 0 && (
-                      <tr>
-                        <td colSpan={6} className="py-10 text-center text-slate-400">
-                          No usage yet. Online PPPoE sessions are sampled every minute — click{' '}
-                          <b>Sample now</b> while clients are connected. Totals start after the first baseline sample.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
+              <div className="lg:col-span-3 min-w-0">
+                <DataTable
+                  columns={userColumns}
+                  rows={userRows}
+                  emptyMessage="No usage yet. Online PPPoE sessions are sampled every minute — click Sample now while clients are connected."
+                />
               </div>
               <div className="lg:col-span-2 rounded-xl border border-slate-100 bg-slate-50/50 p-4">
                 <div className="flex items-center gap-2 font-semibold text-slate-800 mb-3">
@@ -209,30 +266,15 @@ export default function UsageStats() {
 
         {tab === 'services' && (
           <div className="p-4 pt-0 space-y-3">
-            <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 mb-2">
-              This tab is a <b>DNS cache popularity snapshot</b> from MikroTik — not exact bytes per website. Per-user
-              byte usage is on the Per User tab.
+            <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
+              This tab is a <b>DNS cache popularity snapshot</b> from MikroTik — not exact bytes per website. Click a
+              column header to sort.
             </div>
-            {services.map((s) => (
-              <div key={s.id} className="flex items-center gap-3">
-                <div className="w-36 shrink-0">
-                  <div className="font-semibold text-slate-800 text-sm">{s.name}</div>
-                  <div className="text-[11px] text-slate-400">{s.category}</div>
-                </div>
-                <div className="flex-1 h-2.5 rounded-full bg-slate-100 overflow-hidden">
-                  <div
-                    className="h-full rounded-full bg-brand-500"
-                    style={{ width: `${Math.max(4, (Number(s.hits) / maxServiceHits) * 100)}%` }}
-                  />
-                </div>
-                <div className="w-16 text-right text-xs font-semibold text-slate-600">{s.hits}</div>
-              </div>
-            ))}
-            {services.length === 0 && (
-              <div className="py-10 text-center text-slate-400 text-sm">
-                No DNS cache entries classified yet. Enable DNS cache on the router, then Sample now.
-              </div>
-            )}
+            <DataTable
+              columns={serviceColumns}
+              rows={serviceRows}
+              emptyMessage="No DNS cache entries classified yet. Enable DNS cache on the router, then Sample now."
+            />
           </div>
         )}
       </Card>
