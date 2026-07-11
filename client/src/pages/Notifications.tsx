@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Mail, MessageSquare, Send, PlayCircle, Bell, Clock, PowerOff } from 'lucide-react';
+import { Mail, MessageSquare, Send, PlayCircle, Bell, Clock } from 'lucide-react';
 import Layout from '../components/Layout';
 import { Card, StatusBadge, Toggle, TabBar, Flash, DataTable, FormField } from '../components/ui';
 import { api } from '../api';
@@ -57,7 +57,7 @@ const TEMPLATES = [
 
 const TABS = [
   { key: 'send', label: 'Send' },
-  { key: 'automation', label: 'Reminders & Auto-disable' },
+  { key: 'automation', label: 'Reminders' },
   { key: 'smtp', label: 'Email (SMTP)' },
   { key: 'sms', label: 'Bulk SMS' },
   { key: 'log', label: 'Log' },
@@ -273,88 +273,116 @@ export default function Notifications() {
       )}
 
       {tab === 'automation' && (
-        <Card title="Reminder & Auto-disable Settings">
+        <Card title="Reminders & Grace Period">
           <div className="space-y-4">
             <div className="rounded-xl bg-slate-50 border border-slate-100 px-4 py-3 text-sm text-slate-600">
-              After SMTP/SMS is configured below, the panel automatically:
+              After SMTP/SMS is configured, the panel automatically:
               <ul className="list-disc ml-5 mt-1.5 space-y-0.5 text-slate-500">
                 <li>Sends payment reminders based on each user&apos;s expiration date</li>
                 <li>
-                  Switches the MikroTik PPP profile to each user&apos;s <b>Profile on Expiry</b> starting
-                  {' '}<b>days before</b> due (same value below) until payment restores the billing plan
+                  Applies each user&apos;s <b>Profile on Expiry</b> on MikroTik starting
+                  {' '}<b>days before</b> due
                 </li>
-                <li>Marks overdue accounts as non-payment</li>
-                <li>Disables the MikroTik PPP secret after the grace period you set</li>
+                <li>
+                  After expiration, waits the <b>grace period</b> below, then disables the MikroTik PPP secret
+                </li>
               </ul>
             </div>
 
-            <Row icon={<Bell size={16} className="text-brand-500" />} label="Expiry / payment reminders" desc="Notify clients before their plan expires">
+            <Row icon={<Bell size={16} className="text-brand-500" />} label="Payment reminders" desc="Notify clients before their plan expires">
               <Toggle label="Expiry reminders" on={!!settings.reminder_enabled} onChange={() => saveSettings({ reminder_enabled: settings.reminder_enabled ? 0 : 1 })} />
             </Row>
-            <div className="flex items-center justify-between text-sm pl-7 gap-3 flex-wrap">
-              <span className="text-slate-500">Days before expiration (reminders + apply Profile on Expiry)</span>
-              <input
-                type="number"
-                min={1}
-                className="input w-20 text-center"
-                value={settings.days_before}
-                onChange={(e) => saveSettings({ days_before: Number(e.target.value) })}
-              />
-            </div>
 
-            <div className="flex items-center gap-4 pl-7 text-sm">
-              <label className="flex items-center gap-2"><Toggle label="Email reminders" on={!!settings.email_enabled} onChange={() => saveSettings({ email_enabled: settings.email_enabled ? 0 : 1 })} /> Email</label>
-              <label className="flex items-center gap-2"><Toggle label="SMS reminders" on={!!settings.sms_enabled} onChange={() => saveSettings({ sms_enabled: settings.sms_enabled ? 0 : 1 })} /> SMS</label>
+            <div className="pl-7 space-y-3">
+              <div className="flex items-center justify-between text-sm gap-3 flex-wrap">
+                <div>
+                  <div className="font-medium text-slate-700">Days before expiration</div>
+                  <div className="text-xs text-slate-400">When to send reminders and apply Profile on Expiry</div>
+                </div>
+                <input
+                  type="number"
+                  min={1}
+                  className="input w-24 text-center"
+                  value={settings.days_before}
+                  onChange={(e) => saveSettings({ days_before: Math.max(1, Number(e.target.value) || 1) })}
+                />
+              </div>
+
+              <div className="flex items-center gap-4 text-sm">
+                <label className="flex items-center gap-2"><Toggle label="Email reminders" on={!!settings.email_enabled} onChange={() => saveSettings({ email_enabled: settings.email_enabled ? 0 : 1 })} /> Email</label>
+                <label className="flex items-center gap-2"><Toggle label="SMS reminders" on={!!settings.sms_enabled} onChange={() => saveSettings({ sms_enabled: settings.sms_enabled ? 0 : 1 })} /> SMS</label>
+              </div>
             </div>
 
             <div className="border-t border-slate-100 pt-3" />
 
-            <Row icon={<PowerOff size={16} className="text-rose-500" />} label="Auto-disable on MikroTik" desc="Disable PPP secret when payment is overdue">
-              <Toggle label="Auto-disable on non-payment" on={!!settings.autodisable_enabled} onChange={() => saveSettings({ autodisable_enabled: settings.autodisable_enabled ? 0 : 1 })} />
+            <Row
+              icon={<Clock size={16} className="text-amber-500" />}
+              label="Grace period"
+              desc="Wait after expiration before disabling the user on MikroTik"
+            >
+              <Toggle
+                label="Auto-disable after grace period"
+                on={!!settings.autodisable_enabled}
+                onChange={() => saveSettings({ autodisable_enabled: settings.autodisable_enabled ? 0 : 1 })}
+              />
             </Row>
-            <div className="flex items-center justify-between text-sm pl-7 gap-3 flex-wrap">
-              <span className="text-slate-500">Grace period after due date before disabling on MikroTik</span>
-              <div className="flex items-center gap-2">
-                <input
-                  type="number"
-                  min={1}
-                  className="input w-20 text-center"
-                  value={
-                    disableUnit === 'days'
-                      ? Math.max(1, Math.round((settings.autodisable_hours || 24) / 24))
-                      : settings.autodisable_hours
-                  }
-                  onChange={(e) => {
-                    const n = Math.max(1, Number(e.target.value) || 1);
-                    saveSettings({
-                      autodisable_hours: disableUnit === 'days' ? n * 24 : n,
-                    });
-                  }}
-                />
-                <select
-                  className="input w-28"
-                  value={disableUnit}
-                  onChange={(e) => {
-                    const unit = e.target.value as 'hours' | 'days';
-                    const currentHours = Number(settings.autodisable_hours) || 24;
-                    const display = unit === 'days' ? Math.max(1, Math.round(currentHours / 24)) : currentHours;
-                    setDisableUnit(unit);
-                    saveSettings({
-                      autodisable_hours: unit === 'days' ? display * 24 : display,
-                    });
-                  }}
-                >
-                  <option value="hours">Hours</option>
-                  <option value="days">Days</option>
-                </select>
+
+            <div className="pl-7 space-y-2">
+              <div className="flex items-center justify-between text-sm gap-3 flex-wrap">
+                <div>
+                  <div className="font-medium text-slate-700">Grace period length</div>
+                  <div className="text-xs text-slate-400">
+                    Time after due date before the PPP secret is disabled on the router
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={1}
+                    className="input w-24 text-center"
+                    disabled={!settings.autodisable_enabled}
+                    value={
+                      disableUnit === 'days'
+                        ? Math.max(1, Math.round((settings.autodisable_hours || 24) / 24))
+                        : settings.autodisable_hours || 24
+                    }
+                    onChange={(e) => {
+                      const n = Math.max(1, Number(e.target.value) || 1);
+                      saveSettings({
+                        autodisable_hours: disableUnit === 'days' ? n * 24 : n,
+                      });
+                    }}
+                  />
+                  <select
+                    className="input w-28"
+                    disabled={!settings.autodisable_enabled}
+                    value={disableUnit}
+                    onChange={(e) => {
+                      const unit = e.target.value as 'hours' | 'days';
+                      const currentHours = Number(settings.autodisable_hours) || 24;
+                      const display = unit === 'days' ? Math.max(1, Math.round(currentHours / 24)) : currentHours;
+                      setDisableUnit(unit);
+                      saveSettings({
+                        autodisable_hours: unit === 'days' ? display * 24 : display,
+                      });
+                    }}
+                  >
+                    <option value="hours">Hours</option>
+                    <option value="days">Days</option>
+                  </select>
+                </div>
               </div>
+              <p className="text-xs text-slate-400">
+                Example: grace period <b>24 hours</b> → user expires today → MikroTik disable tomorrow.
+                Currently stored as <b>{settings.autodisable_hours || 24} hour(s)</b>.
+              </p>
             </div>
-            <p className="text-xs text-slate-400 pl-7">
-              Stored as {settings.autodisable_hours || 24} hour(s). When due, the panel disables the user&apos;s <code className="text-[11px]">/ppp/secret</code> on their router.
-            </p>
 
             <div className="border-t border-slate-100 pt-3 flex items-center justify-between flex-wrap gap-2">
-              <div className="text-xs text-slate-400 flex items-center gap-1.5"><Clock size={14} /> Runs automatically every 5 minutes once email/SMS channels are enabled.</div>
+              <div className="text-xs text-slate-400 flex items-center gap-1.5">
+                <Clock size={14} /> Checks run every 5 minutes. Profile on Expiry is set per user in Add/Edit User.
+              </div>
               <button type="button" className="inline-flex items-center gap-2 text-sm border border-slate-200 rounded-lg px-3 py-1.5 hover:bg-slate-50 text-slate-600" onClick={runNow} disabled={busy}>
                 <PlayCircle size={15} /> Run checks now
               </button>
