@@ -288,6 +288,24 @@ export function migrate() {
   if (!columnExists('routers', 'ssh_port')) {
     db.exec('ALTER TABLE routers ADD COLUMN ssh_port INTEGER DEFAULT 22');
   }
+  const routerMapCols: [string, string][] = [
+    ['lat', 'REAL'],
+    ['lng', 'REAL'],
+    ['address', 'TEXT'],
+  ];
+  for (const [col, type] of routerMapCols) {
+    if (!columnExists('routers', col)) db.exec(`ALTER TABLE routers ADD COLUMN ${col} ${type}`);
+  }
+  const napMapCols: [string, string][] = [
+    ['code', 'TEXT'],
+    ['status', "TEXT DEFAULT 'active'"],
+    ['address', 'TEXT'],
+    ['splitter_ratio', 'TEXT'],
+    ['pon_port', 'INTEGER'],
+  ];
+  for (const [col, type] of napMapCols) {
+    if (!columnExists('naps', col)) db.exec(`ALTER TABLE naps ADD COLUMN ${col} ${type}`);
+  }
 
   db.prepare("UPDATE naps SET name = 'OLT Main Server' WHERE kind = 'olt' AND name = 'OLT-1'").run();
 

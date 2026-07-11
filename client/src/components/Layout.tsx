@@ -23,11 +23,14 @@ export default function Layout({
   title,
   children,
   allowWrite = false,
+  fullBleed = false,
 }: {
   title: string;
   children: ReactNode;
   /** When true, skip read-only UI locks (License activation page). */
   allowWrite?: boolean;
+  /** Fill remaining viewport with minimal padding (e.g. Topology map). */
+  fullBleed?: boolean;
 }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const { canWrite, user } = useAuth();
@@ -66,10 +69,18 @@ export default function Layout({
             </div>
           )}
           <main
-            className={`flex-1 p-4 sm:p-6 lg:p-8 page-enter ${readOnly ? 'panel-readonly' : ''}`}
+            className={
+              fullBleed
+                ? `flex-1 flex flex-col min-h-0 p-0 page-enter ${readOnly ? 'panel-readonly' : ''}`
+                : `flex-1 p-4 sm:p-6 lg:p-8 page-enter ${readOnly ? 'panel-readonly' : ''}`
+            }
             aria-readonly={readOnly || undefined}
           >
-            <div className="max-w-[1600px] mx-auto">{children}</div>
+            {fullBleed ? (
+              <div className="flex-1 flex flex-col min-h-0 w-full">{children}</div>
+            ) : (
+              <div className="max-w-[1600px] mx-auto">{children}</div>
+            )}
           </main>
         </div>
       </div>
