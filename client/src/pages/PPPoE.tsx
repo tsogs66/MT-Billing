@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Users, WifiOff, Activity, Layers, Server, ReceiptText, Plus, Pencil, Trash2, KeyRound, Eye, EyeOff, MapPin, DownloadCloud, RefreshCw, Link2 } from 'lucide-react';
+import { Users, WifiOff, Activity, Layers, Server, ReceiptText, Plus, Pencil, Trash2, KeyRound, Eye, EyeOff, MapPin, DownloadCloud, RefreshCw, Link2, ShieldOff, ShieldCheck, Loader2 } from 'lucide-react';
 import Layout from '../components/Layout';
 import {
   StatusBadge, TabBar, Toolbar, SearchInput, DataTable, IconAction, Toast,
@@ -70,6 +70,14 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
   const [showProfileAdd, setShowProfileAdd] = useState(false);
   const [planEdit, setPlanEdit] = useState<any | null>(null);
   const [showPlanAdd, setShowPlanAdd] = useState(false);
+  const [toggleFor, setToggleFor] = useState<PUser | null>(null);
+  const [toggleBusy, setToggleBusy] = useState(false);
+  const [toggleResult, setToggleResult] = useState<{
+    action: 'enabled' | 'disabled';
+    username: string;
+    customer?: string;
+    detail: string;
+  } | null>(null);
   const { current } = useRouterDevice();
 
   const routerQ = current?.id ? `&routerId=${current.id}` : '';
@@ -152,13 +160,28 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
     }
   };
 
-  const toggleEnabled = async (u: PUser) => {
+  const toggleEnabled = async () => {
+    if (!toggleFor) return;
+    const u = toggleFor;
+    const disabling = u.status !== 'disabled';
+    setToggleBusy(true);
     try {
       const r = await api.post(`/pppoe/users/${u.id}/toggle-enabled`);
-      showToast(`${u.username} ${r.data.status === 'disabled' ? 'disabled' : 'enabled'} in MikroTik.`);
+      const action = (r.data.action || (r.data.status === 'disabled' ? 'disabled' : 'enabled')) as 'enabled' | 'disabled';
+      setToggleFor(null);
+      setToggleResult({
+        action,
+        username: u.username,
+        customer: u.customer,
+        detail: disabling
+          ? 'PPP secret disabled on MikroTik and any active session was disconnected. The user cannot dial in until enabled again.'
+          : 'PPP secret enabled on MikroTik. The user can connect with their credentials again.',
+      });
       loadUsers();
     } catch (e: any) {
       showToast(e?.response?.data?.error || 'Toggle failed.');
+    } finally {
+      setToggleBusy(false);
     }
   };
 
@@ -444,7 +467,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                         icon={KeyRound}
                         title={u.status === 'disabled' ? 'Enable in MikroTik' : 'Disable in MikroTik'}
                         tone={u.status === 'disabled' ? 'emerald' : 'rose'}
-                        onClick={() => toggleEnabled(u)}
+                        onClick={() => setToggleFor(u)}
                       />
                       <IconAction icon={Trash2} title="Delete" tone="rose" onClick={() => remove(u.id)} />
                     </div>,
@@ -746,6 +769,94 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
             loadProfiles();
           }}
         />
+      )}
+
+      {toggleFor && (
+        <Modal
+          title={toggleFor.status === 'disabled' ? 'Enable user' : 'Disable user'}
+          subtitle={`${toggleFor.username}${toggleFor.customer ? ` · ${toggleFor.customer}` : ''}`}
+          onClose={() => !toggleBusy && setToggleFor(null)}
+          footer={
+            <>
+              <button type="button" className="btn-secondary" onClick={() => setToggleFor(null)} disabled={toggleBusy}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className={toggleFor.status === 'disabled' ? 'btn-primary' : 'btn-primary bg-rose-600 hover:bg-rose-700 from-rose-600 to-rose-700'}
+                onClick={toggleEnabled}
+                disabled={toggleBusy}
+              >
+                {toggleBusy ? (
+                  <><Loader2 size={16} className="animate-spin" /> Working…</>
+                ) : toggleFor.status === 'disabled' ? (
+                  'Enable user'
+                ) : (
+                  'Disable user'
+                )}
+              </button>
+            </>
+          }
+        >
+          <div className="flex items-start gap-3">
+            <div
+              className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+                toggleFor.status === 'disabled' ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'
+              }`}
+            >
+              {toggleFor.status === 'disabled' ? <ShieldCheck size={22} /> : <ShieldOff size={22} />}
+            </div>
+            <div className="min-w-0 text-sm text-slate-600 leading-relaxed space-y-2">
+              {toggleFor.status === 'disabled' ? (
+                <>
+                  <p>
+                    Enable <span className="font-semibold text-slate-800">{toggleFor.username}</span> on MikroTik?
+                  </p>
+                  <ul className="list-disc pl-4 space-y-1 text-slate-500">
+                    <li>PPP secret will be set to <b className="text-slate-700">enabled</b></li>
+                    <li>The user will be able to dial in again with their credentials</li>
+                    <li>Panel status will change to Active</li>
+                  </ul>
+                </>
+              ) : (
+                <>
+                  <p>
+                    Disable <span className="font-semibold text-slate-800">{toggleFor.username}</span> on MikroTik?
+                  </p>
+                  <ul className="list-disc pl-4 space-y-1 text-slate-500">
+                    <li>PPP secret will be set to <b className="text-slate-700">disabled</b></li>
+                    <li>Any active session will be disconnected immediately</li>
+                    <li>The user cannot reconnect until enabled again</li>
+                  </ul>
+                </>
+              )}
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {toggleResult && (
+        <Modal
+          title={toggleResult.action === 'disabled' ? 'User disabled' : 'User enabled'}
+          subtitle={`${toggleResult.username}${toggleResult.customer ? ` · ${toggleResult.customer}` : ''}`}
+          onClose={() => setToggleResult(null)}
+          footer={
+            <button type="button" className="btn-primary" onClick={() => setToggleResult(null)}>
+              OK
+            </button>
+          }
+        >
+          <div className="flex items-start gap-3">
+            <div
+              className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+                toggleResult.action === 'disabled' ? 'bg-rose-50 text-rose-600' : 'bg-emerald-50 text-emerald-600'
+              }`}
+            >
+              {toggleResult.action === 'disabled' ? <ShieldOff size={22} /> : <ShieldCheck size={22} />}
+            </div>
+            <p className="text-sm text-slate-600 leading-relaxed">{toggleResult.detail}</p>
+          </div>
+        </Modal>
       )}
 
       <Toast message={toast} />

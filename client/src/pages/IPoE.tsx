@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   Users, WifiOff, Activity, Layers, Server, ReceiptText, Plus, Pencil, Trash2,
-  RefreshCw, Lock, Unlock, Banknote,
+  RefreshCw, Lock, Unlock, Banknote, Loader2,
 } from 'lucide-react';
 import Layout from '../components/Layout';
 import {
@@ -39,6 +39,14 @@ export default function IPoE() {
   const [showServerAdd, setShowServerAdd] = useState(false);
   const [planEdit, setPlanEdit] = useState<any | null>(null);
   const [showPlanAdd, setShowPlanAdd] = useState(false);
+  const [blockFor, setBlockFor] = useState<any | null>(null);
+  const [blockBusy, setBlockBusy] = useState(false);
+  const [blockResult, setBlockResult] = useState<{
+    action: 'blocked' | 'unblocked';
+    name: string;
+    mac: string;
+    detail: string;
+  } | null>(null);
   const { current } = useRouterDevice();
 
   const showToast = (msg: string) => {
@@ -142,17 +150,31 @@ export default function IPoE() {
     }
   };
 
-  const toggleBlock = async (lease: any) => {
+  const toggleBlock = async () => {
+    if (!blockFor) return;
+    const lease = blockFor;
+    const blocking = !lease.blocked;
+    setBlockBusy(true);
     try {
       await api.post(`/ipoe/leases/${encodeURIComponent(lease.mac)}/toggle-block`, {
         routerId: current?.id,
         id: lease.id,
-        blocked: !lease.blocked,
+        blocked: blocking,
       });
-      showToast(lease.blocked ? 'Lease unblocked' : 'Lease blocked');
+      setBlockFor(null);
+      setBlockResult({
+        action: blocking ? 'blocked' : 'unblocked',
+        name: lease.name || lease.mac,
+        mac: lease.mac,
+        detail: blocking
+          ? 'Lease is blocked on MikroTik. The client will lose (or be denied) network access until unblocked.'
+          : 'Lease is unblocked on MikroTik. The client can obtain/use its DHCP lease again.',
+      });
       loadLeases();
     } catch (e: any) {
       showToast(e?.response?.data?.error || 'Toggle failed');
+    } finally {
+      setBlockBusy(false);
     }
   };
 
@@ -236,7 +258,7 @@ export default function IPoE() {
           icon={l.blocked ? Unlock : Lock}
           title={l.blocked ? 'Unblock' : 'Block'}
           tone={l.blocked ? 'emerald' : 'rose'}
-          onClick={() => toggleBlock(l)}
+          onClick={() => setBlockFor(l)}
         />
       </div>,
     ],
@@ -507,6 +529,93 @@ export default function IPoE() {
           onSaved={() => { setShowPlanAdd(false); setPlanEdit(null); loadPlans(); showToast('Plan saved'); }}
         />
       )}
+
+      {blockFor && (
+        <Modal
+          title={blockFor.blocked ? 'Unblock lease' : 'Block lease'}
+          subtitle={`${blockFor.name || 'Lease'} · ${blockFor.mac}`}
+          onClose={() => !blockBusy && setBlockFor(null)}
+          footer={
+            <>
+              <button type="button" className="btn-secondary" onClick={() => setBlockFor(null)} disabled={blockBusy}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className={blockFor.blocked ? 'btn-primary' : 'btn-primary bg-rose-600 hover:bg-rose-700 from-rose-600 to-rose-700'}
+                onClick={toggleBlock}
+                disabled={blockBusy}
+              >
+                {blockBusy ? (
+                  <><Loader2 size={16} className="animate-spin" /> Working…</>
+                ) : blockFor.blocked ? (
+                  'Unblock lease'
+                ) : (
+                  'Block lease'
+                )}
+              </button>
+            </>
+          }
+        >
+          <div className="flex items-start gap-3">
+            <div
+              className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+                blockFor.blocked ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'
+              }`}
+            >
+              {blockFor.blocked ? <Unlock size={22} /> : <Lock size={22} />}
+            </div>
+            <div className="min-w-0 text-sm text-slate-600 leading-relaxed space-y-2">
+              {blockFor.blocked ? (
+                <>
+                  <p>
+                    Unblock <span className="font-semibold text-slate-800">{blockFor.name || blockFor.mac}</span> on MikroTik?
+                  </p>
+                  <ul className="list-disc pl-4 space-y-1 text-slate-500">
+                    <li>DHCP lease will be set to <b className="text-slate-700">enabled</b></li>
+                    <li>The client can use this MAC/IP again</li>
+                  </ul>
+                </>
+              ) : (
+                <>
+                  <p>
+                    Block <span className="font-semibold text-slate-800">{blockFor.name || blockFor.mac}</span> on MikroTik?
+                  </p>
+                  <ul className="list-disc pl-4 space-y-1 text-slate-500">
+                    <li>DHCP lease will be set to <b className="text-slate-700">disabled</b></li>
+                    <li>Network access for this MAC will be denied</li>
+                  </ul>
+                </>
+              )}
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {blockResult && (
+        <Modal
+          title={blockResult.action === 'blocked' ? 'Lease blocked' : 'Lease unblocked'}
+          subtitle={`${blockResult.name} · ${blockResult.mac}`}
+          onClose={() => setBlockResult(null)}
+          footer={
+            <button type="button" className="btn-primary" onClick={() => setBlockResult(null)}>
+              OK
+            </button>
+          }
+        >
+          <div className="flex items-start gap-3">
+            <div
+              className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+                blockResult.action === 'blocked' ? 'bg-rose-50 text-rose-600' : 'bg-emerald-50 text-emerald-600'
+              }`}
+            >
+              {blockResult.action === 'blocked' ? <Lock size={22} /> : <Unlock size={22} />}
+            </div>
+            <p className="text-sm text-slate-600 leading-relaxed">{blockResult.detail}</p>
+          </div>
+        </Modal>
+      )}
+
       <Toast message={toast} />
     </Layout>
   );

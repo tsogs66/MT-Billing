@@ -27,6 +27,7 @@ import {
   updatePppProfile,
   removePppProfile,
   setPppSecretEnabled,
+  removePppActiveByName,
   addPppSecret,
   updatePppSecret,
   removePppSecret,
@@ -871,6 +872,13 @@ app.post('/api/pppoe/users/:id/toggle-enabled', async (req, res) => {
   if (router?.host && router?.api_user) {
     try {
       await setPppSecretEnabled(router, u.username, !disabling);
+      if (disabling) {
+        try {
+          await removePppActiveByName(router, u.username);
+        } catch {
+          /* session drop is best-effort */
+        }
+      }
     } catch (e: any) {
       return res.status(502).json({ error: e?.message || 'Could not update PPP secret on MikroTik' });
     }
@@ -878,14 +886,21 @@ app.post('/api/pppoe/users/:id/toggle-enabled', async (req, res) => {
   if (disabling) {
     db.prepare("UPDATE pppoe_users SET status = 'disabled', online = 0 WHERE id = ?").run(id);
   } else {
-    db.prepare("UPDATE pppoe_users SET status = 'Active', online = 1, nonpayment_since = NULL WHERE id = ?").run(id);
+    db.prepare("UPDATE pppoe_users SET status = 'Active', online = 0, nonpayment_since = NULL WHERE id = ?").run(id);
   }
   db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
     'info',
     'mikrotik',
     `${disabling ? 'Disabled' : 'Enabled'} ${u.service} secret for ${u.username}`
   );
-  res.json({ ok: true, status: disabling ? 'disabled' : 'Active', user: db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(id) });
+  res.json({
+    ok: true,
+    status: disabling ? 'disabled' : 'Active',
+    action: disabling ? 'disabled' : 'enabled',
+    username: u.username,
+    customer: u.customer_name,
+    user: db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(id),
+  });
 });
 
 app.delete('/api/pppoe/users/:id', async (req, res) => {

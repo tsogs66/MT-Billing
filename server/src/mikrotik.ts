@@ -706,8 +706,9 @@ export interface PppEnrichInput {
 /**
  * Merge MikroTik PPP secret + active-session state onto panel user rows.
  * - Username match is case-insensitive (Winbox vs DB casing often differs).
- * - A live session means the account is effectively enabled → clear stale "disabled".
- * - Only mark disabled when the secret is disabled AND there is no active session.
+ * - Secret disabled on MikroTik wins — keep status disabled even if a session
+ *   has not dropped yet (disable + remove-active is async on the router).
+ * - Only clear a DB "disabled" flag when the secret is explicitly enabled.
  */
 export function enrichPppUsersFromLive<T extends PppEnrichInput>(
   users: T[],
@@ -726,17 +727,12 @@ export function enrichPppUsersFromLive<T extends PppEnrichInput>(
 
     if (sec) {
       profile = sec.profile || u.profile;
-      if (sec.disabled && !sessionOnline) {
+      if (sec.disabled) {
         status = 'disabled';
-      } else if (!sec.disabled && status.toLowerCase() === 'disabled') {
+      } else if (status.toLowerCase() === 'disabled') {
         // Secret is enabled on MikroTik — clear stale billing/DB disabled flag.
         status = 'Active';
-      } else if (sessionOnline && status.toLowerCase() === 'disabled') {
-        // Connected users cannot be treated as disabled for status tiles / map.
-        status = 'Active';
       }
-    } else if (sessionOnline && status.toLowerCase() === 'disabled') {
-      status = 'Active';
     }
 
     return {
@@ -799,6 +795,30 @@ export async function setPppSecretEnabled(conn: RouterConn, nameOrId: string, en
   await withRouter(conn, (api) =>
     api.write(enabled ? '/ppp/secret/enable' : '/ppp/secret/disable', [`=numbers=${nameOrId}`])
   );
+}
+
+/** Remove active PPP session(s) for a username (case-insensitive). */
+export async function removePppActiveByName(conn: RouterConn, username: string): Promise<number> {
+  const key = pppNameKey(username);
+  if (!key) return 0;
+  return withRouter(conn, async (api) => {
+    const rows = (await api.write('/ppp/active/print')) as Record<string, string>[];
+    const ids = (rows || [])
+      .filter((r) => pppNameKey(r.name) === key && r['.id'])
+      .map((r) => r['.id']);
+    for (const id of ids) {
+      try {
+        await api.write('/ppp/active/remove', [`=.id=${id}`]);
+      } catch {
+        try {
+          await api.write('/ppp/active/remove', [`=numbers=${id}`]);
+        } catch {
+          /* session may already be gone */
+        }
+      }
+    }
+    return ids.length;
+  });
 }
 
 /** Ensure a PPP profile exists on the router (create empty one if missing). */
