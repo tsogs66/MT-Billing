@@ -8,7 +8,7 @@ import {
 } from './mikrotik.js';
 import { notifyClientChannels } from './notify.js';
 
-/** Map hostnames / domains to platform / service categories. */
+/** Map hostnames / domains to platform / service categories (DNS popularity only). */
 const SERVICE_RULES: { id: string; name: string; category: string; match: RegExp }[] = [
   { id: 'youtube', name: 'YouTube', category: 'Video & Streaming', match: /youtube|youtu\.be|googlevideo|ytimg/i },
   { id: 'netflix', name: 'Netflix', category: 'Video & Streaming', match: /netflix|nflx/i },
@@ -83,12 +83,21 @@ function ensureFairUseRow() {
 }
 
 function todayLocal(): string {
-  return new Date().toISOString().slice(0, 10);
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
 }
 
 /** In-memory sustained-overage tracker: username → first breach timestamp */
 const overCapSince = new Map<string, number>();
 
+/**
+ * Poll live MikroTik counters and accumulate real per-user byte deltas.
+ * Absolute interface counters are snapshotted; only the increase since the last
+ * sample is added to today's usage (handles router reboot / counter reset).
+ */
 export async function pollUsageAndFairUse() {
   ensureUsageTables();
   const settings = getFairUseSettings();
@@ -96,6 +105,10 @@ export async function pollUsageAndFairUse() {
   let samples = 0;
   let alerts = 0;
   let services = 0;
+  let bytesDelta = 0;
+
+  const day = todayLocal();
+  const nowIso = new Date().toISOString();
 
   for (const router of routers) {
     try {
@@ -108,40 +121,64 @@ export async function pollUsageAndFairUse() {
         fetchPppInterfaceBytes(router, names),
       ]);
 
-      const day = todayLocal();
-      const nowIso = new Date().toISOString();
-
       for (const name of names) {
         const t = traffic[name] || { download: 0, upload: 0 };
         const b = bytes[name] || { rxBytes: 0, txBytes: 0 };
+        const absDown = Math.max(0, Number(b.rxBytes) || 0); // subscriber download (iface TX)
+        const absUp = Math.max(0, Number(b.txBytes) || 0); // subscriber upload (iface RX)
         const user = db.prepare('SELECT * FROM pppoe_users WHERE username = ? COLLATE NOCASE').get(name) as any;
 
-        db.prepare(
-          `INSERT INTO usage_samples (subject_type, subject_key, router_id, rx_bytes, tx_bytes, rx_bps, tx_bps, sampled_at)
-           VALUES ('pppoe', ?, ?, ?, ?, ?, ?, ?)`
-        ).run(name, router.id, b.rxBytes, b.txBytes, t.download, t.upload, nowIso);
+        const prev = db
+          .prepare(
+            `SELECT rx_bytes AS rx, tx_bytes AS tx FROM usage_last_counters
+             WHERE subject_type = 'pppoe' AND subject_key = ? COLLATE NOCASE AND router_id = ?`
+          )
+          .get(name, router.id) as { rx: number; tx: number } | undefined;
 
-        // Daily rollup: store latest counters (delta computed at query time via max-min if needed)
+        let deltaDown = 0;
+        let deltaUp = 0;
+        if (prev) {
+          // Counter increased → real usage since last poll. Dropped → reboot/reset.
+          deltaDown = absDown >= prev.rx ? absDown - prev.rx : 0;
+          deltaUp = absUp >= prev.tx ? absUp - prev.tx : 0;
+        }
+        // First sample only establishes baseline (delta 0) so we don't credit lifetime totals.
+
+        db.prepare(
+          `INSERT INTO usage_last_counters (subject_type, subject_key, router_id, rx_bytes, tx_bytes, updated_at)
+           VALUES ('pppoe', ?, ?, ?, ?, ?)
+           ON CONFLICT(subject_type, subject_key, router_id) DO UPDATE SET
+             rx_bytes = excluded.rx_bytes,
+             tx_bytes = excluded.tx_bytes,
+             updated_at = excluded.updated_at`
+        ).run(name, router.id, absDown, absUp, nowIso);
+
+        db.prepare(
+          `INSERT INTO usage_samples (subject_type, subject_key, router_id, rx_bytes, tx_bytes, rx_bps, tx_bps, delta_rx, delta_tx, sampled_at)
+           VALUES ('pppoe', ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).run(name, router.id, absDown, absUp, t.download, t.upload, deltaDown, deltaUp, nowIso);
+
         db.prepare(
           `INSERT INTO usage_daily (subject_type, subject_key, day, rx_bytes, tx_bytes, peak_rx_bps, peak_tx_bps)
            VALUES ('pppoe', ?, ?, ?, ?, ?, ?)
            ON CONFLICT(subject_type, subject_key, day) DO UPDATE SET
-             rx_bytes = MAX(rx_bytes, excluded.rx_bytes),
-             tx_bytes = MAX(tx_bytes, excluded.tx_bytes),
+             rx_bytes = rx_bytes + excluded.rx_bytes,
+             tx_bytes = tx_bytes + excluded.tx_bytes,
              peak_rx_bps = MAX(peak_rx_bps, excluded.peak_rx_bps),
              peak_tx_bps = MAX(peak_tx_bps, excluded.peak_tx_bps)`
-        ).run(name, day, b.rxBytes, b.txBytes, t.download, t.upload);
+        ).run(name, day, deltaDown, deltaUp, Math.round(t.download), Math.round(t.upload));
+
         samples++;
+        bytesDelta += deltaDown + deltaUp;
 
         if (!settings.enabled || !user) continue;
         const prof = db.prepare('SELECT rate_limit FROM profiles WHERE name = ?').get(user.profile) as
           | { rate_limit?: string }
           | undefined;
         const limitRaw = String(prof?.rate_limit || '');
-        // rate-limit like "50M/50M" — use download leg
         const downLimit = parseRosRate(limitRaw.split('/')[0] || limitRaw);
         if (downLimit <= 0) continue;
-        const cap = downLimit * (Number(settings.cap_percent) || 95) / 100;
+        const cap = (downLimit * (Number(settings.cap_percent) || 95)) / 100;
         const key = `${router.id}:${name.toLowerCase()}`;
         if (t.download >= cap) {
           if (!overCapSince.has(key)) overCapSince.set(key, Date.now());
@@ -179,7 +216,7 @@ export async function pollUsageAndFairUse() {
         }
       }
 
-      // Platform / website popularity from DNS cache
+      // DNS popularity — live snapshot of cache contents (not cumulative fake totals)
       try {
         const namesDns = await fetchDnsCacheNames(router);
         const counts = new Map<string, { name: string; category: string; hits: number }>();
@@ -189,11 +226,11 @@ export async function pollUsageAndFairUse() {
           prev.hits++;
           counts.set(c.id, prev);
         }
+        db.prepare('DELETE FROM usage_services WHERE day = ? AND router_id = ?').run(day, router.id);
         for (const [sid, v] of counts) {
           db.prepare(
             `INSERT INTO usage_services (day, service_id, service_name, category, hits, router_id)
-             VALUES (?, ?, ?, ?, ?, ?)
-             ON CONFLICT(day, service_id, router_id) DO UPDATE SET hits = hits + excluded.hits`
+             VALUES (?, ?, ?, ?, ?, ?)`
           ).run(day, sid, v.name, v.category, v.hits, router.id);
           services++;
         }
@@ -205,7 +242,7 @@ export async function pollUsageAndFairUse() {
     }
   }
 
-  return { samples, alerts, services, routers: routers.length };
+  return { samples, alerts, services, bytesDelta, routers: routers.length, accounting: 'delta' };
 }
 
 export function ensureUsageTables() {
@@ -250,6 +287,8 @@ export function ensureUsageTables() {
       tx_bytes INTEGER DEFAULT 0,
       rx_bps INTEGER DEFAULT 0,
       tx_bps INTEGER DEFAULT 0,
+      delta_rx INTEGER DEFAULT 0,
+      delta_tx INTEGER DEFAULT 0,
       sampled_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
     CREATE TABLE IF NOT EXISTS usage_daily (
@@ -271,7 +310,47 @@ export function ensureUsageTables() {
       router_id INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (day, service_id, router_id)
     );
+    CREATE TABLE IF NOT EXISTS usage_last_counters (
+      subject_type TEXT NOT NULL,
+      subject_key TEXT NOT NULL,
+      router_id INTEGER NOT NULL,
+      rx_bytes INTEGER DEFAULT 0,
+      tx_bytes INTEGER DEFAULT 0,
+      updated_at TEXT,
+      PRIMARY KEY (subject_type, subject_key, router_id)
+    );
+    CREATE TABLE IF NOT EXISTS usage_meta (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    );
   `);
+
+  // Add delta columns on older DBs
+  try {
+    const cols = db.prepare('PRAGMA table_info(usage_samples)').all() as { name: string }[];
+    const names = new Set(cols.map((c) => c.name));
+    if (!names.has('delta_rx')) db.exec('ALTER TABLE usage_samples ADD COLUMN delta_rx INTEGER DEFAULT 0');
+    if (!names.has('delta_tx')) db.exec('ALTER TABLE usage_samples ADD COLUMN delta_tx INTEGER DEFAULT 0');
+  } catch {
+    /* ignore */
+  }
+
+  // One-time wipe of absolute-counter "usage" that looked predefined / wrong
+  const migrated = db.prepare("SELECT value FROM usage_meta WHERE key = 'accounting_v2'").get() as
+    | { value: string }
+    | undefined;
+  if (!migrated) {
+    db.exec(`
+      DELETE FROM usage_daily;
+      DELETE FROM usage_samples;
+      DELETE FROM usage_services;
+      DELETE FROM usage_last_counters;
+    `);
+    db.prepare("INSERT OR REPLACE INTO usage_meta (key, value) VALUES ('accounting_v2', ?)").run(
+      new Date().toISOString()
+    );
+  }
+
   ensureFairUseRow();
 }
 
@@ -311,7 +390,7 @@ export function getUsageSummary(days = 7) {
        WHERE subject_type = 'pppoe' AND day >= date('now', ?)
        GROUP BY subject_key
        ORDER BY (SUM(rx_bytes)+SUM(tx_bytes)) DESC
-       LIMIT 50`
+       LIMIT 100`
     )
     .all(`-${Math.max(1, days)} days`) as any[];
 
@@ -319,14 +398,58 @@ export function getUsageSummary(days = 7) {
     const client = db
       .prepare('SELECT id, customer_name, profile, account_number FROM pppoe_users WHERE username = ? COLLATE NOCASE')
       .get(u.username) as any;
+    const live = db
+      .prepare(
+        `SELECT rx_bps AS downloadBps, tx_bps AS uploadBps, sampled_at AS sampledAt
+         FROM usage_samples
+         WHERE subject_type = 'pppoe' AND subject_key = ? COLLATE NOCASE
+         ORDER BY id DESC LIMIT 1`
+      )
+      .get(u.username) as any;
     return {
       ...u,
       customer: client?.customer_name || u.username,
       profile: client?.profile || null,
       account: client?.account_number || null,
       userId: client?.id || null,
+      downloadBps: live?.downloadBps ?? 0,
+      uploadBps: live?.uploadBps ?? 0,
+      sampledAt: live?.sampledAt || null,
     };
   });
+
+  // Also include currently-online users with 0 accumulated bytes so the list isn't empty
+  const online = db
+    .prepare(
+      `SELECT username, customer_name AS customer, profile, account_number AS account, id AS userId
+       FROM pppoe_users WHERE online = 1`
+    )
+    .all() as any[];
+  const seen = new Set(enriched.map((u) => String(u.username).toLowerCase()));
+  for (const o of online) {
+    if (seen.has(String(o.username).toLowerCase())) continue;
+    const live = db
+      .prepare(
+        `SELECT rx_bps AS downloadBps, tx_bps AS uploadBps, sampled_at AS sampledAt
+         FROM usage_samples WHERE subject_type = 'pppoe' AND subject_key = ? COLLATE NOCASE
+         ORDER BY id DESC LIMIT 1`
+      )
+      .get(o.username) as any;
+    enriched.push({
+      username: o.username,
+      customer: o.customer || o.username,
+      profile: o.profile,
+      account: o.account,
+      userId: o.userId,
+      rxBytes: 0,
+      txBytes: 0,
+      peakRxBps: live?.downloadBps || 0,
+      peakTxBps: live?.uploadBps || 0,
+      downloadBps: live?.downloadBps ?? 0,
+      uploadBps: live?.uploadBps ?? 0,
+      sampledAt: live?.sampledAt || null,
+    });
+  }
 
   const services = db
     .prepare(
@@ -340,7 +463,20 @@ export function getUsageSummary(days = 7) {
     )
     .all(`-${Math.max(1, days)} days`);
 
-  return { users: enriched, services, days };
+  const sampleCount = (
+    db.prepare(`SELECT COUNT(*) AS c FROM usage_samples WHERE datetime(sampled_at) >= datetime('now', '-1 day')`).get() as {
+      c: number;
+    }
+  ).c;
+
+  return {
+    users: enriched,
+    services,
+    days,
+    accounting: 'delta',
+    sampleCount,
+    note: 'Per-user download/upload are real byte deltas from MikroTik <pppoe-*> interfaces. Platforms tab is a DNS-cache popularity snapshot, not bytes per site.',
+  };
 }
 
 let usageStarted = false;

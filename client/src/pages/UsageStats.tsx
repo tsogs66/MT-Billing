@@ -3,7 +3,7 @@ import { Activity, Globe2, RefreshCw, Users } from 'lucide-react';
 import Layout from '../components/Layout';
 import { Card, TabBar, Toolbar } from '../components/ui';
 import { api } from '../api';
-import { formatBps } from '../lib/traffic';
+import { formatBps, TrafficPair } from '../lib/traffic';
 
 function formatBytes(n: number): string {
   const v = Number(n) || 0;
@@ -24,9 +24,12 @@ export default function UsageStats() {
   const [days, setDays] = useState(7);
   const [users, setUsers] = useState<any[]>([]);
   const [services, setServices] = useState<any[]>([]);
+  const [note, setNote] = useState('');
+  const [sampleCount, setSampleCount] = useState(0);
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState<any | null>(null);
   const [history, setHistory] = useState<any[]>([]);
+  const [toast, setToast] = useState('');
 
   const load = () => {
     setBusy(true);
@@ -35,6 +38,8 @@ export default function UsageStats() {
       .then((r) => {
         setUsers(r.data.users || []);
         setServices(r.data.services || []);
+        setNote(r.data.note || '');
+        setSampleCount(Number(r.data.sampleCount) || 0);
       })
       .catch(() => {
         setUsers([]);
@@ -45,17 +50,26 @@ export default function UsageStats() {
 
   useEffect(() => {
     load();
+    const id = window.setInterval(load, 30_000);
+    return () => window.clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [days]);
 
   const openUser = async (u: any) => {
     setSelected(u);
-    if (!u.userId) {
+    if (!u.username) {
       setHistory([]);
       return;
     }
     try {
-      const r = await api.get(`/usage/users/${u.userId}/history`, { params: { days: 30 } });
+      const path = u.userId
+        ? `/usage/users/${u.userId}/history`
+        : null;
+      if (!path) {
+        setHistory([]);
+        return;
+      }
+      const r = await api.get(path, { params: { days: 30 } });
       setHistory(r.data.history || []);
     } catch {
       setHistory([]);
@@ -64,9 +78,17 @@ export default function UsageStats() {
 
   const poll = async () => {
     setBusy(true);
+    setToast('');
     try {
-      await api.post('/usage/poll');
+      const r = await api.post('/usage/poll');
+      const d = r.data || {};
+      setToast(
+        `Sampled ${d.samples || 0} online session(s)` +
+          (d.bytesDelta != null ? ` · +${formatBytes(d.bytesDelta)} since last poll` : '')
+      );
       load();
+    } catch (e: any) {
+      setToast(e?.response?.data?.error || 'Sample failed — check router API credentials');
     } finally {
       setBusy(false);
     }
@@ -76,93 +98,120 @@ export default function UsageStats() {
 
   return (
     <Layout title="Usage Statistics">
+      {toast && (
+        <div className="mb-4 text-sm text-slate-700 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2">{toast}</div>
+      )}
       <Card noPadding interactive className="overflow-hidden">
         <TabBar tabs={TABS} active={tab} onChange={setTab} className="px-2" />
         <Toolbar
           left={
             <div className="text-sm text-slate-500">
-              Traffic samples from MikroTik · DNS cache for platforms · last{' '}
-              <select className="input py-1 text-xs inline-block w-auto ml-1" value={days} onChange={(e) => setDays(Number(e.target.value))}>
+              Live MikroTik byte counters (deltas) · last{' '}
+              <select
+                className="input py-1 text-xs inline-block w-auto ml-1"
+                value={days}
+                onChange={(e) => setDays(Number(e.target.value))}
+              >
                 <option value={1}>1 day</option>
                 <option value={7}>7 days</option>
                 <option value={30}>30 days</option>
               </select>
+              {sampleCount > 0 && (
+                <span className="ml-2 text-xs text-slate-400">{sampleCount} samples (24h)</span>
+              )}
             </div>
           }
           right={
-            <>
-              <button type="button" className="btn-secondary" onClick={poll} disabled={busy}>
-                <RefreshCw size={16} className={busy ? 'animate-spin' : ''} /> Sample now
-              </button>
-            </>
+            <button type="button" className="btn-secondary" onClick={poll} disabled={busy}>
+              <RefreshCw size={16} className={busy ? 'animate-spin' : ''} /> Sample now
+            </button>
           }
         />
 
         {tab === 'users' && (
-          <div className="p-4 pt-0 grid lg:grid-cols-5 gap-4">
-            <div className="lg:col-span-3 overflow-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-left text-xs text-slate-400 border-b border-slate-100">
-                    <th className="py-2 font-medium">Subscriber</th>
-                    <th className="py-2 font-medium">Plan</th>
-                    <th className="py-2 font-medium text-right">Download</th>
-                    <th className="py-2 font-medium text-right">Upload</th>
-                    <th className="py-2 font-medium text-right">Peak ↓</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {users.map((u) => (
-                    <tr
-                      key={u.username}
-                      className={`border-b border-slate-50 cursor-pointer hover:bg-slate-50 ${selected?.username === u.username ? 'bg-brand-50/50' : ''}`}
-                      onClick={() => openUser(u)}
-                    >
-                      <td className="py-2.5">
-                        <div className="font-semibold text-slate-800">{u.username}</div>
-                        <div className="text-xs text-slate-400">{u.customer}</div>
-                      </td>
-                      <td className="py-2.5 text-slate-600">{u.profile || '—'}</td>
-                      <td className="py-2.5 text-right font-medium text-emerald-700">{formatBytes(u.rxBytes)}</td>
-                      <td className="py-2.5 text-right font-medium text-sky-700">{formatBytes(u.txBytes)}</td>
-                      <td className="py-2.5 text-right text-xs text-slate-500">{formatBps(u.peakRxBps)}</td>
+          <div className="p-4 pt-0">
+            <p className="text-xs text-slate-400 mb-3">
+              {note ||
+                'Download/Upload totals are real traffic measured from each subscriber’s <pppoe-*> interface since sampling started. First sample sets a baseline; usage accumulates after that.'}
+            </p>
+            <div className="grid lg:grid-cols-5 gap-4">
+              <div className="lg:col-span-3 overflow-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-xs text-slate-400 border-b border-slate-100">
+                      <th className="py-2 font-medium">Subscriber</th>
+                      <th className="py-2 font-medium">Plan</th>
+                      <th className="py-2 font-medium text-right">Live</th>
+                      <th className="py-2 font-medium text-right">Download</th>
+                      <th className="py-2 font-medium text-right">Upload</th>
+                      <th className="py-2 font-medium text-right">Peak ↓</th>
                     </tr>
-                  ))}
-                  {users.length === 0 && (
-                    <tr>
-                      <td colSpan={5} className="py-10 text-center text-slate-400">
-                        No usage samples yet. Click Sample now while clients are online.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-            <div className="lg:col-span-2 rounded-xl border border-slate-100 bg-slate-50/50 p-4">
-              <div className="flex items-center gap-2 font-semibold text-slate-800 mb-3">
-                <Activity size={16} /> {selected ? selected.username : 'Select a user'}
+                  </thead>
+                  <tbody>
+                    {users.map((u) => (
+                      <tr
+                        key={u.username}
+                        className={`border-b border-slate-50 cursor-pointer hover:bg-slate-50 ${
+                          selected?.username === u.username ? 'bg-brand-50/50' : ''
+                        }`}
+                        onClick={() => openUser(u)}
+                      >
+                        <td className="py-2.5">
+                          <div className="font-semibold text-slate-800">{u.username}</div>
+                          <div className="text-xs text-slate-400">{u.customer}</div>
+                        </td>
+                        <td className="py-2.5 text-slate-600">{u.profile || '—'}</td>
+                        <td className="py-2.5 text-right">
+                          <TrafficPair downloadBps={u.downloadBps} uploadBps={u.uploadBps} />
+                        </td>
+                        <td className="py-2.5 text-right font-medium text-emerald-700">{formatBytes(u.rxBytes)}</td>
+                        <td className="py-2.5 text-right font-medium text-sky-700">{formatBytes(u.txBytes)}</td>
+                        <td className="py-2.5 text-right text-xs text-slate-500">{formatBps(u.peakRxBps)}</td>
+                      </tr>
+                    ))}
+                    {users.length === 0 && (
+                      <tr>
+                        <td colSpan={6} className="py-10 text-center text-slate-400">
+                          No usage yet. Online PPPoE sessions are sampled every minute — click{' '}
+                          <b>Sample now</b> while clients are connected. Totals start after the first baseline sample.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
               </div>
-              {!selected && <div className="text-sm text-slate-400">Click a subscriber to view 30-day history.</div>}
-              {selected && (
-                <div className="space-y-2 max-h-80 overflow-auto">
-                  {history.map((h) => (
-                    <div key={h.day} className="flex justify-between text-xs bg-white rounded-lg px-3 py-2 border border-slate-100">
-                      <span className="font-medium text-slate-700">{h.day}</span>
-                      <span className="text-emerald-700">{formatBytes(h.rxBytes)} ↓</span>
-                      <span className="text-sky-700">{formatBytes(h.txBytes)} ↑</span>
-                    </div>
-                  ))}
-                  {history.length === 0 && <div className="text-sm text-slate-400">No daily history yet.</div>}
+              <div className="lg:col-span-2 rounded-xl border border-slate-100 bg-slate-50/50 p-4">
+                <div className="flex items-center gap-2 font-semibold text-slate-800 mb-3">
+                  <Activity size={16} /> {selected ? selected.username : 'Select a user'}
                 </div>
-              )}
+                {!selected && <div className="text-sm text-slate-400">Click a subscriber to view daily history.</div>}
+                {selected && (
+                  <div className="space-y-2 max-h-80 overflow-auto">
+                    {history.map((h) => (
+                      <div
+                        key={h.day}
+                        className="flex justify-between text-xs bg-white rounded-lg px-3 py-2 border border-slate-100 gap-2"
+                      >
+                        <span className="font-medium text-slate-700">{h.day}</span>
+                        <span className="text-emerald-700">{formatBytes(h.rxBytes)} ↓</span>
+                        <span className="text-sky-700">{formatBytes(h.txBytes)} ↑</span>
+                      </div>
+                    ))}
+                    {history.length === 0 && (
+                      <div className="text-sm text-slate-400">No daily history yet — keep sampling while online.</div>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         )}
 
         {tab === 'services' && (
           <div className="p-4 pt-0 space-y-3">
-            <div className="text-xs text-slate-400 mb-2">
-              Estimated from DNS cache lookups on your MikroTik (popularity signal — not exact bytes per site).
+            <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 mb-2">
+              This tab is a <b>DNS cache popularity snapshot</b> from MikroTik — not exact bytes per website. Per-user
+              byte usage is on the Per User tab.
             </div>
             {services.map((s) => (
               <div key={s.id} className="flex items-center gap-3">
@@ -181,7 +230,7 @@ export default function UsageStats() {
             ))}
             {services.length === 0 && (
               <div className="py-10 text-center text-slate-400 text-sm">
-                No platform data yet. Ensure the router has DNS caching enabled, then Sample now.
+                No DNS cache entries classified yet. Enable DNS cache on the router, then Sample now.
               </div>
             )}
           </div>
