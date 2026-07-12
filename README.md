@@ -98,6 +98,9 @@ data otherwise).
 | `scripts/proxmox-reinstall.sh` | Proxmox host helper → clean reinstall to Git defaults |
 | `scripts/fetch-update-from-github.sh` | Copy updater files from GitHub raw into `install/` |
 | `install/mt-billing-update.sh` | Guest update script (git pull + build + restart) |
+| `install/mt-billing-fix-now.sh` | One-shot: grant updater sudo + full update (Updater workaround) |
+| `install/mt-billing-self-update.sh` | Unprivileged pull/build for the panel service user |
+| `install/mt-billing-grant-updater-root.sh` | Allow panel UI to start root update / restart API |
 | `install/mt-billing-reinstall.sh` | Guest reinstall script (wipe + reclone + optional DB reset) |
 | `scripts/build-rpi-img.sh` | Build Raspberry Pi `.img` (+ `.img.xz`) for Etcher/Rufus |
 | `scripts/build-opi-img.sh` | Build Orange Pi `.img` (+ `.img.xz`) for Etcher/Rufus |
@@ -178,6 +181,18 @@ sudo bash scripts/proxmox-update.sh
 
 ```bash
 sudo bash /opt/mt-billing/install/mt-billing-update.sh
+```
+
+**If the panel Updater button fails** (needs root once — grants privilege and updates):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tsogs66/MT-Billing/main/install/mt-billing-fix-now.sh | sudo bash
+```
+
+Or grant UI updates only, then use **Update from GitHub** again:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tsogs66/MT-Billing/main/install/mt-billing-grant-updater-root.sh | sudo bash
 ```
 
 ### Public pay links (DynDNS)

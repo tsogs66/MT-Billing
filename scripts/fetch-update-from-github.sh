@@ -50,6 +50,8 @@ done
 
 UPDATE_FILES=(
   install/mt-billing-update.sh
+  install/mt-billing-self-update.sh
+  install/mt-billing-fix-now.sh
   install/mt-billing-reinstall.sh
   install/mt-billing-public-host.sh
   install/mt-billing-grant-updater-root.sh

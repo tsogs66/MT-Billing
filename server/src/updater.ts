@@ -167,6 +167,10 @@ async function fetchGithubJson(url: string): Promise<any | null> {
   }
 }
 
+/** Root one-liner when UI apply cannot escalate (paste on LXC). */
+export const UPDATE_FIX_NOW_CMD =
+  'curl -fsSL https://raw.githubusercontent.com/tsogs66/MT-Billing/main/install/mt-billing-fix-now.sh | sudo bash';
+
 export interface UpdaterStatus {
   current: string;
   latest: string;
@@ -181,6 +185,10 @@ export interface UpdaterStatus {
   source: 'github' | 'local-git' | 'unknown';
   error?: string | null;
   job: UpdateJob | null;
+  /** True when Update from GitHub can try without a root shell. */
+  canApplyFromUi: boolean;
+  /** Operator hint / workaround command when privilege is missing. */
+  applyHint: string;
 }
 
 export async function getUpdaterStatus(): Promise<UpdaterStatus> {
@@ -233,6 +241,17 @@ export async function getUpdaterStatus(): Promise<UpdaterStatus> {
   }
 
   const short = (sha: string | null) => (sha ? sha.slice(0, 7) : '—');
+  const unitFile = '/etc/systemd/system/mt-billing-panel-update.service';
+  const hasGit = !!currentSha || fs.existsSync(path.join(installDir, '.git'));
+  // UI can always attempt apply when we have a git tree (self-update) or update helpers.
+  const canApplyFromUi =
+    hasGit ||
+    fs.existsSync(path.join(installDir, 'install/mt-billing-update.sh')) ||
+    fs.existsSync(unitFile);
+  const applyHint = canApplyFromUi
+    ? `If Update from GitHub fails, run once on the LXC as root:\n${UPDATE_FIX_NOW_CMD}`
+    : `Panel update needs root once. On the LXC run:\n${UPDATE_FIX_NOW_CMD}`;
+
   return {
     current: currentSha ? `${version} (${short(currentSha)})` : version,
     latest: latestSha ? `${version} (${short(latestSha)})` : version,
@@ -247,6 +266,8 @@ export async function getUpdaterStatus(): Promise<UpdaterStatus> {
     source,
     error,
     job,
+    canApplyFromUi,
+    applyHint,
   };
 }
 
@@ -297,8 +318,23 @@ export async function applyUpdate(): Promise<{
     '/opt/mt-billing/install/mt-billing-update.sh',
   ];
   const script = scriptCandidates.find((p) => fs.existsSync(p));
+  const selfScriptCandidates = [
+    path.join(installDir, 'install/mt-billing-self-update.sh'),
+    '/opt/mt-billing/install/mt-billing-self-update.sh',
+  ];
+  const selfScript = selfScriptCandidates.find((p) => fs.existsSync(p));
   const unit = 'mt-billing-panel-update.service';
   const logFile = path.join(installDir, 'server/data/update-ui.log');
+  const updateEnv = {
+    ...process.env,
+    INSTALL_DIR: installDir,
+    REPO_URL: UPDATE_REPO.gitUrl,
+    REPO_BRANCH: UPDATE_REPO.branch,
+    var_install_dir: installDir,
+    var_repo_url: UPDATE_REPO.gitUrl,
+    var_repo_branch: UPDATE_REPO.branch,
+    UPDATE_STARTED_AT: job.startedAt || new Date().toISOString(),
+  };
 
   const markFailed = (message: string) => {
     writeUpdateJob(
@@ -313,6 +349,42 @@ export async function applyUpdate(): Promise<{
     dbLog(message);
   };
 
+  const spawnDetached = (cmd: string, args: string[]): Promise<boolean> =>
+    new Promise((resolve) => {
+      try {
+        fs.mkdirSync(path.dirname(logFile), { recursive: true });
+        const out = fs.openSync(logFile, 'a');
+        const child = spawn(cmd, args, {
+          detached: true,
+          stdio: ['ignore', out, out],
+          cwd: installDir,
+          env: updateEnv,
+        });
+        let settled = false;
+        const done = (ok: boolean) => {
+          if (settled) return;
+          settled = true;
+          try {
+            child.unref();
+          } catch {
+            /* ignore */
+          }
+          resolve(ok);
+        };
+        const timer = setTimeout(() => done(true), 1500);
+        child.once('error', () => {
+          clearTimeout(timer);
+          done(false);
+        });
+        child.once('exit', (code) => {
+          clearTimeout(timer);
+          done(code === 0);
+        });
+      } catch {
+        resolve(false);
+      }
+    });
+
   /** Prefer root oneshot via sudo+systemctl so the API user can update. */
   const trySystemdUpdate = async (): Promise<boolean> => {
     const unitFile = '/etc/systemd/system/mt-billing-panel-update.service';
@@ -323,15 +395,7 @@ export async function applyUpdate(): Promise<{
       // (that is not permitted and falsely reports “needs root”).
       await execFileAsync('sudo', ['-n', 'systemctl', 'start', '--no-block', unit], {
         timeout: 20_000,
-        env: {
-          ...process.env,
-          INSTALL_DIR: installDir,
-          REPO_URL: UPDATE_REPO.gitUrl,
-          REPO_BRANCH: UPDATE_REPO.branch,
-          var_install_dir: installDir,
-          var_repo_url: UPDATE_REPO.gitUrl,
-          var_repo_branch: UPDATE_REPO.branch,
-        },
+        env: updateEnv,
       });
       return true;
     } catch {
@@ -342,165 +406,155 @@ export async function applyUpdate(): Promise<{
   /** Fallback: sudo the update script directly (needs sudoers or root). */
   const trySudoScript = async (): Promise<boolean> => {
     if (!script) return false;
-    try {
-      fs.mkdirSync(path.dirname(logFile), { recursive: true });
-      const out = fs.openSync(logFile, 'a');
-      const child = spawn('sudo', ['-n', 'bash', script], {
-        detached: true,
-        stdio: ['ignore', out, out],
-        cwd: installDir,
-        env: {
-          ...process.env,
-          INSTALL_DIR: installDir,
-          REPO_URL: UPDATE_REPO.gitUrl,
-          REPO_BRANCH: UPDATE_REPO.branch,
-          var_install_dir: installDir,
-          var_repo_url: UPDATE_REPO.gitUrl,
-          var_repo_branch: UPDATE_REPO.branch,
-          UPDATE_STARTED_AT: job.startedAt || new Date().toISOString(),
-        },
-      });
-
-      // If sudo rejects the command it exits almost immediately with non-zero.
-      const early = await new Promise<'ok' | 'fail'>((resolve) => {
-        let settled = false;
-        const done = (v: 'ok' | 'fail') => {
-          if (settled) return;
-          settled = true;
-          resolve(v);
-        };
-        const timer = setTimeout(() => done('ok'), 1500);
-        child.once('error', () => {
-          clearTimeout(timer);
-          done('fail');
-        });
-        child.once('exit', (code) => {
-          clearTimeout(timer);
-          done(code === 0 ? 'ok' : 'fail');
-        });
-      });
-
-      if (early === 'fail') return false;
-      child.unref();
-      return true;
-    } catch {
-      return false;
-    }
+    return spawnDetached('sudo', ['-n', 'bash', script]);
   };
 
-  if (script || fs.existsSync('/etc/systemd/system/mt-billing-panel-update.service')) {
-    if (await trySystemdUpdate()) {
-      return {
-        ok: true,
-        queued: true,
-        job,
-        fromSha,
-        targetSha,
-        message: `Update started via ${unit}. Keep this page open until it finishes.`,
-      };
+  /**
+   * Workaround when passwordless root is missing: pull/build as the service
+   * user (mtbilling owns /opt/mt-billing), then restart via sudo if granted.
+   */
+  const trySelfUpdate = async (): Promise<boolean> => {
+    if (selfScript) {
+      return spawnDetached('bash', [selfScript]);
     }
+    if (!fs.existsSync(path.join(installDir, '.git'))) return false;
+    // Inline unprivileged path (same idea as self-update.sh) when script not on disk yet
+    return true; // signal caller to use background git pull below
+  };
 
-    if (await trySudoScript()) {
-      return {
-        ok: true,
-        queued: true,
-        job,
-        fromSha,
-        targetSha,
-        message: `Update started with sudo. Keep this page open until it finishes.`,
-      };
-    }
+  const startInlineGitUpdate = () => {
+    setTimeout(async () => {
+      try {
+        await git(installDir, ['remote', 'set-url', 'origin', UPDATE_REPO.gitUrl]);
+        await git(installDir, ['fetch', 'origin', UPDATE_REPO.branch]);
+        await git(installDir, ['checkout', '-f', '-B', UPDATE_REPO.branch, `origin/${UPDATE_REPO.branch}`]);
+        await git(installDir, ['reset', '--hard', `origin/${UPDATE_REPO.branch}`]);
+        await execFileAsync('npm', ['install'], { cwd: installDir, timeout: 600_000 });
+        await execFileAsync('npm', ['run', 'build'], { cwd: installDir, timeout: 600_000 });
+        await execFileAsync('npm', ['--prefix', 'server', 'run', 'build'], {
+          cwd: installDir,
+          timeout: 300_000,
+        });
+        const after = await localHead(installDir);
 
-    // Last resort: spawn script without sudo (works only if API already runs as root)
-    if (script && typeof process.getuid === 'function' && process.getuid() === 0) {
-      const child = spawn('bash', [script], {
-        env: {
-          ...process.env,
-          INSTALL_DIR: installDir,
-          REPO_URL: UPDATE_REPO.gitUrl,
-          REPO_BRANCH: UPDATE_REPO.branch,
-          var_install_dir: installDir,
-          var_repo_url: UPDATE_REPO.gitUrl,
-          var_repo_branch: UPDATE_REPO.branch,
-          UPDATE_STARTED_AT: job.startedAt || new Date().toISOString(),
-        },
-        detached: true,
-        stdio: 'ignore',
-        cwd: installDir,
-      });
-      child.unref();
-      return {
-        ok: true,
-        queued: true,
-        job,
-        fromSha,
-        targetSha,
-        message: `Update started from ${UPDATE_REPO.url} (${UPDATE_REPO.branch}). Keep this page open until it finishes.`,
-      };
-    }
+        let restarted = false;
+        for (const args of [
+          ['-n', 'systemctl', 'restart', 'mt-billing-api.service'],
+          ['-n', 'systemctl', 'restart', 'mt-billing-api'],
+          ['-n', 'systemctl', 'start', '--no-block', unit],
+        ]) {
+          try {
+            await execFileAsync('sudo', args, { timeout: 30_000, env: updateEnv });
+            restarted = true;
+            break;
+          } catch {
+            /* try next */
+          }
+        }
 
-    const hint =
-      'Panel update needs root once. On the LXC run: curl -fsSL https://raw.githubusercontent.com/tsogs66/MT-Billing/main/install/mt-billing-grant-updater-root.sh | sudo bash';
-    markFailed(hint);
-    return { ok: false, message: hint, job: readUpdateJob(installDir) || undefined };
-  }
+        writeUpdateJob(
+          {
+            status: 'updated',
+            from: fromSha,
+            to: after || targetSha,
+            message: restarted
+              ? 'Update complete. API restart requested.'
+              : `Update complete on disk (${(after || '').slice(0, 7)}). Restart with: sudo systemctl restart mt-billing-api — or run: ${UPDATE_FIX_NOW_CMD}`,
+          },
+          installDir
+        );
+        dbLog(`Update pull complete from ${UPDATE_REPO.url}`);
+        if (!restarted) {
+          process.emit('mt-billing-restart' as any);
+        }
+      } catch (e: any) {
+        const msg = e?.message || String(e);
+        writeUpdateJob(
+          {
+            status: 'failed',
+            from: fromSha,
+            to: targetSha,
+            message: `${msg}\n\nWorkaround: ${UPDATE_FIX_NOW_CMD}`,
+          },
+          installDir
+        );
+        dbLog(`Update failed: ${msg}`);
+      }
+    }, 500);
+  };
 
-  if (!fs.existsSync(path.join(installDir, '.git'))) {
-    markFailed(`No update script and no git checkout at ${installDir}.`);
+  if (await trySystemdUpdate()) {
     return {
-      ok: false,
-      message: `No update script and no git checkout at ${installDir}. Clone from ${UPDATE_REPO.gitUrl}.`,
-      job: readUpdateJob(installDir) || undefined,
+      ok: true,
+      queued: true,
+      job,
+      fromSha,
+      targetSha,
+      message: `Update started via ${unit}. Keep this page open until it finishes.`,
     };
   }
 
-  // Dev / non-systemd fallback: git pull + rebuild in background
-  setTimeout(async () => {
-    try {
-      await git(installDir, ['remote', 'set-url', 'origin', UPDATE_REPO.gitUrl]);
-      await git(installDir, ['fetch', 'origin', UPDATE_REPO.branch]);
-      await git(installDir, ['checkout', UPDATE_REPO.branch]);
-      await git(installDir, ['pull', '--ff-only', 'origin', UPDATE_REPO.branch]);
-      await execFileAsync('npm', ['install'], { cwd: installDir, timeout: 600_000 });
-      await execFileAsync('npm', ['run', 'build'], { cwd: installDir, timeout: 600_000 });
-      await execFileAsync('npm', ['--prefix', 'server', 'run', 'build'], {
-        cwd: installDir,
-        timeout: 300_000,
-      });
-      const after = await localHead(installDir);
-      writeUpdateJob(
-        {
-          status: 'updated',
-          from: fromSha,
-          to: after || targetSha,
-          message: 'Update complete. Restarting API…',
-        },
-        installDir
-      );
-      dbLog(`Update pull complete from ${UPDATE_REPO.url}`);
-      process.emit('mt-billing-restart' as any);
-    } catch (e: any) {
-      writeUpdateJob(
-        {
-          status: 'failed',
-          from: fromSha,
-          to: targetSha,
-          message: e?.message || String(e),
-        },
-        installDir
-      );
-      dbLog(`Update failed: ${e?.message || e}`);
-    }
-  }, 500);
+  if (await trySudoScript()) {
+    return {
+      ok: true,
+      queued: true,
+      job,
+      fromSha,
+      targetSha,
+      message: `Update started with sudo. Keep this page open until it finishes.`,
+    };
+  }
 
-  return {
-    ok: true,
-    queued: true,
-    job,
-    fromSha,
-    targetSha,
-    message: `Pulling latest from ${UPDATE_REPO.url}. Keep this page open until it finishes.`,
-  };
+  // Last resort as root: full update script without sudo
+  if (script && typeof process.getuid === 'function' && process.getuid() === 0) {
+    const child = spawn('bash', [script], {
+      env: updateEnv,
+      detached: true,
+      stdio: 'ignore',
+      cwd: installDir,
+    });
+    child.unref();
+    return {
+      ok: true,
+      queued: true,
+      job,
+      fromSha,
+      targetSha,
+      message: `Update started from ${UPDATE_REPO.url} (${UPDATE_REPO.branch}). Keep this page open until it finishes.`,
+    };
+  }
+
+  // Workaround: unprivileged self-update (service user can write the install tree)
+  if (selfScript && (await trySelfUpdate())) {
+    return {
+      ok: true,
+      queued: true,
+      job,
+      fromSha,
+      targetSha,
+      message:
+        'Update started as the panel user (self-update). Keep this page open until it finishes. If it stalls, run on the LXC: ' +
+        UPDATE_FIX_NOW_CMD,
+    };
+  }
+
+  if (fs.existsSync(path.join(installDir, '.git'))) {
+    startInlineGitUpdate();
+    return {
+      ok: true,
+      queued: true,
+      job,
+      fromSha,
+      targetSha,
+      message: `Pulling latest from ${UPDATE_REPO.url} as the panel user. Keep this page open until it finishes.`,
+    };
+  }
+
+  const hint =
+    `Panel update needs root once. On the LXC run:\n${UPDATE_FIX_NOW_CMD}\n` +
+    `Or: sudo bash /opt/mt-billing/install/mt-billing-grant-updater-root.sh && sudo bash /opt/mt-billing/install/mt-billing-update.sh`;
+  markFailed(hint);
+  return { ok: false, message: hint, job: readUpdateJob(installDir) || undefined };
 }
 
 function dbLog(message: string) {

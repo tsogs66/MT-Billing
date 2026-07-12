@@ -23,6 +23,7 @@ SERVICE_UNIT="/etc/systemd/system/mt-billing-api.service"
 PANEL_UPDATE_UNIT="/etc/systemd/system/mt-billing-panel-update.service"
 SUDOERS_FILE="/etc/sudoers.d/mt-billing"
 UPDATE_SCRIPT="${INSTALL_DIR}/install/mt-billing-update.sh"
+SELF_UPDATE_SCRIPT="${INSTALL_DIR}/install/mt-billing-self-update.sh"
 
 log_info() { printf '\033[1;34m[INFO]\033[0m %s\n' "$*"; }
 log_ok() { printf '\033[1;32m[OK]\033[0m %s\n' "$*"; }
@@ -47,14 +48,19 @@ svc_user="${var_service_user:-${SERVICE_USER:-$svc_user}}"
 
 log_info "Granting updater root privilege to service user: ${svc_user}"
 
-# Ensure update script exists (fetch from GitHub if missing)
-if [[ ! -f "$UPDATE_SCRIPT" ]]; then
-  log_info "Fetching mt-billing-update.sh from GitHub"
-  mkdir -p "$(dirname "$UPDATE_SCRIPT")"
-  curl -fsSL "https://raw.githubusercontent.com/tsogs66/MT-Billing/${REPO_BRANCH}/install/mt-billing-update.sh" \
-    -o "$UPDATE_SCRIPT"
-fi
-chmod 755 "$UPDATE_SCRIPT"
+fetch_helper() {
+  local name="$1"
+  local dest="${INSTALL_DIR}/install/${name}"
+  mkdir -p "$(dirname "$dest")"
+  if [[ ! -f "$dest" ]]; then
+    log_info "Fetching ${name} from GitHub"
+    curl -fsSL "https://raw.githubusercontent.com/tsogs66/MT-Billing/${REPO_BRANCH}/install/${name}" -o "$dest"
+  fi
+  chmod 755 "$dest"
+}
+
+fetch_helper mt-billing-update.sh
+fetch_helper mt-billing-self-update.sh
 
 # Panel-triggered oneshot (runs update as root under systemd)
 cat >"$PANEL_UPDATE_UNIT" <<EOF
@@ -79,7 +85,7 @@ StandardError=journal
 WantedBy=multi-user.target
 EOF
 
-# Passwordless sudo for the API service user — start oneshot OR run update script.
+# Passwordless sudo for the API service user — start oneshot, restart API, or run update scripts.
 # /bin/true is included so older panel builds that probed `sudo -n true` still work.
 cat >"$SUDOERS_FILE" <<EOF
 # MT-Billing — Application Updater root privilege
@@ -91,8 +97,14 @@ ${svc_user} ALL=(root) NOPASSWD: /bin/systemctl start mt-billing-panel-update.se
 ${svc_user} ALL=(root) NOPASSWD: /bin/systemctl start --no-block mt-billing-panel-update.service
 ${svc_user} ALL=(root) NOPASSWD: /usr/bin/systemctl start mt-billing-panel-update.service
 ${svc_user} ALL=(root) NOPASSWD: /usr/bin/systemctl start --no-block mt-billing-panel-update.service
+${svc_user} ALL=(root) NOPASSWD: /bin/systemctl restart mt-billing-api.service
+${svc_user} ALL=(root) NOPASSWD: /bin/systemctl restart mt-billing-api
+${svc_user} ALL=(root) NOPASSWD: /usr/bin/systemctl restart mt-billing-api.service
+${svc_user} ALL=(root) NOPASSWD: /usr/bin/systemctl restart mt-billing-api
 ${svc_user} ALL=(root) NOPASSWD: /bin/bash ${UPDATE_SCRIPT}
 ${svc_user} ALL=(root) NOPASSWD: /usr/bin/bash ${UPDATE_SCRIPT}
+${svc_user} ALL=(root) NOPASSWD: /bin/bash ${SELF_UPDATE_SCRIPT}
+${svc_user} ALL=(root) NOPASSWD: /usr/bin/bash ${SELF_UPDATE_SCRIPT}
 EOF
 chmod 440 "$SUDOERS_FILE"
 
@@ -143,4 +155,5 @@ echo "Next:"
 echo "  1) Refresh the Application Updater page"
 echo "  2) Click Update from GitHub"
 echo "  Or pull now: sudo bash ${UPDATE_SCRIPT}"
+echo "  Full workaround (grant + update): curl -fsSL https://raw.githubusercontent.com/tsogs66/MT-Billing/main/install/mt-billing-fix-now.sh | sudo bash"
 echo

@@ -158,7 +158,7 @@ export default function Updater() {
 
     const tick = async () => {
       if (Date.now() - startedAtRef.current > TIMEOUT_MS) {
-        finishFailed('Update timed out. Close this screen and run: sudo bash /opt/mt-billing/install/mt-billing-update.sh');
+        finishFailed('Update timed out. On the LXC run: curl -fsSL https://raw.githubusercontent.com/tsogs66/MT-Billing/main/install/mt-billing-fix-now.sh | sudo bash');
         return;
       }
 
@@ -359,6 +359,17 @@ export default function Updater() {
             <DownloadCloud size={16} /> Update from GitHub
           </button>
         </div>
+
+        {info?.applyHint && (
+          <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+            <div className="font-semibold text-slate-800 mb-1">If Update from GitHub fails</div>
+            <p className="text-xs text-slate-500 mb-2 leading-relaxed whitespace-pre-wrap">{info.applyHint}</p>
+            <code className="block text-[11px] leading-relaxed font-mono bg-white border border-slate-200 rounded-lg px-3 py-2 overflow-x-auto select-all">
+              curl -fsSL https://raw.githubusercontent.com/tsogs66/MT-Billing/main/install/mt-billing-fix-now.sh | sudo bash
+            </code>
+          </div>
+        )}
+
         <div className="text-xs text-slate-400 mt-3">
           Last checked: {info?.lastChecked ? new Date(info.lastChecked).toLocaleString() : '—'}
           {info?.currentSha && info?.latestSha ? (
