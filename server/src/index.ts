@@ -1128,12 +1128,22 @@ app.get('/api/payment-links', (_req, res) => {
 });
 
 app.get('/api/payment-links/config', (_req, res) => {
-  const app = db.prepare('SELECT public_base_url, ngrok_url, ngrok_status FROM app_settings WHERE id = 1').get() as any;
+  const app = db
+    .prepare(
+      `SELECT public_base_url, ngrok_url, ngrok_status,
+              cf_tunnel_url, cf_tunnel_status, cf_tunnel_hostname
+       FROM app_settings WHERE id = 1`
+    )
+    .get() as any;
   const resolved = resolvePublicBaseUrl();
   res.json({
     publicBaseUrl: app?.public_base_url || '',
     envPublicBaseUrl: process.env.PUBLIC_BASE_URL || null,
     ngrokUrl: app?.ngrok_status === 'running' ? app?.ngrok_url || null : null,
+    cloudflareUrl:
+      app?.cf_tunnel_status === 'running'
+        ? app?.cf_tunnel_url || (app?.cf_tunnel_hostname ? `https://${app.cf_tunnel_hostname}` : null)
+        : null,
     effective: resolved.baseUrl || null,
     source: resolved.source,
     warning: resolved.warning || null,

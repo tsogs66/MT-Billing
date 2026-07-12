@@ -10,12 +10,13 @@ import { panelHardwareId, expectedPasswordResetCode, normalizeCode } from './pan
 export const settingsRouter = express.Router();
 
 // ---------- Panel / app settings ----------
-const SECRET_FIELDS = ['ngrok_authtoken', 'ai_api_key', 'cursor_api_key'];
-const BOOL_FIELDS = ['ngrok_enabled', 'ai_enabled'];
+const SECRET_FIELDS = ['ngrok_authtoken', 'ai_api_key', 'cursor_api_key', 'cf_tunnel_token'];
+const BOOL_FIELDS = ['ngrok_enabled', 'ai_enabled', 'cf_tunnel_enabled'];
 const EDITABLE = [
   'theme', 'currency', 'ngrok_enabled', 'ngrok_authtoken', 'ngrok_region',
   'ngrok_port', 'ai_provider', 'ai_api_key', 'ai_model', 'ai_enabled', 'cursor_api_key',
   'cursor_model', 'cursor_repo_url', 'tz', 'ntp_server', 'public_base_url',
+  'cf_tunnel_token', 'cf_tunnel_hostname', 'cf_tunnel_port', 'cf_tunnel_enabled',
 ];
 
 function getApp(): any {
@@ -54,7 +55,10 @@ settingsRouter.put('/settings/app', (req, res) => {
        ngrok_port=@ngrok_port, ai_provider=@ai_provider, ai_api_key=@ai_api_key, ai_model=@ai_model,
        ai_enabled=@ai_enabled, cursor_api_key=@cursor_api_key, cursor_model=@cursor_model,
        cursor_repo_url=@cursor_repo_url, tz=@tz, ntp_server=@ntp_server,
-       public_base_url=@public_base_url WHERE id=1`
+       public_base_url=@public_base_url,
+       cf_tunnel_token=@cf_tunnel_token, cf_tunnel_hostname=@cf_tunnel_hostname,
+       cf_tunnel_port=@cf_tunnel_port, cf_tunnel_enabled=@cf_tunnel_enabled
+       WHERE id=1`
   ).run({
     theme,
     language: cur.language || 'en',
@@ -73,6 +77,14 @@ settingsRouter.put('/settings/app', (req, res) => {
     tz: cur.tz || 'Asia/Manila',
     ntp_server: cur.ntp_server || 'time.cloudflare.com',
     public_base_url: (() => { const v = cur.public_base_url == null ? '' : String(cur.public_base_url).trim().replace(/\/$/, ''); return v || null; })(),
+    cf_tunnel_token: cur.cf_tunnel_token || null,
+    cf_tunnel_hostname: (() => {
+      const v = cur.cf_tunnel_hostname == null ? '' : String(cur.cf_tunnel_hostname).trim()
+        .replace(/^https?:\/\//i, '').replace(/\/.*$/, '').replace(/:\d+$/, '').replace(/\.$/, '').toLowerCase();
+      return v || null;
+    })(),
+    cf_tunnel_port: Number(cur.cf_tunnel_port) || 80,
+    cf_tunnel_enabled: cur.cf_tunnel_enabled ? 1 : 0,
   });
   res.json(publicApp());
 });
@@ -89,6 +101,154 @@ settingsRouter.post('/ngrok/toggle', (_req, res) => {
   db.prepare('UPDATE app_settings SET ngrok_status = ?, ngrok_url = ? WHERE id = 1').run(status, url);
   db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run('info', 'ngrok', `Tunnel ${status}${url ? ` at ${url}` : ''}`);
   res.json({ status, url });
+});
+
+// ---------- Cloudflare Tunnel (real cloudflared via install script) ----------
+const CF_TUNNEL_SCRIPT = path.join(
+  process.env.INSTALL_DIR || process.env.var_install_dir || '/opt/mt-billing',
+  'install/mt-billing-cloudflare-tunnel.sh'
+);
+function cloudflareTunnelScript(): string {
+  const candidates = [
+    CF_TUNNEL_SCRIPT,
+    path.resolve(process.cwd(), '../install/mt-billing-cloudflare-tunnel.sh'),
+    path.resolve(process.cwd(), 'install/mt-billing-cloudflare-tunnel.sh'),
+    path.resolve(process.cwd(), '../../install/mt-billing-cloudflare-tunnel.sh'),
+  ];
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
+  }
+  return CF_TUNNEL_SCRIPT;
+}
+
+function runCloudflareTunnel(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    const script = cloudflareTunnelScript();
+    const tryCmds = [
+      ['sudo', ['-n', 'bash', script, ...args]],
+      ['bash', [script, ...args]],
+    ] as [string, string[]][];
+
+    const runNext = (i: number) => {
+      if (i >= tryCmds.length) {
+        resolve({
+          code: 127,
+          stdout: '',
+          stderr:
+            'Could not run Cloudflare Tunnel helper. On the LXC run: sudo bash install/mt-billing-grant-updater-root.sh then retry, or apply manually with sudo bash install/mt-billing-cloudflare-tunnel.sh --from-db',
+        });
+        return;
+      }
+      const [cmd, cmdArgs] = tryCmds[i];
+      const child = spawn(cmd, cmdArgs, { env: process.env });
+      let stdout = '';
+      let stderr = '';
+      child.stdout?.on('data', (d) => { stdout += String(d); });
+      child.stderr?.on('data', (d) => { stderr += String(d); });
+      child.on('error', () => runNext(i + 1));
+      child.on('close', (code) => {
+        // sudo missing password / not allowed → try next
+        if (i === 0 && code !== 0 && /password is required|a password is required|not allowed|No such file/i.test(stderr + stdout)) {
+          runNext(i + 1);
+          return;
+        }
+        resolve({ code: code ?? 1, stdout, stderr });
+      });
+    };
+    runNext(0);
+  });
+}
+
+function parseTunnelStatusOutput(stdout: string): { status: string; url: string } {
+  const status = (stdout.match(/^status=(.+)$/m) || [])[1]?.trim() || 'stopped';
+  const url = (stdout.match(/^url=(.*)$/m) || [])[1]?.trim() || '';
+  return { status, url };
+}
+
+settingsRouter.get('/cloudflare-tunnel/status', async (_req, res) => {
+  const result = await runCloudflareTunnel(['status']);
+  if (result.code === 0) {
+    const parsed = parseTunnelStatusOutput(result.stdout);
+    res.json({ ...parsed, ...publicApp(), output: result.stdout.trim() });
+    return;
+  }
+  // Fallback to DB values when systemd/script unavailable (dev)
+  const s = getApp();
+  res.json({
+    status: s.cf_tunnel_status || 'stopped',
+    url: s.cf_tunnel_url || (s.cf_tunnel_hostname ? `https://${s.cf_tunnel_hostname}` : ''),
+    ...publicApp(),
+    warning: result.stderr || undefined,
+  });
+});
+
+settingsRouter.post('/cloudflare-tunnel/apply', async (_req, res) => {
+  const s = getApp();
+  if (!s.cf_tunnel_token) {
+    return res.status(400).json({ error: 'Save your Cloudflare tunnel token first.' });
+  }
+  if (!s.cf_tunnel_hostname) {
+    return res.status(400).json({ error: 'Set the public hostname (e.g. pay.yourisp.com) first.' });
+  }
+  const result = await runCloudflareTunnel(['--from-db', 'apply']);
+  if (result.code !== 0) {
+    db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+      'error',
+      'cloudflare',
+      `Tunnel apply failed: ${(result.stderr || result.stdout || 'unknown').slice(0, 500)}`
+    );
+    return res.status(500).json({
+      error: result.stderr?.trim() || result.stdout?.trim() || 'Cloudflare Tunnel apply failed',
+      output: (result.stdout + '\n' + result.stderr).trim(),
+    });
+  }
+  db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+    'info',
+    'cloudflare',
+    `Tunnel applied for ${s.cf_tunnel_hostname}`
+  );
+  const status = await runCloudflareTunnel(['status']);
+  const parsed = status.code === 0 ? parseTunnelStatusOutput(status.stdout) : { status: 'running', url: `https://${s.cf_tunnel_hostname}` };
+  res.json({ ok: true, ...parsed, ...publicApp(), output: result.stdout.trim() });
+});
+
+settingsRouter.post('/cloudflare-tunnel/toggle', async (_req, res) => {
+  const s = getApp();
+  const starting = s.cf_tunnel_status !== 'running';
+  if (starting) {
+    if (!s.cf_tunnel_token) {
+      return res.status(400).json({ error: 'Save your Cloudflare tunnel token first.' });
+    }
+    if (!s.cf_tunnel_hostname) {
+      return res.status(400).json({ error: 'Set the public hostname first.' });
+    }
+    // Prefer full apply (install unit if missing), else start
+    let result = await runCloudflareTunnel(['--from-db', 'apply']);
+    if (result.code !== 0) {
+      result = await runCloudflareTunnel(['--from-db', 'start']);
+    }
+    if (result.code !== 0) {
+      return res.status(500).json({
+        error: result.stderr?.trim() || result.stdout?.trim() || 'Failed to start Cloudflare Tunnel',
+        output: (result.stdout + '\n' + result.stderr).trim(),
+      });
+    }
+    const url = `https://${String(s.cf_tunnel_hostname).replace(/^https?:\/\//i, '').replace(/\/$/, '')}`;
+    db.prepare(
+      `UPDATE app_settings SET cf_tunnel_status = 'running', cf_tunnel_url = ?, cf_tunnel_enabled = 1,
+         public_base_url = COALESCE(NULLIF(public_base_url, ''), ?) WHERE id = 1`
+    ).run(url, url);
+    db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run('info', 'cloudflare', `Tunnel started at ${url}`);
+    return res.json({ status: 'running', url, ...publicApp() });
+  }
+
+  const result = await runCloudflareTunnel(['stop']);
+  if (result.code !== 0) {
+    // Still mark stopped in DB if unit missing
+    db.prepare(`UPDATE app_settings SET cf_tunnel_status = 'stopped', cf_tunnel_enabled = 0 WHERE id = 1`).run();
+  }
+  db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run('info', 'cloudflare', 'Tunnel stopped');
+  res.json({ status: 'stopped', url: null, ...publicApp() });
 });
 
 // ---------- Database management ----------

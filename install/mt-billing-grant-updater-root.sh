@@ -105,6 +105,16 @@ ${svc_user} ALL=(root) NOPASSWD: /bin/bash ${UPDATE_SCRIPT}
 ${svc_user} ALL=(root) NOPASSWD: /usr/bin/bash ${UPDATE_SCRIPT}
 ${svc_user} ALL=(root) NOPASSWD: /bin/bash ${SELF_UPDATE_SCRIPT}
 ${svc_user} ALL=(root) NOPASSWD: /usr/bin/bash ${SELF_UPDATE_SCRIPT}
+${svc_user} ALL=(root) NOPASSWD: /bin/bash ${INSTALL_DIR}/install/mt-billing-cloudflare-tunnel.sh
+${svc_user} ALL=(root) NOPASSWD: /usr/bin/bash ${INSTALL_DIR}/install/mt-billing-cloudflare-tunnel.sh
+${svc_user} ALL=(root) NOPASSWD: /bin/systemctl start cloudflared-mt-billing.service
+${svc_user} ALL=(root) NOPASSWD: /bin/systemctl stop cloudflared-mt-billing.service
+${svc_user} ALL=(root) NOPASSWD: /bin/systemctl restart cloudflared-mt-billing.service
+${svc_user} ALL=(root) NOPASSWD: /bin/systemctl is-active cloudflared-mt-billing.service
+${svc_user} ALL=(root) NOPASSWD: /usr/bin/systemctl start cloudflared-mt-billing.service
+${svc_user} ALL=(root) NOPASSWD: /usr/bin/systemctl stop cloudflared-mt-billing.service
+${svc_user} ALL=(root) NOPASSWD: /usr/bin/systemctl restart cloudflared-mt-billing.service
+${svc_user} ALL=(root) NOPASSWD: /usr/bin/systemctl is-active cloudflared-mt-billing.service
 EOF
 chmod 440 "$SUDOERS_FILE"
 

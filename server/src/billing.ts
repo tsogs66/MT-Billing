@@ -78,19 +78,41 @@ export function isPrivateBaseUrl(url: string): boolean {
  */
 export function resolvePublicBaseUrl(preferred?: string | null): {
   baseUrl?: string;
-  source: 'public_base_url' | 'env' | 'ngrok' | 'preferred' | 'none';
+  source: 'public_base_url' | 'env' | 'cloudflare' | 'ngrok' | 'preferred' | 'none';
   warning?: string;
 } {
   const app = db
-    .prepare('SELECT public_base_url, ngrok_url, ngrok_status FROM app_settings WHERE id = 1')
-    .get() as { public_base_url?: string; ngrok_url?: string; ngrok_status?: string } | undefined;
+    .prepare(
+      `SELECT public_base_url, ngrok_url, ngrok_status,
+              cf_tunnel_url, cf_tunnel_status, cf_tunnel_hostname
+       FROM app_settings WHERE id = 1`
+    )
+    .get() as {
+    public_base_url?: string;
+    ngrok_url?: string;
+    ngrok_status?: string;
+    cf_tunnel_url?: string;
+    cf_tunnel_status?: string;
+    cf_tunnel_hostname?: string;
+  } | undefined;
 
-  const ordered: { url?: string; source: 'public_base_url' | 'env' | 'ngrok' | 'preferred' }[] = [
+  const cfUrl =
+    app?.cf_tunnel_status === 'running'
+      ? normalizeBaseUrl(app?.cf_tunnel_url) ||
+        (app?.cf_tunnel_hostname
+          ? normalizeBaseUrl(`https://${String(app.cf_tunnel_hostname).replace(/^https?:\/\//i, '')}`)
+          : undefined)
+      : undefined;
+
+  const ordered: {
+    url?: string;
+    source: 'public_base_url' | 'env' | 'cloudflare' | 'ngrok' | 'preferred';
+  }[] = [
     { url: normalizeBaseUrl(app?.public_base_url), source: 'public_base_url' },
     { url: normalizeBaseUrl(process.env.PUBLIC_BASE_URL), source: 'env' },
+    { url: cfUrl, source: 'cloudflare' },
     {
-      url:
-        app?.ngrok_status === 'running' ? normalizeBaseUrl(app?.ngrok_url) : undefined,
+      url: app?.ngrok_status === 'running' ? normalizeBaseUrl(app?.ngrok_url) : undefined,
       source: 'ngrok',
     },
     { url: normalizeBaseUrl(preferred), source: 'preferred' },

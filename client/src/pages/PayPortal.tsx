@@ -114,11 +114,13 @@ export default function PayPortal() {
       ? 'saved public URL'
       : source === 'env'
         ? 'PUBLIC_BASE_URL env'
-        : source === 'ngrok'
-          ? 'ngrok tunnel'
-          : source === 'preferred'
-            ? 'panel origin (local)'
-            : 'not configured';
+        : source === 'cloudflare'
+          ? 'Cloudflare Tunnel'
+          : source === 'ngrok'
+            ? 'ngrok tunnel'
+            : source === 'preferred'
+              ? 'panel origin (local)'
+              : 'not configured';
 
   return (
     <Layout title="Payment Links">
@@ -134,9 +136,10 @@ export default function PayPortal() {
           <div className="min-w-0">
             <div className="font-semibold text-slate-800">Public pay portal URL</div>
             <p className="text-sm text-slate-500 mt-0.5">
-              Use your DynDNS / public hostname (e.g. <span className="font-mono text-slate-600">https://yourname.duckdns.org</span>)
-              so subscribers can open pay links from anywhere. On the LXC run{' '}
-              <span className="font-mono text-slate-600">install/mt-billing-public-host.sh</span> to configure nginx.
+              Use a public hostname so subscribers can open pay links from anywhere. Prefer{' '}
+              <span className="font-medium text-slate-700">Cloudflare Tunnel</span> (System Settings → Cloudflare Tunnel)
+              when you cannot open ports, or DynDNS +{' '}
+              <span className="font-mono text-slate-600">install/mt-billing-public-host.sh</span>.
             </p>
           </div>
         </div>
@@ -163,7 +166,8 @@ export default function PayPortal() {
           </div>
           {warning && <div className="text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5">{warning}</div>}
           <div className="text-slate-400">
-            Tip: point the URL at this panel (port 80/443 via nginx). You can also set <code className="text-slate-600">PUBLIC_BASE_URL</code> in{' '}
+            Tip: Cloudflare Tunnel needs no port-forward. DynDNS users: point the URL at this panel (port 80/443 via nginx).
+            You can also set <code className="text-slate-600">PUBLIC_BASE_URL</code> in{' '}
             <code className="text-slate-600">server/.env</code>.
           </div>
         </div>

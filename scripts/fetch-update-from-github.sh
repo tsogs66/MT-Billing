@@ -54,6 +54,7 @@ UPDATE_FILES=(
   install/mt-billing-fix-now.sh
   install/mt-billing-reinstall.sh
   install/mt-billing-public-host.sh
+  install/mt-billing-cloudflare-tunnel.sh
   install/mt-billing-grant-updater-root.sh
   install/mt-billing-panel-update.service
   install/mt-billing-sudoers

@@ -183,7 +183,13 @@ export function initSchema() {
       cursor_repo_url TEXT,
       tz TEXT DEFAULT 'Asia/Manila',
       ntp_server TEXT DEFAULT 'time.cloudflare.com',
-      public_base_url TEXT
+      public_base_url TEXT,
+      cf_tunnel_token TEXT,
+      cf_tunnel_hostname TEXT,
+      cf_tunnel_port INTEGER DEFAULT 80,
+      cf_tunnel_status TEXT DEFAULT 'stopped',
+      cf_tunnel_url TEXT,
+      cf_tunnel_enabled INTEGER DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS ai_scripts (
@@ -289,6 +295,12 @@ export function migrate() {
     ['cursor_model', "TEXT DEFAULT 'composer-2'"],
     ['cursor_repo_url', 'TEXT'],
     ['public_base_url', 'TEXT'],
+    ['cf_tunnel_token', 'TEXT'],
+    ['cf_tunnel_hostname', 'TEXT'],
+    ['cf_tunnel_port', 'INTEGER DEFAULT 80'],
+    ['cf_tunnel_status', "TEXT DEFAULT 'stopped'"],
+    ['cf_tunnel_url', 'TEXT'],
+    ['cf_tunnel_enabled', 'INTEGER DEFAULT 0'],
   ];
   for (const [col, type] of appCols) {
     if (!columnExists('app_settings', col)) db.exec(`ALTER TABLE app_settings ADD COLUMN ${col} ${type}`);

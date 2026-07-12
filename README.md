@@ -195,6 +195,29 @@ Or grant UI updates only, then use **Update from GitHub** again:
 curl -fsSL https://raw.githubusercontent.com/tsogs66/MT-Billing/main/install/mt-billing-grant-updater-root.sh | sudo bash
 ```
 
+### Public pay links (Cloudflare Tunnel)
+
+Best option when the panel is behind NAT / CGNAT and you cannot port-forward.
+Uses your Cloudflare account — no open ports on the router.
+
+1. In [Cloudflare Zero Trust](https://one.dash.cloudflare.com/) → **Networks → Tunnels**,
+   create a Cloudflared tunnel and copy the **install token**.
+2. Add a **Public Hostname** (e.g. `pay.yourisp.com`) with service
+   `http://127.0.0.1:80` (nginx) or your panel port.
+3. On the LXC:
+
+```bash
+# One-shot from the shell
+sudo bash /opt/mt-billing/install/mt-billing-cloudflare-tunnel.sh \
+  --token 'eyJh...' --hostname pay.yourisp.com
+
+# Or from the panel: System Settings → Cloudflare Tunnel
+# (first enable panel root helpers if needed)
+sudo bash /opt/mt-billing/install/mt-billing-grant-updater-root.sh
+```
+
+Pay links become `https://pay.yourisp.com/pay/...`. Confirm under **Payment Links**.
+
 ### Public pay links (DynDNS)
 
 Point a DynDNS (DuckDNS, No-IP, Dynu, etc.) hostname at your public IP, forward

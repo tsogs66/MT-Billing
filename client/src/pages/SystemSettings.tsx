@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Settings as SettingsIcon, Sun, Moon, Anchor, Database as DbIcon, Bot, Clock, KeyRound,
-  Router as RouterIcon, Globe2, Download, Trash2, RefreshCw, Plus, Pencil, Power,
+  Router as RouterIcon, Globe2, Download, Trash2, RefreshCw, Plus, Pencil, Power, Cloud,
 } from 'lucide-react';
 import Layout from '../components/Layout';
 import {
@@ -12,6 +12,7 @@ import { useTheme, type ThemeId } from '../context/ThemeContext';
 
 const TABS = [
   { key: 'panel', label: 'Panel Settings', icon: SettingsIcon },
+  { key: 'cloudflare', label: 'Cloudflare Tunnel', icon: Cloud },
   { key: 'ngrok', label: 'Ngrok Remote Access', icon: Globe2 },
   { key: 'database', label: 'Database Management', icon: DbIcon },
   { key: 'ai', label: 'AI Settings', icon: Bot },
@@ -61,6 +62,7 @@ export default function SystemSettings() {
           <ServerRestart flash={flash} />
         </>
       )}
+      {tab === 'cloudflare' && <CloudflareTunnelSettings app={app} setA={setA} save={saveApp} flash={flash} reload={load} />}
       {tab === 'ngrok' && <NgrokSettings app={app} setA={setA} save={saveApp} flash={flash} reload={load} />}
       {tab === 'database' && <DatabaseManagement flash={flash} />}
       {tab === 'ai' && <AiSettings app={app} setA={setA} save={saveApp} />}
@@ -195,6 +197,157 @@ function ServerRestart({ flash }: { flash: (m: string) => void }) {
             </div>
           </div>
         )}
+      </div>
+    </SettingsSection>
+  );
+}
+
+function CloudflareTunnelSettings({ app, setA, save, flash, reload }: any) {
+  const [token, setToken] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const refreshStatus = async () => {
+    try {
+      const r = await api.get('/cloudflare-tunnel/status');
+      setA({
+        cf_tunnel_status: r.data.status,
+        cf_tunnel_url: r.data.url || r.data.cf_tunnel_url,
+        public_base_url: r.data.public_base_url ?? app.public_base_url,
+      });
+    } catch {
+      /* ignore */
+    }
+  };
+
+  useEffect(() => {
+    refreshStatus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const toggle = async () => {
+    setBusy(true);
+    try {
+      const r = await api.post('/cloudflare-tunnel/toggle');
+      flash(r.data.status === 'running' ? `Tunnel started: ${r.data.url}` : 'Tunnel stopped.');
+      reload();
+    } catch (e: any) {
+      flash(e?.response?.data?.error || 'Failed to toggle Cloudflare Tunnel.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const apply = async () => {
+    setBusy(true);
+    try {
+      await save(token ? { cf_tunnel_token: token } : {});
+      const r = await api.post('/cloudflare-tunnel/apply');
+      flash(r.data.url ? `Tunnel running at ${r.data.url}` : 'Cloudflare Tunnel applied.');
+      setToken('');
+      reload();
+    } catch (e: any) {
+      flash(e?.response?.data?.error || 'Apply failed. On the LXC you may need: sudo bash install/mt-billing-grant-updater-root.sh');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const status = app.cf_tunnel_status === 'running' ? 'running' : app.cf_tunnel_status === 'error' ? 'offline' : 'offline';
+  const url = app.cf_tunnel_url || (app.cf_tunnel_hostname ? `https://${app.cf_tunnel_hostname}` : '');
+
+  return (
+    <SettingsSection icon={Cloud} title="Cloudflare Tunnel">
+      <div className="space-y-4 max-w-2xl">
+        <p className="text-sm text-slate-500">
+          Expose subscriber payment links with Cloudflare Tunnel — no port-forwarding or DynDNS required.
+          Create a tunnel in{' '}
+          <a
+            href="https://one.dash.cloudflare.com/"
+            target="_blank"
+            rel="noreferrer"
+            className="text-brand-600 hover:underline font-medium"
+          >
+            Cloudflare Zero Trust
+          </a>
+          , add a Public Hostname pointing to{' '}
+          <code className="text-slate-600">http://127.0.0.1:{app.cf_tunnel_port || 80}</code>, then paste the connector token below.
+        </p>
+
+        <div className="flex items-center justify-between rounded-lg border border-slate-100 px-4 py-3">
+          <div className="min-w-0">
+            <div className="text-sm font-medium text-slate-700">Tunnel status</div>
+            <div className="text-xs text-slate-400 truncate">{url || 'Not running'}</div>
+          </div>
+          <div className="flex items-center gap-3 shrink-0">
+            <StatusBadge status={status} />
+            <button type="button" className="btn-secondary text-xs py-1.5" onClick={refreshStatus} disabled={busy}>
+              <RefreshCw size={14} />
+            </button>
+            <button type="button" className="btn-primary" onClick={toggle} disabled={busy}>
+              {app.cf_tunnel_status === 'running' ? 'Stop' : 'Start'} Tunnel
+            </button>
+          </div>
+        </div>
+
+        <label className="block">
+          <span className="text-sm font-semibold text-slate-700 mb-1 block">
+            Tunnel token {app.cf_tunnel_token_set && <span className="text-emerald-600 text-xs">(saved)</span>}
+          </span>
+          <input
+            className="input font-mono text-sm"
+            type="password"
+            placeholder={app.cf_tunnel_token_set ? '••••••• (leave blank to keep)' : 'eyJhIjoi... (Cloudflare install token)'}
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+          />
+        </label>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <label className="block">
+            <span className="text-sm font-semibold text-slate-700 mb-1 block">Public hostname</span>
+            <input
+              className="input font-mono text-sm"
+              placeholder="pay.yourisp.com"
+              value={app.cf_tunnel_hostname || ''}
+              onChange={(e) => setA({ cf_tunnel_hostname: e.target.value })}
+            />
+          </label>
+          <label className="block">
+            <span className="text-sm font-semibold text-slate-700 mb-1 block">Local service port</span>
+            <input
+              className="input"
+              type="number"
+              value={app.cf_tunnel_port ?? 80}
+              onChange={(e) => setA({ cf_tunnel_port: Number(e.target.value) || 80 })}
+            />
+            <span className="text-xs text-slate-400 mt-1 block">Must match Cloudflare → http://127.0.0.1:PORT</span>
+          </label>
+        </div>
+
+        <div className="rounded-lg bg-slate-50 border border-slate-100 px-3 py-2 text-xs text-slate-500 space-y-1">
+          <div>
+            CLI alternative:{' '}
+            <code className="text-slate-700">sudo bash /opt/mt-billing/install/mt-billing-cloudflare-tunnel.sh --token … --hostname pay.yourisp.com</code>
+          </div>
+          <div>
+            First-time panel control may need:{' '}
+            <code className="text-slate-700">sudo bash /opt/mt-billing/install/mt-billing-grant-updater-root.sh</code>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap justify-end gap-2">
+          <button
+            type="button"
+            className="btn-secondary"
+            disabled={busy}
+            onClick={() => save(token ? { cf_tunnel_token: token } : {})}
+          >
+            Save settings
+          </button>
+          <button type="button" className="btn-primary" disabled={busy} onClick={apply}>
+            {busy ? 'Working…' : 'Install & start tunnel'}
+          </button>
+        </div>
       </div>
     </SettingsSection>
   );
