@@ -1542,106 +1542,159 @@ function escapeReceiptHtml(s: unknown): string {
 function printReceipt(receipt: any) {
   const money = (n: number) => `\u20b1${Number(n || 0).toFixed(2)}`;
   const company = escapeReceiptHtml(receipt.company || 'ISP Billing');
+  const companyAddress = escapeReceiptHtml(receipt.companyAddress || '');
+  const companyPhone = escapeReceiptHtml(receipt.companyPhone || '');
+  const companyEmail = escapeReceiptHtml(receipt.companyEmail || '');
   const account = escapeReceiptHtml(receipt.account);
-  const customer = escapeReceiptHtml(receipt.customer);
-  const username = escapeReceiptHtml(receipt.username || '');
+  const fullName = escapeReceiptHtml(receipt.customer || '');
   const plan = escapeReceiptHtml(receipt.plan);
   const months = Number(receipt.months) || 1;
-  const paymentDate = escapeReceiptHtml(receipt.paymentDate);
+  const extension = months === 1 ? '1 month' : `${months} months`;
   const newDue = escapeReceiptHtml(receipt.newDue);
   const discountDays = Number(receipt.discountDays) || 0;
   const subtotal = Number(receipt.subtotal) || 0;
   const discount = Number(receipt.discount) || 0;
   const total = Number(receipt.total) || 0;
-  const now = new Date();
-  const printedAt = escapeReceiptHtml(
-    now.toLocaleString(undefined, { year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+
+  const txRaw = receipt.transactionAt || receipt.paymentDate || new Date().toISOString();
+  const txDate = new Date(txRaw);
+  const transactionWhen = escapeReceiptHtml(
+    Number.isFinite(txDate.getTime())
+      ? txDate.toLocaleString(undefined, {
+          year: 'numeric',
+          month: 'short',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        })
+      : String(txRaw)
   );
 
-  const row = (label: string, value: string) =>
-    `<div class="row"><span class="l">${label}</span><span class="v">${value}</span></div>`;
+  // Label on its own line (left); value on the next line (right) — fits POS-58
+  const field = (label: string, value: string) =>
+    value
+      ? `<div class="field"><div class="lab">${label}</div><div class="val">${value}</div></div>`
+      : '';
 
   const discountBlock =
     discount > 0
-      ? `${row(`Disc. (${discountDays}d)`, `- ${money(discount)}`)}`
+      ? `${field(`Discount (${discountDays} day/s)`, `- ${money(discount)}`)}`
       : '';
+
+  const businessBits = [
+    companyAddress ? `<div>${companyAddress}</div>` : '',
+    companyPhone ? `<div>Tel: ${companyPhone}</div>` : '',
+    companyEmail ? `<div>${companyEmail}</div>` : '',
+  ]
+    .filter(Boolean)
+    .join('');
 
   const html = `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>OR ${account}</title>
+  <title>Receipt ${account}</title>
   <style>
-    /* POS-58: 58mm roll, ~48mm printable */
-    @page { size: 58mm auto; margin: 2mm; }
+    @page { size: 58mm auto; margin: 1.5mm; }
     * { box-sizing: border-box; }
     html, body {
       margin: 0;
       padding: 0;
       background: #fff;
-      color: #000;
-      font-family: "Courier New", Courier, ui-monospace, monospace;
-      font-size: 11px;
-      line-height: 1.35;
+      color: #000 !important;
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 13px;
+      line-height: 1.3;
       -webkit-print-color-adjust: exact;
       print-color-adjust: exact;
     }
     .ticket {
-      width: 54mm;
-      max-width: 54mm;
+      width: 55mm;
+      max-width: 55mm;
       margin: 0 auto;
-      padding: 2mm 1.5mm 4mm;
+      padding: 2mm 1.5mm 5mm;
+      color: #000;
     }
     .center { text-align: center; }
-    .bold { font-weight: 700; }
-    .muted { color: #333; font-size: 10px; }
-    .tiny { font-size: 9px; color: #444; }
     .brand {
-      font-size: 13px;
+      font-size: 15px;
       font-weight: 800;
       text-transform: uppercase;
-      letter-spacing: 0.02em;
+      letter-spacing: 0.01em;
       word-break: break-word;
+      color: #000;
     }
-    .title { font-size: 10px; margin-top: 2px; }
+    .when {
+      margin-top: 4px;
+      font-size: 12px;
+      font-weight: 700;
+      color: #000;
+    }
     hr {
       border: none;
       border-top: 1px dashed #000;
-      margin: 6px 0;
+      margin: 7px 0;
     }
-    .row {
-      display: flex;
-      justify-content: space-between;
-      gap: 4px;
-      margin: 2px 0;
-      align-items: flex-start;
+    .field { margin: 5px 0; color: #000; }
+    .field .lab {
+      text-align: left;
+      font-size: 11px;
+      font-weight: 700;
+      color: #000;
+      text-transform: uppercase;
+      letter-spacing: 0.02em;
     }
-    .row .l { flex: 0 1 auto; max-width: 55%; word-break: break-word; }
-    .row .v { flex: 1 1 auto; text-align: right; word-break: break-word; font-weight: 600; }
-    .tot {
-      display: flex;
-      justify-content: space-between;
-      font-weight: 800;
+    .field .val {
+      text-align: right;
       font-size: 13px;
-      margin-top: 4px;
-      padding-top: 2px;
+      font-weight: 700;
+      color: #000;
+      word-break: break-word;
+      margin-top: 1px;
+    }
+    .tot { margin-top: 6px; color: #000; }
+    .tot .lab { font-size: 12px; font-weight: 800; text-align: left; }
+    .tot .val { font-size: 16px; font-weight: 800; text-align: right; margin-top: 2px; }
+    .biz {
+      text-align: center;
+      font-size: 11px;
+      font-weight: 600;
+      color: #000;
+      line-height: 1.35;
+      word-break: break-word;
+    }
+    .disclaimer {
+      text-align: center;
+      font-size: 11px;
+      font-weight: 800;
+      color: #000;
+      text-transform: uppercase;
+      margin-top: 8px;
+      line-height: 1.3;
+    }
+    .thanks {
+      text-align: center;
+      font-size: 12px;
+      font-weight: 700;
+      color: #000;
     }
     .cut {
       text-align: center;
       margin-top: 8px;
-      font-size: 9px;
-      letter-spacing: 0.08em;
+      font-size: 11px;
+      font-weight: 700;
+      color: #000;
+      letter-spacing: 0.12em;
     }
     @media screen {
       body { background: #e5e7eb; padding: 12px; }
-      .ticket {
-        background: #fff;
-        box-shadow: 0 4px 16px rgba(0,0,0,0.12);
-      }
+      .ticket { background: #fff; box-shadow: 0 4px 16px rgba(0,0,0,0.12); }
     }
     @media print {
-      html, body { width: 58mm; }
-      .ticket { width: 54mm; box-shadow: none; }
+      html, body { width: 58mm; color: #000 !important; }
+      .ticket { width: 55mm; box-shadow: none; }
+      * { color: #000 !important; }
     }
   </style>
 </head>
@@ -1649,22 +1702,30 @@ function printReceipt(receipt: any) {
   <div class="ticket">
     <div class="center">
       <div class="brand">${company}</div>
-      <div class="title bold">OFFICIAL RECEIPT</div>
+      <div class="when">${transactionWhen}</div>
     </div>
     <hr/>
-    ${row('Account #', account)}
-    ${row('Customer', customer)}
-    ${username ? row('Username', username) : ''}
-    ${row('Plan', `${plan} x${months}`)}
-    ${row('Paid on', paymentDate)}
-    ${row('Next due', newDue)}
+    ${field('Account #', account)}
+    ${field('Customer Name', fullName)}
+    ${field('Extension Availed', extension)}
+    ${field('Plan', plan)}
+    ${field('Next Due Date', newDue)}
     <hr/>
-    ${row('Subtotal', money(subtotal))}
+    ${field('Subtotal', money(subtotal))}
     ${discountBlock}
-    <div class="tot"><span>TOTAL</span><span>${money(total)}</span></div>
+    <div class="field tot">
+      <div class="lab">TOTAL</div>
+      <div class="val">${money(total)}</div>
+    </div>
     <hr/>
-    <div class="center muted">Thank you for your payment.</div>
-    <div class="center tiny" style="margin-top:4px">${printedAt}</div>
+    <div class="thanks">Thank you for your payment.</div>
+    ${
+      businessBits
+        ? `<hr/><div class="biz"><div class="brand" style="font-size:12px;margin-bottom:3px">${company}</div>${businessBits}</div>`
+        : ''
+    }
+    <hr/>
+    <div class="disclaimer">This is not an official receipt</div>
     <div class="cut">* * *</div>
   </div>
   <script>
@@ -1675,7 +1736,7 @@ function printReceipt(receipt: any) {
 </body>
 </html>`;
 
-  const w = window.open('', '_blank', 'width=280,height=560');
+  const w = window.open('', '_blank', 'width=300,height=640');
   if (w) {
     w.document.write(html);
     w.document.close();

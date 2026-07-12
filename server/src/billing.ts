@@ -716,6 +716,7 @@ export async function recordPppoePayment(
   }
 
   const company = db.prepare('SELECT * FROM company WHERE id = 1').get() as any;
+  const transactionAt = new Date().toISOString();
   return {
     ok: true,
     months,
@@ -731,12 +732,15 @@ export async function recordPppoePayment(
     sessionRefresh,
     receipt: {
       company: company?.name || 'ISP Billing',
+      companyAddress: company?.address || null,
+      companyPhone: company?.phone || null,
+      companyEmail: company?.email || null,
       account: updated.account_number,
       customer: updated.customer_name || updated.username,
-      username: updated.username,
       plan,
       months,
       paymentDate: paymentDate.slice(0, 10),
+      transactionAt,
       previousDue,
       newDue,
       subtotal,
