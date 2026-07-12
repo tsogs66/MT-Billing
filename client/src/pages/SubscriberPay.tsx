@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import {
   CheckCircle2, Loader2, Camera, ShieldCheck, Info, Clock3, ImageIcon,
-  ZoomIn, Download, X, SwitchCamera,
+  ZoomIn, Download, X, SwitchCamera, Upload, Copy, Check,
 } from 'lucide-react';
 import { PRODUCT_TITLE } from '../branding';
 
@@ -43,8 +43,10 @@ export default function SubscriberPay() {
   const [cameraOpen, setCameraOpen] = useState(false);
   const [cameraError, setCameraError] = useState('');
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
+  const [copied, setCopied] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     document.title = `Pay — ${PRODUCT_TITLE}`;
@@ -138,6 +140,19 @@ export default function SubscriberPay() {
     void runOcr(dataUrl);
   };
 
+  const onFilePick = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 6 * 1024 * 1024) {
+      setError('Screenshot must be 6MB or smaller.');
+      return;
+    }
+    setError('');
+    const reader = new FileReader();
+    reader.onload = () => applyCapturedPhoto(String(reader.result || ''));
+    reader.readAsDataURL(file);
+  };
+
   const capturePhoto = () => {
     const video = videoRef.current;
     if (!video || !video.videoWidth) {
@@ -151,6 +166,16 @@ export default function SubscriberPay() {
     if (!ctx) return;
     ctx.drawImage(video, 0, 0);
     applyCapturedPhoto(canvas.toDataURL('image/jpeg', 0.85));
+  };
+
+  const copyAccount = async (value: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
+    } catch {
+      setError('Could not copy number. Long-press to copy instead.');
+    }
   };
 
   const downloadQr = async (src: string, label: string) => {
@@ -286,7 +311,7 @@ export default function SubscriberPay() {
                 <li>Choose <b>GCash</b> or <b>Maya</b> below (or scan with any bank app).</li>
                 <li>Tap the QR to enlarge, or download it, then scan and pay the exact amount.</li>
                 <li>Copy the <b>Reference / Transaction No.</b> from your receipt.</li>
-                <li>Optional: take a photo of your receipt — we try to read the reference automatically.</li>
+                <li>Optional: take a photo or upload a receipt screenshot — we try to read the reference automatically.</li>
                 <li>Submit for review. Service restores after your ISP verifies payment.</li>
               </ol>
               <p className="text-xs text-slate-600 mt-3 rounded-xl bg-white border border-slate-200 px-3 py-2.5 leading-relaxed">
@@ -300,35 +325,75 @@ export default function SubscriberPay() {
 
             {!paid && !expired && !submitted && (
               <>
-                {/* Channel select */}
+                {/* Channel select — sliding GCash / Maya */}
                 <div>
                   <div className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">Pay with</div>
-                  <div className="grid grid-cols-2 gap-3">
+                  <div
+                    className="relative grid grid-cols-2 rounded-2xl bg-slate-100 p-1"
+                    role="tablist"
+                    aria-label="Payment wallet"
+                  >
+                    <span
+                      aria-hidden
+                      className={`absolute top-1 bottom-1 w-[calc(50%-4px)] rounded-xl shadow-sm transition-all duration-300 ease-out ${
+                        channel === 'maya'
+                          ? 'left-[calc(50%+2px)] bg-[#00D632]'
+                          : channel === 'gcash'
+                            ? 'left-1 bg-[#007DFE]'
+                            : 'left-1 bg-transparent shadow-none'
+                      }`}
+                    />
                     <button
                       type="button"
-                      onClick={() => setChannel('gcash')}
-                      className={`rounded-2xl border-2 p-3 flex flex-col items-center gap-2 transition ${
-                        channel === 'gcash' ? 'border-sky-500 bg-sky-50 shadow-sm' : 'border-slate-200 hover:border-slate-300'
-                      }`}
+                      role="tab"
+                      aria-selected={channel === 'gcash'}
+                      onClick={() => {
+                        setChannel('gcash');
+                        setCopied(false);
+                      }}
+                      className="relative z-10 flex items-center justify-center rounded-xl px-2 py-2.5 focus:outline-none"
                     >
-                      <img src="/wallets/gcash.svg" alt="GCash" className="h-9 w-auto" />
-                      <span className="text-sm font-semibold text-slate-700">GCash</span>
+                      <img
+                        src="/wallets/gcash.svg"
+                        alt="GCash"
+                        className={`h-9 w-auto max-w-[7.5rem] rounded-lg transition ${
+                          channel === 'gcash' ? 'ring-2 ring-white/80 shadow-sm' : 'opacity-80'
+                        }`}
+                      />
                     </button>
                     <button
                       type="button"
-                      onClick={() => setChannel('maya')}
-                      className={`rounded-2xl border-2 p-3 flex flex-col items-center gap-2 transition ${
-                        channel === 'maya' ? 'border-emerald-500 bg-emerald-50 shadow-sm' : 'border-slate-200 hover:border-slate-300'
-                      }`}
+                      role="tab"
+                      aria-selected={channel === 'maya'}
+                      onClick={() => {
+                        setChannel('maya');
+                        setCopied(false);
+                      }}
+                      className="relative z-10 flex items-center justify-center rounded-xl px-2 py-2.5 focus:outline-none"
                     >
-                      <img src="/wallets/maya.svg" alt="Maya" className="h-9 w-auto" />
-                      <span className="text-sm font-semibold text-slate-700">Maya</span>
+                      <img
+                        src="/wallets/maya.svg"
+                        alt="Maya"
+                        className={`h-9 w-auto max-w-[7.5rem] rounded-lg transition ${
+                          channel === 'maya' ? 'ring-2 ring-white/80 shadow-sm' : 'opacity-80'
+                        }`}
+                      />
                     </button>
                   </div>
                   {accountHint && (
-                    <p className="text-xs text-slate-500 mt-2">
-                      Send to: <span className="font-mono font-semibold text-slate-700">{accountHint}</span>
-                    </p>
+                    <div className="mt-2.5 flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                      <span className="text-xs text-slate-500 shrink-0">Send to</span>
+                      <span className="font-mono text-sm font-semibold text-slate-800 truncate flex-1">{accountHint}</span>
+                      <button
+                        type="button"
+                        onClick={() => void copyAccount(accountHint)}
+                        className="shrink-0 inline-flex items-center justify-center rounded-lg border border-slate-200 bg-white p-1.5 text-slate-600 hover:bg-slate-100 hover:text-sky-700 transition"
+                        aria-label={copied ? 'Copied' : 'Copy account number'}
+                        title={copied ? 'Copied' : 'Copy'}
+                      >
+                        {copied ? <Check size={14} className="text-emerald-600" /> : <Copy size={14} />}
+                      </button>
+                    </div>
                   )}
                 </div>
 
@@ -410,11 +475,18 @@ export default function SubscriberPay() {
                   </div>
                 )}
 
-                {/* Receipt photo — camera only */}
+                {/* Receipt — camera or file upload */}
                 <div>
                   <div className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-1.5">
                     Receipt photo <span className="normal-case font-normal text-slate-400">(optional)</span>
                   </div>
+                  <input
+                    ref={fileRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={onFilePick}
+                  />
                   {screenshot ? (
                     <div className="relative rounded-2xl overflow-hidden border border-slate-200">
                       <img src={screenshot} alt="Receipt" className="w-full max-h-56 object-contain bg-slate-50" />
@@ -437,9 +509,17 @@ export default function SubscriberPay() {
                         <button
                           type="button"
                           className="bg-white/95 text-xs px-2 py-1 rounded-lg border border-slate-200"
+                          onClick={() => fileRef.current?.click()}
+                        >
+                          Upload
+                        </button>
+                        <button
+                          type="button"
+                          className="bg-white/95 text-xs px-2 py-1 rounded-lg border border-slate-200"
                           onClick={() => {
                             setScreenshot(null);
                             setOcrHints([]);
+                            if (fileRef.current) fileRef.current.value = '';
                           }}
                         >
                           Remove
@@ -447,18 +527,29 @@ export default function SubscriberPay() {
                       </div>
                     </div>
                   ) : (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setCameraOpen(true);
-                        setCameraError('');
-                      }}
-                      className="w-full rounded-2xl border-2 border-dashed border-slate-200 hover:border-sky-300 hover:bg-sky-50/50 px-4 py-6 flex flex-col items-center gap-2 text-slate-500 transition"
-                    >
-                      <Camera size={28} className="text-sky-600" />
-                      <span className="text-sm font-medium text-slate-700">Take a photo of your receipt</span>
-                      <span className="text-xs text-slate-400">Opens the camera only — no gallery picker</span>
-                    </button>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCameraOpen(true);
+                          setCameraError('');
+                        }}
+                        className="rounded-2xl border-2 border-dashed border-slate-200 hover:border-sky-300 hover:bg-sky-50/50 px-3 py-5 flex flex-col items-center gap-1.5 text-slate-500 transition"
+                      >
+                        <Camera size={22} className="text-sky-600" />
+                        <span className="text-sm font-medium text-slate-700">Take photo</span>
+                        <span className="text-[11px] text-slate-400 text-center leading-snug">Use camera</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => fileRef.current?.click()}
+                        className="rounded-2xl border-2 border-dashed border-slate-200 hover:border-sky-300 hover:bg-sky-50/50 px-3 py-5 flex flex-col items-center gap-1.5 text-slate-500 transition"
+                      >
+                        <Upload size={22} className="text-sky-600" />
+                        <span className="text-sm font-medium text-slate-700">Upload</span>
+                        <span className="text-[11px] text-slate-400 text-center leading-snug">From files / gallery</span>
+                      </button>
+                    </div>
                   )}
                 </div>
 
@@ -634,7 +725,7 @@ export default function SubscriberPay() {
                 aria-label="Capture photo"
               />
             )}
-            <p className="text-[11px] text-white/55 text-center">Camera only — gallery upload is disabled</p>
+            <p className="text-[11px] text-white/55 text-center">Align the receipt, then tap the shutter</p>
           </div>
         </div>
       )}
