@@ -303,13 +303,18 @@ echo
 log_ok "Done"
 echo "  DynDNS host : ${HOSTNAME}"
 echo "  Pay links   : ${PUBLIC_BASE}/pay/<token>"
-echo "  Mode        : $([[ "$PAY_ONLY" == "1" ]] && echo 'pay-only (public)' || echo 'full panel')"
+echo "  Mode        : $([[ "$PAY_ONLY" == "1" ]] && echo 'pay-only on DynDNS + full panel on LAN IP' || echo 'full panel')"
+LAN_IP_NOW="$(detect_lan_ip)"
+if [[ -n "$LAN_IP_NOW" ]]; then
+  echo "  LAN panel   : http://${LAN_IP_NOW}/  (admin UI)"
+fi
 echo
 echo "Checklist:"
 echo "  1. DynDNS A/AAAA record → your public IP"
-echo "  2. Router forward TCP ${PANEL_PORT}$([[ "$SCHEME" == https ]] && echo '/443') → this LXC IP"
-echo "  3. In the panel: Payment Links → confirm Active base is ${PUBLIC_BASE}"
-echo "  4. Copy a pay link and open it from a phone on mobile data (not Wi‑Fi)"
+echo "  2. pfSense + ER7206 forward TCP ${PANEL_PORT}$([[ "$SCHEME" == https ]] && echo '/443') → this LXC (${LAN_IP_NOW:-192.168.x.x})"
+echo "  3. LAN: open http://${LAN_IP_NOW:-THIS_LXC_IP}/ for the full panel"
+echo "  4. Internet: only /pay/... works when using --pay-only"
+echo "  5. Payment Links → Active base = ${PUBLIC_BASE}"
 echo
 if [[ "$PAY_ONLY" != "1" ]]; then
   log_warn "Full panel is exposed on DynDNS. Prefer --pay-only for subscriber links, and keep admin on LAN."
