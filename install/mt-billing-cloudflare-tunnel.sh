@@ -113,23 +113,48 @@ validate_token() {
   if [[ "$t" == *"…"* || "$t" == *"..."* || "$t" == "eyJh..."* ]]; then
     log_err "That looks like a placeholder token, not a real Cloudflare install token."
     echo "  In Zero Trust → Networks → Tunnels → your tunnel → Install connector, copy the full token" >&2
-    echo "  (long string starting with eyJh… — hundreds of characters)." >&2
+    echo "  (long string starting with eyJh…)." >&2
     return 1
   fi
   if [[ "$t" != eyJ* ]]; then
-    log_err "Tunnel token should start with eyJ (Cloudflare connector JWT)."
+    log_err "Tunnel token should start with eyJ (Cloudflare connector token)."
     echo "  Do not use an API Token / Global API Key — use the tunnel install/connector token." >&2
     return 1
   fi
-  # Typical tunnel tokens are long JWTs (header.payload.sig)
-  if [[ ${#t} -lt 100 ]]; then
+  # Typical connector tokens are long base64 JSON blobs (often without dots).
+  # Older docs sometimes show JWT-shaped tokens; both are accepted if they decode.
+  if [[ ${#t} -lt 80 ]]; then
     log_err "Tunnel token looks too short (${#t} chars). Paste the full connector token from Cloudflare."
     return 1
   fi
-  if [[ "$t" != *.*.* ]]; then
-    log_err "Tunnel token does not look like a JWT (expected three dot-separated parts)."
+  # Prefer tokens that decode to Cloudflare's {a,t,s} connector JSON; also allow dotted JWTs.
+  if [[ "$t" == *.*.* ]]; then
+    return 0
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    if python3 - "$t" <<'PY' 2>/dev/null
+import sys, json, base64
+t = sys.argv[1]
+pad = "=" * ((4 - len(t) % 4) % 4)
+try:
+    data = json.loads(base64.urlsafe_b64decode(t + pad))
+except Exception:
+    sys.exit(1)
+if not isinstance(data, dict):
+    sys.exit(1)
+# Cloudflare tunnel run tokens look like {"a": "...", "t": "<uuid>", "s": "..."}
+if data.get("a") and data.get("t") and data.get("s"):
+    sys.exit(0)
+sys.exit(1)
+PY
+    then
+      return 0
+    fi
+    log_err "Token is not a valid Cloudflare tunnel connector token."
+    echo "  Expected a token from Zero Trust → Tunnels → Install connector (decodes to a/t/s)." >&2
     return 1
   fi
+  # No python3 — accept long eyJ… tokens (cloudflared will validate for real)
   return 0
 }
 
