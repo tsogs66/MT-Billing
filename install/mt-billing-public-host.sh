@@ -174,6 +174,14 @@ write_nginx_full_locations() {
         proxy_read_timeout 86400;
     }
 
+    # Pay SPA routes — never directory-index (a leftover dist/pay/ causes 403)
+    location = /pay {
+        try_files /index.html =404;
+    }
+    location ^~ /pay/ {
+        try_files \$uri /index.html;
+    }
+
     location / {
         try_files \$uri \$uri/ /index.html;
     }
@@ -182,9 +190,13 @@ EOF
 
 write_nginx_payonly_locations() {
   cat <<EOF
-    # Public payment portal only (DynDNS / internet)
+    # Public payment portal only (DynDNS / internet / Cloudflare Tunnel)
+    # Important: omit \$uri/ so nginx does not 403 on a real dist/pay/ directory.
+    location = /pay {
+        try_files /index.html =404;
+    }
     location ^~ /pay/ {
-        try_files \$uri \$uri/ /index.html;
+        try_files \$uri /index.html;
     }
     location ^~ /api/public/ {
         proxy_pass http://127.0.0.1:${API_PORT}/api/public/;
@@ -195,6 +207,9 @@ write_nginx_payonly_locations() {
         proxy_set_header X-Forwarded-Proto \$scheme;
     }
     location ^~ /assets/ {
+        try_files \$uri =404;
+    }
+    location ^~ /wallets/ {
         try_files \$uri =404;
     }
     location = /index.html {

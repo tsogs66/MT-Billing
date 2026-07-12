@@ -225,7 +225,7 @@ export default function SubscriberPay() {
                         channel === 'gcash' ? 'border-sky-500 bg-sky-50 shadow-sm' : 'border-slate-200 hover:border-slate-300'
                       }`}
                     >
-                      <img src="/pay/gcash.svg" alt="GCash" className="h-9 w-auto" />
+                      <img src="/wallets/gcash.svg" alt="GCash" className="h-9 w-auto" />
                       <span className="text-sm font-semibold text-slate-700">GCash</span>
                     </button>
                     <button
@@ -235,7 +235,7 @@ export default function SubscriberPay() {
                         channel === 'maya' ? 'border-emerald-500 bg-emerald-50 shadow-sm' : 'border-slate-200 hover:border-slate-300'
                       }`}
                     >
-                      <img src="/pay/maya.svg" alt="Maya" className="h-9 w-auto" />
+                      <img src="/wallets/maya.svg" alt="Maya" className="h-9 w-auto" />
                       <span className="text-sm font-semibold text-slate-700">Maya</span>
                     </button>
                   </div>

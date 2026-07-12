@@ -157,6 +157,14 @@ server {
         proxy_read_timeout 86400;
     }
 
+    # Pay SPA — avoid 403 when dist/pay/ exists as a static directory
+    location = /pay {
+        try_files /index.html =404;
+    }
+    location ^~ /pay/ {
+        try_files \$uri /index.html;
+    }
+
     location / {
         try_files \$uri \$uri/ /index.html;
     }

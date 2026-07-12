@@ -498,7 +498,9 @@ do_apply() {
   echo "  1. Cloudflare Tunnel public hostname points to http://127.0.0.1:${LOCAL_PORT}"
   echo "  2. nginx (or the panel) is listening on that port"
   echo "  3. Payment Links → Active base shows https://${HOSTNAME:-YOUR_HOST}"
-  echo "  4. Open a pay link from mobile data (not Wi‑Fi)"
+  echo "  4. Open a full pay link https://${HOSTNAME:-YOUR_HOST}/pay/<token> (not bare /pay/)"
+  echo "  5. If Cloudflare shows 502 Host Error: cloudflared or nginx is down — run: $0 status"
+  echo "  6. If /pay/ returns 403: remove leftover dist/pay/ or re-run public-host / reinstall nginx config"
 }
 
 case "$ACTION" in
