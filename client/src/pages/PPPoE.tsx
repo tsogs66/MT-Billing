@@ -911,7 +911,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
       {recheckPreview && (
         <Modal
           title="Confirm expiry protocols"
-          subtitle={`${service.toUpperCase()} · grace ${recheckPreview.graceHours}h after non-payment`}
+          subtitle={`${service.toUpperCase()} · grace ${recheckPreview.graceHours}h from due date`}
           onClose={() => !recheckBusy && setRecheckPreview(null)}
           footer={
             <>
@@ -931,12 +931,12 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
         >
           <div className="space-y-4 text-sm text-slate-600">
             <p>
-              Found accounts past due. Confirm to apply non-payment expiry (expire profile) and disable accounts that are past the grace period.
+              Grace is counted from each account’s <b>due date</b>. Within grace → non-payment profile; past grace → disable on MikroTik.
             </p>
             {!!recheckPreview.toExpire.length && (
               <div>
                 <div className="font-semibold text-amber-800 mb-1">
-                  Move to non-payment / expire profile ({recheckPreview.toExpire.length})
+                  Within grace → non-payment profile ({recheckPreview.toExpire.length})
                 </div>
                 <ul className="max-h-40 overflow-auto rounded-xl border border-amber-100 bg-amber-50/50 divide-y divide-amber-100">
                   {recheckPreview.toExpire.map((u: any) => (
@@ -945,7 +945,9 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                         <b className="text-slate-800">{u.username}</b>
                         <span className="text-slate-500"> · {u.customer}</span>
                       </span>
-                      <span className="text-xs text-amber-700 whitespace-nowrap">{u.daysOverdue}d overdue · due {u.due}</span>
+                      <span className="text-xs text-amber-700 whitespace-nowrap">
+                        {u.hoursOverdue ?? u.daysOverdue}h overdue · due {u.due}
+                      </span>
                     </li>
                   ))}
                 </ul>
@@ -954,7 +956,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
             {!!recheckPreview.toDisable.length && (
               <div>
                 <div className="font-semibold text-rose-800 mb-1">
-                  Disable past grace ({recheckPreview.toDisable.length})
+                  Past grace → disable ({recheckPreview.toDisable.length})
                 </div>
                 <ul className="max-h-40 overflow-auto rounded-xl border border-rose-100 bg-rose-50/50 divide-y divide-rose-100">
                   {recheckPreview.toDisable.map((u: any) => (
@@ -964,7 +966,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                         <span className="text-slate-500"> · {u.customer}</span>
                       </span>
                       <span className="text-xs text-rose-700 whitespace-nowrap">
-                        {u.hoursInNonPayment ?? '—'}h in non-payment · due {u.due}
+                        {u.hoursOverdue ?? '—'}h past due · due {u.due}
                       </span>
                     </li>
                   ))}

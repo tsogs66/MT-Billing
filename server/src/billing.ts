@@ -5,6 +5,7 @@ import {
   setPppSecretEnabled,
   removePppActiveByName,
   buildPppSecretComment,
+  ensurePppProfile,
 } from './mikrotik.js';
 
 const SESSION_REFRESH_MS = 5000;
@@ -172,14 +173,25 @@ export async function syncUserToRouter(
       const expire = user.expiration_profile && user.expiration_profile !== 'default'
         ? user.expiration_profile
         : 'non-payments';
+      try {
+        await ensurePppProfile(router, expire);
+      } catch {
+        /* profile may already exist */
+      }
       await updatePppSecret(router, user.username, {
         password: user.password || '',
         profile: expire,
         comment: commentFromUser({ ...user, status: 'non-payment', profile: user.profile }),
         disabled: false,
       });
+      await setPppSecretEnabled(router, user.username, true);
     } else if (action === 'disable') {
       await setPppSecretEnabled(router, user.username, false);
+      try {
+        await removePppActiveByName(router, user.username);
+      } catch {
+        /* best-effort */
+      }
       await updatePppSecret(router, user.username, {
         password: user.password || '',
         comment: commentFromUser({ ...user, status: 'disabled' }),

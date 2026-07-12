@@ -664,7 +664,7 @@ export default function IPoE() {
       {recheckPreview && (
         <Modal
           title="Confirm IPoE expiry protocols"
-          subtitle={`Grace ${recheckPreview.graceHours}h after due date`}
+          subtitle={`Grace ${recheckPreview.graceHours}h from day after due date`}
           onClose={() => !recheckBusy && setRecheckPreview(null)}
           footer={
             <>

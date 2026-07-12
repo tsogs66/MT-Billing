@@ -143,9 +143,40 @@ async function sendSmsBulk(s: NotifySettings, to: string, message: string) {
 
 function daysUntil(due?: string | null): number | null {
   if (!due) return null;
-  const dueMs = new Date(`${due.slice(0, 10)}T00:00:00Z`).getTime();
+  const raw = String(due).trim();
+  const day = raw.slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+    const parsed = Date.parse(raw);
+    if (!Number.isFinite(parsed)) return null;
+    const dueDay = new Date(parsed).toISOString().slice(0, 10);
+    const dueMs = new Date(`${dueDay}T00:00:00Z`).getTime();
+    const todayMs = new Date(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`).getTime();
+    return Math.round((dueMs - todayMs) / 86400000);
+  }
+  const dueMs = new Date(`${day}T00:00:00Z`).getTime();
   const todayMs = new Date(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`).getTime();
   return Math.round((dueMs - todayMs) / 86400000);
+}
+
+/** Hours past the end of the due date (positive = overdue). Null if no/invalid due or still on/before due day. */
+function hoursPastDue(due?: string | null): number | null {
+  if (!due) return null;
+  const raw = String(due).trim();
+  let dueDay = raw.slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDay)) {
+    const parsed = Date.parse(raw);
+    if (!Number.isFinite(parsed)) return null;
+    dueDay = new Date(parsed).toISOString().slice(0, 10);
+  }
+  // Account remains valid through the due date; overdue clock starts at next midnight UTC.
+  const overdueFrom = new Date(`${dueDay}T00:00:00Z`).getTime() + 24 * 3600000;
+  if (!Number.isFinite(overdueFrom)) return null;
+  const hours = (Date.now() - overdueFrom) / 3600000;
+  return hours > 0 ? hours : null;
+}
+
+function statusKey(status?: string | null): string {
+  return String(status || '').toLowerCase().replace(/\s+/g, '-');
 }
 
 /**
@@ -320,10 +351,49 @@ export type BillingCandidate = {
   status: string;
   due: string | null;
   daysOverdue: number;
+  hoursOverdue: number;
   hoursInNonPayment: number | null;
   profile: string;
   action: 'expire' | 'disable';
 };
+
+function classifyOverdueUser(
+  u: any,
+  graceHours: number
+): BillingCandidate | null {
+  const hoursOverdue = hoursPastDue(u.subscription_due);
+  if (hoursOverdue == null) return null;
+  const st = statusKey(u.status);
+  if (st === 'disabled') return null;
+
+  const d = daysUntil(u.subscription_due);
+  const hoursInNp = u.nonpayment_since
+    ? (Date.now() - Date.parse(u.nonpayment_since)) / 3600000
+    : null;
+
+  const base: BillingCandidate = {
+    id: u.id,
+    username: u.username,
+    customer: u.customer_name || u.username,
+    service: u.service || 'pppoe',
+    status: u.status,
+    due: u.subscription_due || null,
+    daysOverdue: d != null && d < 0 ? Math.abs(d) : Math.floor(hoursOverdue / 24),
+    hoursOverdue: Math.round(hoursOverdue * 10) / 10,
+    hoursInNonPayment: hoursInNp != null && Number.isFinite(hoursInNp) ? Math.round(hoursInNp * 10) / 10 : null,
+    profile: u.profile || '',
+    action: 'expire',
+  };
+
+  // Grace is measured from the account due date (not from when we first marked non-payment).
+  if (hoursOverdue >= graceHours) {
+    return { ...base, action: 'disable' };
+  }
+
+  // Within grace: move/keep on non-payment expire profile (skip if already there)
+  if (st === 'non-payment' || st === 'nonpayment') return null;
+  return { ...base, action: 'expire' };
+}
 
 /** Preview overdue / past-grace accounts without mutating. */
 export function previewBillingEnforcement(opts?: { service?: string }): {
@@ -333,12 +403,11 @@ export function previewBillingEnforcement(opts?: { service?: string }): {
   autodisableEnabled: boolean;
 } {
   const s = getSettings();
-  const now = Date.now();
-  const graceHours = Number(s.autodisable_hours) || 24;
+  const graceHours = Math.max(1, Number(s.autodisable_hours) || 24);
   const service = opts?.service ? String(opts.service).toLowerCase() : null;
   const all = (
     service
-      ? db.prepare(`SELECT * FROM pppoe_users WHERE lower(service) = ?`).all(service)
+      ? db.prepare(`SELECT * FROM pppoe_users WHERE lower(coalesce(service, 'pppoe')) = ?`).all(service)
       : db.prepare(`SELECT * FROM pppoe_users`).all()
   ) as any[];
 
@@ -346,38 +415,10 @@ export function previewBillingEnforcement(opts?: { service?: string }): {
   const toDisable: BillingCandidate[] = [];
 
   for (const u of all) {
-    const d = daysUntil(u.subscription_due);
-    if (d == null || d >= 0) continue;
-    const status = String(u.status || '').toLowerCase();
-    if (status === 'disabled') continue;
-
-    const hoursInNp = u.nonpayment_since
-      ? (now - Date.parse(u.nonpayment_since)) / 3600000
-      : null;
-
-    const base: BillingCandidate = {
-      id: u.id,
-      username: u.username,
-      customer: u.customer_name || u.username,
-      service: u.service || 'pppoe',
-      status: u.status,
-      due: u.subscription_due || null,
-      daysOverdue: Math.abs(d),
-      hoursInNonPayment: hoursInNp != null && Number.isFinite(hoursInNp) ? Math.round(hoursInNp * 10) / 10 : null,
-      profile: u.profile || '',
-      action: 'expire',
-    };
-
-    // Past due, not yet on non-payment protocol → expire / non-payment profile
-    if (!u.nonpayment_since) {
-      toExpire.push({ ...base, action: 'expire' });
-      continue;
-    }
-
-    // Already non-payment / expired and past grace → disable
-    if (hoursInNp != null && hoursInNp >= graceHours) {
-      toDisable.push({ ...base, action: 'disable' });
-    }
+    const c = classifyOverdueUser(u, graceHours);
+    if (!c) continue;
+    if (c.action === 'disable') toDisable.push(c);
+    else toExpire.push(c);
   }
 
   return {
@@ -405,6 +446,7 @@ export async function executeBillingEnforcement(opts?: {
   const s = getSettings();
   const now = Date.now();
   const forceDisable = !!opts?.forceDisable;
+  const graceHours = Math.max(1, Number(s.autodisable_hours) || 24);
   const summary = {
     remindersSent: 0,
     markedNonPayment: 0,
@@ -421,7 +463,7 @@ export async function executeBillingEnforcement(opts?: {
 
   const all = (
     service
-      ? db.prepare(`SELECT * FROM pppoe_users WHERE lower(service) = ?`).all(service)
+      ? db.prepare(`SELECT * FROM pppoe_users WHERE lower(coalesce(service, 'pppoe')) = ?`).all(service)
       : db.prepare(`SELECT * FROM pppoe_users`).all()
   ) as (Client & {
     status: string;
@@ -442,9 +484,10 @@ export async function executeBillingEnforcement(opts?: {
   for (const u of all) {
     const d = daysUntil(u.subscription_due);
     if (d == null) continue;
+    const st = statusKey(u.status);
 
     // Expiry reminder + pay link
-    if (s.reminder_enabled && u.status === 'Active' && d >= 0 && d <= s.days_before && u.reminder_sent !== u.subscription_due) {
+    if (s.reminder_enabled && st === 'active' && d >= 0 && d <= s.days_before && u.reminder_sent !== u.subscription_due) {
       const channels: ('email' | 'sms')[] = [];
       if (s.email_enabled) channels.push('email');
       if (s.sms_enabled) channels.push('sms');
@@ -464,87 +507,79 @@ export async function executeBillingEnforcement(opts?: {
       }
     }
 
-    // Non-payment: switch expire profile, then disable after X hours
-    if (d < 0 && u.status !== 'disabled') {
+    const classified = classifyOverdueUser(u, graceHours);
+    if (!classified) continue;
+
+    // Within grace → non-payment / expire profile on MikroTik
+    if (classified.action === 'expire') {
       if (!u.nonpayment_since) {
         db.prepare("UPDATE pppoe_users SET nonpayment_since = ?, status = 'non-payment' WHERE id = ?").run(
           new Date(now).toISOString(),
           u.id
         );
-        summary.markedNonPayment++;
-        const full = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(u.id) as any;
-        const sync = await syncUserToRouter(full, 'expire');
-        if (sync.ok) summary.profileSwitched++;
-        else summary.routerErrors++;
-
-        summary.expired.push({
-          id: u.id,
-          username: u.username,
-          customer: u.customer_name || u.username,
-          service: u.service || 'pppoe',
-          status: 'non-payment',
-          due: u.subscription_due || null,
-          daysOverdue: Math.abs(d),
-          hoursInNonPayment: 0,
-          profile: u.profile || '',
-          action: 'expire',
-        });
-
-        const channels: ('email' | 'sms')[] = [];
-        if (s.email_enabled) channels.push('email');
-        if (s.sms_enabled) channels.push('sms');
-        if (channels.length) {
-          let payUrl = '';
-          try {
-            const link = ensureFreshPayLink(u.id, baseUrl || undefined);
-            payUrl = link.url.startsWith('http') ? link.url : baseUrl ? `${baseUrl.replace(/\/$/, '')}${link.path}` : link.path;
-          } catch {
-            /* optional */
-          }
-          const msg = `Hi ${u.customer_name || u.username}, your subscription is overdue (due ${u.subscription_due}). Your account was moved to the non-payment profile. Pay now to restore full speed.${payUrl ? ` ${payUrl}` : ''}`;
-          await notifyClient(u, channels, 'Payment overdue — limited access', msg, 'nonpayment_notice');
-        }
-      } else if (s.autodisable_enabled || forceDisable) {
-        const hours = (now - Date.parse(u.nonpayment_since)) / 3600000;
-        if (hours >= s.autodisable_hours && u.status !== 'disabled') {
-          db.prepare("UPDATE pppoe_users SET status = 'disabled', online = 0 WHERE id = ?").run(u.id);
-          const full = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(u.id) as any;
-          const sync = await syncUserToRouter(full, 'disable');
-          if (!sync.ok) summary.routerErrors++;
-
-          summary.disabled++;
-          summary.disabledUsers.push({
-            id: u.id,
-            username: u.username,
-            customer: u.customer_name || u.username,
-            service: u.service || 'pppoe',
-            status: 'disabled',
-            due: u.subscription_due || null,
-            daysOverdue: Math.abs(d),
-            hoursInNonPayment: Math.round(hours * 10) / 10,
-            profile: u.profile || '',
-            action: 'disable',
-          });
-
-          const channels: ('email' | 'sms')[] = [];
-          if (s.email_enabled) channels.push('email');
-          if (s.sms_enabled) channels.push('sms');
-          let payUrl = '';
-          try {
-            const link = ensureFreshPayLink(u.id, baseUrl || undefined);
-            payUrl = link.url.startsWith('http') ? link.url : baseUrl ? `${baseUrl.replace(/\/$/, '')}${link.path}` : link.path;
-          } catch {
-            /* optional */
-          }
-          const msg = `Hi ${u.customer_name || u.username}, your service has been disabled due to non-payment for more than ${s.autodisable_hours} hours. Settle your balance to restore your connection.${payUrl ? ` Pay: ${payUrl}` : ''}`;
-          if (channels.length) await notifyClient(u, channels, 'Service disabled — payment overdue', msg, 'auto_disable');
-          db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
-            'warning',
-            'billing',
-            `Auto-disabled ${u.username} after ${Math.round(hours)}h non-payment${sync.ok ? ' (MikroTik synced)' : ` (router: ${sync.error})`}`
-          );
-        }
+      } else {
+        db.prepare("UPDATE pppoe_users SET status = 'non-payment' WHERE id = ?").run(u.id);
       }
+      summary.markedNonPayment++;
+      const full = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(u.id) as any;
+      const sync = await syncUserToRouter(full, 'expire');
+      if (sync.ok) summary.profileSwitched++;
+      else summary.routerErrors++;
+
+      summary.expired.push({ ...classified, status: 'non-payment', action: 'expire' });
+
+      const channels: ('email' | 'sms')[] = [];
+      if (s.email_enabled) channels.push('email');
+      if (s.sms_enabled) channels.push('sms');
+      if (channels.length) {
+        let payUrl = '';
+        try {
+          const link = ensureFreshPayLink(u.id, baseUrl || undefined);
+          payUrl = link.url.startsWith('http') ? link.url : baseUrl ? `${baseUrl.replace(/\/$/, '')}${link.path}` : link.path;
+        } catch {
+          /* optional */
+        }
+        const msg = `Hi ${u.customer_name || u.username}, your subscription is overdue (due ${u.subscription_due}). Your account was moved to the non-payment profile. Pay now to restore full speed.${payUrl ? ` ${payUrl}` : ''}`;
+        await notifyClient(u, channels, 'Payment overdue — limited access', msg, 'nonpayment_notice');
+      }
+      continue;
+    }
+
+    // Past grace (from due date) → disable
+    if (classified.action === 'disable' && (s.autodisable_enabled || forceDisable)) {
+      if (!u.nonpayment_since) {
+        db.prepare("UPDATE pppoe_users SET nonpayment_since = ? WHERE id = ?").run(new Date(now).toISOString(), u.id);
+      }
+      db.prepare("UPDATE pppoe_users SET status = 'disabled', online = 0 WHERE id = ?").run(u.id);
+      const full = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(u.id) as any;
+      const sync = await syncUserToRouter(full, 'disable');
+      if (!sync.ok) summary.routerErrors++;
+
+      summary.disabled++;
+      summary.disabledUsers.push({
+        ...classified,
+        status: 'disabled',
+        action: 'disable',
+        hoursInNonPayment: classified.hoursOverdue,
+      });
+
+      const channels: ('email' | 'sms')[] = [];
+      if (s.email_enabled) channels.push('email');
+      if (s.sms_enabled) channels.push('sms');
+      let payUrl = '';
+      try {
+        const link = ensureFreshPayLink(u.id, baseUrl || undefined);
+        payUrl = link.url.startsWith('http') ? link.url : baseUrl ? `${baseUrl.replace(/\/$/, '')}${link.path}` : link.path;
+      } catch {
+        /* optional */
+      }
+      const msg = `Hi ${u.customer_name || u.username}, your service has been disabled — subscription overdue past the ${graceHours}h grace period (due ${u.subscription_due}). Settle your balance to restore your connection.${payUrl ? ` Pay: ${payUrl}` : ''}`;
+      if (channels.length) await notifyClient(u, channels, 'Service disabled — payment overdue', msg, 'auto_disable');
+      db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+        'warning',
+        'billing',
+        `Disabled ${u.username} — ${classified.hoursOverdue}h past due (grace ${graceHours}h)${sync.ok ? ' (MikroTik synced)' : ` (router: ${sync.error})`}`
+      );
     }
   }
   return summary;
