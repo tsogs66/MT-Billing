@@ -7,11 +7,17 @@ import { api } from '../api';
 
 export const DEFAULT_PIN: [number, number] = [13.918665341879885, 120.93887161534413];
 
+/**
+ * Tip-accurate teardrop pin.
+ * Do NOT combine CSS translate(-50%,-100%) with iconAnchor — that double-offsets
+ * the tip away from the true lat/lng (Topology picker stays accurate because it
+ * uses a centered icon with matching iconAnchor).
+ */
 const pinIcon = L.divIcon({
   className: 'loc-pin',
-  html: `<div style="transform:translate(-50%,-100%)"><svg width="30" height="42" viewBox="0 0 24 34" xmlns="http://www.w3.org/2000/svg">
+  html: `<svg width="30" height="42" viewBox="0 0 24 34" xmlns="http://www.w3.org/2000/svg" style="display:block">
     <path d="M12 0C5.4 0 0 5.4 0 12c0 8.5 12 22 12 22s12-13.5 12-22C24 5.4 18.6 0 12 0z" fill="#ea580c"/>
-    <circle cx="12" cy="12" r="5" fill="#fff"/></svg></div>`,
+    <circle cx="12" cy="12" r="5" fill="#fff"/></svg>`,
   iconSize: [30, 42],
   iconAnchor: [15, 42],
 });
@@ -30,6 +36,20 @@ function Recenter({ pos }: { pos: [number, number] }) {
   useEffect(() => {
     map.setView(pos, map.getZoom());
   }, [map, pos]);
+  return null;
+}
+
+/** Modal maps often init at 0×0; without this, click→latlng is wrong. */
+function MapInvalidateSize() {
+  const map = useMap();
+  useEffect(() => {
+    const t1 = window.setTimeout(() => map.invalidateSize(), 80);
+    const t2 = window.setTimeout(() => map.invalidateSize(), 250);
+    return () => {
+      window.clearTimeout(t1);
+      window.clearTimeout(t2);
+    };
+  }, [map]);
   return null;
 }
 
@@ -52,6 +72,9 @@ export default function LocationEditor({
 
   const setLat = (v: string) => setPos(([, lng]) => [v === '' ? 0 : Number(v), lng]);
   const setLng = (v: string) => setPos(([lat]) => [lat, v === '' ? 0 : Number(v)]);
+
+  const pick = (lat: number, lng: number) =>
+    setPos([Number(lat.toFixed(8)), Number(lng.toFixed(8))]);
 
   const search = async () => {
     if (!query.trim()) return;
@@ -145,11 +168,25 @@ export default function LocationEditor({
 
           {msg && <div className="text-xs text-slate-500">{msg}</div>}
 
-          <div className="h-72 rounded-lg overflow-hidden border border-slate-100">
-            <MapContainer center={start} zoom={15} style={{ height: '100%', width: '100%' }} scrollWheelZoom>
-              <TileLayer attribution="&copy; OpenStreetMap contributors" url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+          <div className="h-72 rounded-lg overflow-hidden border border-slate-100 relative">
+            <MapContainer
+              key="user-location-editor"
+              center={start}
+              zoom={17}
+              minZoom={3}
+              maxZoom={22}
+              style={{ height: '100%', width: '100%' }}
+              scrollWheelZoom
+            >
+              <TileLayer
+                attribution="&copy; OpenStreetMap contributors"
+                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                maxZoom={22}
+                maxNativeZoom={19}
+              />
+              <MapInvalidateSize />
               <Recenter pos={pos} />
-              <ClickHandler onPick={(lat, lng) => setPos([lat, lng])} />
+              <ClickHandler onPick={pick} />
               <Marker
                 position={pos}
                 icon={pinIcon}
@@ -158,11 +195,14 @@ export default function LocationEditor({
                   dragend: (e) => {
                     const m = e.target as L.Marker;
                     const ll = m.getLatLng();
-                    setPos([ll.lat, ll.lng]);
+                    pick(ll.lat, ll.lng);
                   },
                 }}
               />
             </MapContainer>
+            <div className="absolute top-2 left-2 z-[500] bg-white/95 text-[11px] text-slate-600 px-2 py-1 rounded border border-slate-200 shadow-sm pointer-events-none">
+              Click map to place pin
+            </div>
           </div>
           <p className="text-[11px] text-slate-400">Click the map or drag the pin to set the exact location.</p>
         </div>
@@ -172,6 +212,12 @@ export default function LocationEditor({
           <button className="btn-primary" onClick={() => onDone({ lat: Number(pos[0]), lng: Number(pos[1]) })}>Done</button>
         </div>
       </div>
+      <style>{`
+        .loc-pin {
+          background: transparent !important;
+          border: none !important;
+        }
+      `}</style>
     </div>,
     document.body
   );
