@@ -366,6 +366,114 @@ export async function bulkChangePppoeUserPlans(
   };
 }
 
+/**
+ * Change only the MikroTik /ppp/secret profile for selected users.
+ * Does not change billing plan, comment, or panel DB profile.
+ */
+export async function bulkChangePppoeMikrotikProfiles(
+  ids: number[],
+  profileName: string
+): Promise<{
+  ok: boolean;
+  profile: string;
+  updated: number;
+  bounced: number;
+  failed: { id: number; username?: string; error: string }[];
+}> {
+  const profile = String(profileName || '').trim();
+  if (!profile) {
+    return { ok: false, profile: '', updated: 0, bounced: 0, failed: [{ id: 0, error: 'Profile required' }] };
+  }
+
+  const uniqueIds = [...new Set(ids.filter((id) => Number.isFinite(id) && id > 0))];
+  type Row = {
+    id: number;
+    username: string;
+    ok: boolean;
+    error?: string;
+    bounceable: boolean;
+    router: any | null;
+  };
+
+  const rows: Row[] = [];
+  for (const id of uniqueIds) {
+    const user = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(id) as any;
+    if (!user) {
+      rows.push({ id, username: '', ok: false, error: 'User not found', bounceable: false, router: null });
+      continue;
+    }
+    if (!user.router_id) {
+      rows.push({
+        id,
+        username: user.username,
+        ok: false,
+        error: 'No router assigned',
+        bounceable: false,
+        router: null,
+      });
+      continue;
+    }
+    const router = db.prepare('SELECT * FROM routers WHERE id = ?').get(user.router_id) as any;
+    if (!router?.host || !router?.api_user) {
+      rows.push({
+        id,
+        username: user.username,
+        ok: false,
+        error: 'Router API not configured',
+        bounceable: false,
+        router: null,
+      });
+      continue;
+    }
+    try {
+      await updatePppSecret(router, user.username, { profile });
+      const isDisabled = String(user.status || '').toLowerCase() === 'disabled';
+      rows.push({
+        id,
+        username: user.username,
+        ok: true,
+        bounceable: !isDisabled,
+        router,
+      });
+      db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+        'info',
+        'mikrotik',
+        `MT profile set for ${user.username} → ${profile}`
+      );
+    } catch (e: any) {
+      rows.push({
+        id,
+        username: user.username,
+        ok: false,
+        error: e?.message || String(e),
+        bounceable: false,
+        router: null,
+      });
+    }
+  }
+
+  const bounceJobs = rows
+    .filter((r) => r.ok && r.bounceable && r.router)
+    .map(async (r) => {
+      const sessionRefresh = await bouncePppSessionForRefresh(r.router, r.username, SESSION_REFRESH_MS);
+      return { id: r.id, bounced: sessionRefresh.bounced };
+    });
+  const bounceResults = await Promise.all(bounceJobs);
+  const bouncedIds = new Set(bounceResults.filter((b) => b.bounced).map((b) => b.id));
+
+  const failed = rows
+    .filter((r) => !r.ok)
+    .map((r) => ({ id: r.id, username: r.username, error: r.error || 'failed' }));
+
+  return {
+    ok: failed.length === 0,
+    profile,
+    updated: rows.filter((r) => r.ok).length,
+    bounced: bouncedIds.size,
+    failed,
+  };
+}
+
 export async function syncUserToRouter(
   user: any,
   action: 'restore' | 'expire' | 'disable' | 'enable'

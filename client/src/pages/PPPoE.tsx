@@ -76,6 +76,9 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
   const [showBulkPlan, setShowBulkPlan] = useState(false);
   const [bulkPlan, setBulkPlan] = useState('');
   const [bulkPlanError, setBulkPlanError] = useState('');
+  const [showBulkProfile, setShowBulkProfile] = useState(false);
+  const [bulkMtProfile, setBulkMtProfile] = useState('');
+  const [bulkProfileError, setBulkProfileError] = useState('');
   const [tabError, setTabError] = useState('');
   const [tabBusy, setTabBusy] = useState(false);
   const [profileEdit, setProfileEdit] = useState<any | null>(null);
@@ -380,6 +383,46 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
     }
   };
 
+  const openBulkChangeProfile = () => {
+    if (!selected.size) return;
+    const opts = [
+      ...SYSTEM_EXPIRE_PROFILES,
+      ...profiles.map((p) => String(p.name)).filter((n) => n && !isSystemPppName(n)),
+    ];
+    const unique = [...new Set(opts)];
+    setBulkMtProfile(unique[0] || '');
+    setBulkProfileError('');
+    if (!profiles.length) loadProfiles();
+    setShowBulkProfile(true);
+  };
+
+  const confirmBulkChangeProfile = async () => {
+    const ids = [...selected];
+    if (!ids.length) return;
+    if (!bulkMtProfile) {
+      setBulkProfileError('Select a MikroTik PPP profile');
+      return;
+    }
+    setBulkBusy(true);
+    setBulkProfileError('');
+    try {
+      const r = await api.post('/pppoe/users/bulk-change-profile', { ids, profile: bulkMtProfile });
+      const failed = Array.isArray(r.data.failed) ? r.data.failed.length : 0;
+      showToast(
+        `MT profile → ${r.data.profile}: ${r.data.updated} updated` +
+          (r.data.bounced ? `, ${r.data.bounced} session refresh (5s)` : '') +
+          (failed ? `, ${failed} failed` : '')
+      );
+      setShowBulkProfile(false);
+      setSelected(new Set());
+      loadUsers();
+    } catch (e: any) {
+      setBulkProfileError(e?.response?.data?.error || 'Bulk profile change failed.');
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
   const bulkDelete = async () => {
     const ids = [...selected];
     if (!ids.length) return;
@@ -454,6 +497,9 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                     <>
                       <button type="button" className="btn-secondary text-sky-700 border-sky-200 hover:bg-sky-50" onClick={openBulkChangePlan} disabled={bulkBusy}>
                         <ReceiptText size={16} /> Change plan
+                      </button>
+                      <button type="button" className="btn-secondary text-indigo-700 border-indigo-200 hover:bg-indigo-50" onClick={openBulkChangeProfile} disabled={bulkBusy}>
+                        <Layers size={16} /> Change profile
                       </button>
                       <button type="button" className="btn-secondary text-amber-700 border-amber-200 hover:bg-amber-50" onClick={bulkDisable} disabled={bulkBusy}>
                         <KeyRound size={16} /> Disable selected
@@ -906,6 +952,52 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
             </FormField>
             <div className="text-xs text-amber-800 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2 leading-relaxed">
               After confirm, each secret is updated then disabled for <b>5 seconds</b> and enabled again so active sessions pick up the new plan.
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {showBulkProfile && (
+        <Modal
+          title="Change MikroTik PPP profile"
+          subtitle={`${selected.size} user(s) selected`}
+          onClose={() => !bulkBusy && setShowBulkProfile(false)}
+          footer={
+            <ModalFooter
+              onCancel={() => setShowBulkProfile(false)}
+              onConfirm={confirmBulkChangeProfile}
+              confirmLabel={bulkBusy ? 'Updating…' : 'Set profile & refresh'}
+              busy={bulkBusy}
+            />
+          }
+        >
+          {bulkProfileError && (
+            <div className="text-sm text-rose-600 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2 mb-4">{bulkProfileError}</div>
+          )}
+          <div className="space-y-4">
+            <FormField
+              label="MikroTik PPP profile"
+              required
+              hint="Updates /ppp/secret profile only. Billing plan and comment are unchanged."
+            >
+              <select
+                className="input"
+                value={bulkMtProfile}
+                onChange={(e) => setBulkMtProfile(e.target.value)}
+                disabled={bulkBusy}
+              >
+                {SYSTEM_EXPIRE_PROFILES.map((name) => (
+                  <option key={`sys-${name}`} value={name}>{name}</option>
+                ))}
+                {profiles
+                  .filter((p) => !isSystemPppName(p.name))
+                  .map((p) => (
+                    <option key={p.id || p.name} value={p.name}>{p.name}</option>
+                  ))}
+              </select>
+            </FormField>
+            <div className="text-xs text-amber-800 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2 leading-relaxed">
+              After confirm, each secret’s profile is set on MikroTik, then disabled for <b>5 seconds</b> and enabled again so active sessions pick it up.
             </div>
           </div>
         </Modal>

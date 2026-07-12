@@ -57,6 +57,7 @@ import {
   bulkChangePppoeUserPlans,
   getBillingPlan,
   mikrotikProfileForPlan,
+  bulkChangePppoeMikrotikProfiles,
 } from './billing.js';
 import {
   startUsageScheduler,
@@ -987,6 +988,29 @@ app.post('/api/pppoe/users/bulk-change-plan', async (req, res) => {
     });
   } catch (e: any) {
     res.status(500).json({ error: e?.message || 'Bulk plan change failed' });
+  }
+});
+
+app.post('/api/pppoe/users/bulk-change-profile', async (req, res) => {
+  const ids = (Array.isArray(req.body?.ids) ? req.body.ids : [])
+    .map((id: unknown) => Number(id))
+    .filter((id: number) => Number.isFinite(id) && id > 0);
+  const profile = String(req.body?.profile || '').trim();
+  if (!ids.length) return res.status(400).json({ error: 'No user IDs provided.' });
+  if (!profile) return res.status(400).json({ error: 'Select a MikroTik PPP profile.' });
+
+  try {
+    const result = await bulkChangePppoeMikrotikProfiles(ids, profile);
+    res.json({
+      ok: result.ok,
+      profile: result.profile,
+      updated: result.updated,
+      bounced: result.bounced,
+      failed: result.failed,
+      message: `Set MikroTik profile to ${result.profile} for ${result.updated} user(s); session refresh on ${result.bounced}.`,
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Bulk profile change failed' });
   }
 });
 
