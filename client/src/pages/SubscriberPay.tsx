@@ -430,8 +430,13 @@ export default function SubscriberPay() {
   const qrLabel = channel === 'gcash' ? 'GCash' : channel === 'maya' ? 'Maya' : 'Payment';
   const dueAmount = Number(data.amount || 0);
   const amountCoversDue = ocrAmount != null && ocrAmount + 0.05 >= dueAmount;
-  const canSubmitWithReceipt =
-    !screenshot || (!ocrBusy && ocrAmount != null && amountCoversDue);
+  const hasManualRef = ref.trim().length >= 4;
+  // No receipt → submit with manual reference only.
+  // With receipt → amount must be readable and ≥ amount due.
+  const canSubmit =
+    Boolean(channel) &&
+    hasManualRef &&
+    (!screenshot || (!ocrBusy && ocrAmount != null && amountCoversDue));
 
   return (
     <div className="min-h-screen relative overflow-hidden">
@@ -483,8 +488,8 @@ export default function SubscriberPay() {
                 <li>Choose <b>GCash</b> or <b>Maya</b> below (or scan with any bank app).</li>
                 <li>Tap the QR to enlarge, or download it, then scan and pay the exact amount.</li>
                 <li>Copy the <b>Reference / Transaction No.</b> from your receipt.</li>
-                <li>Optional: upload or photograph your receipt — we read the reference and amount.</li>
-                <li>Submit when the receipt amount is equal to or higher than the amount due.</li>
+                <li>Or enter the <b>Reference / Transaction No.</b> manually and submit without a photo.</li>
+                <li>If you attach a receipt, submit is allowed when the amount is equal to or higher than the amount due.</li>
               </ol>
               <p className="text-xs text-slate-600 mt-3 rounded-xl bg-white border border-slate-200 px-3 py-2.5 leading-relaxed">
                 <span className="font-semibold text-slate-800">QR Ph / InstaPay:</span> All payment QR codes on this page can be scanned and paid using{' '}
@@ -722,7 +727,7 @@ export default function SubscriberPay() {
                 {/* Receipt — camera or file upload */}
                 <div>
                   <div className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-1.5">
-                    Receipt photo <span className="normal-case font-normal text-slate-400">(recommended)</span>
+                    Receipt photo <span className="normal-case font-normal text-slate-400">(optional)</span>
                   </div>
                   <input
                     ref={fileRef}
@@ -799,18 +804,27 @@ export default function SubscriberPay() {
 
                 <button
                   type="button"
-                  disabled={busy || ocrBusy || !canSubmitWithReceipt}
+                  disabled={busy || (Boolean(screenshot) && ocrBusy) || !canSubmit}
                   onClick={submit}
                   className="w-full rounded-2xl bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-500 hover:to-indigo-500 text-white font-semibold py-3.5 shadow-lg shadow-sky-600/25 disabled:opacity-60 transition"
                 >
                   {busy
                     ? 'Submitting…'
-                    : ocrBusy
+                    : screenshot && ocrBusy
                       ? 'Reading receipt…'
-                      : screenshot && !amountCoversDue
-                        ? 'Amount must cover amount due'
-                        : 'Submit payment for review'}
+                      : !channel
+                        ? 'Select GCash or Maya'
+                        : !hasManualRef
+                          ? 'Enter reference / transaction no.'
+                          : screenshot && !amountCoversDue
+                            ? 'Receipt amount must cover amount due'
+                            : 'Submit payment for review'}
                 </button>
+                {!screenshot && (
+                  <p className="text-[11px] text-center text-slate-400 -mt-2">
+                    You can submit with just the reference number — receipt photo is optional
+                  </p>
+                )}
                 <p className="text-[11px] text-center text-slate-400 flex items-center justify-center gap-1">
                   <Clock3 size={12} /> Internet restores after your ISP verifies this payment
                 </p>
