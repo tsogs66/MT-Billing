@@ -160,37 +160,8 @@ if ! command -v nginx >/dev/null 2>&1; then
   exit 1
 fi
 
-write_nginx_http() {
-  local pay_block=""
-  if [[ "$PAY_ONLY" == "1" ]]; then
-    pay_block=$(cat <<'BLOCK'
-    # Public payment portal only
-    location ^~ /pay/ {
-        try_files $uri $uri/ /index.html;
-    }
-    location ^~ /api/public/ {
-        proxy_pass http://127.0.0.1:__API_PORT__/api/public/;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-    # Assets needed by /pay SPA
-    location ^~ /assets/ {
-        try_files $uri =404;
-    }
-    location = /index.html {
-        try_files /index.html =404;
-    }
-    location / {
-        return 404;
-    }
-BLOCK
-)
-    pay_block="${pay_block//__API_PORT__/${API_PORT}}"
-  else
-    pay_block=$(cat <<EOF
+write_nginx_full_locations() {
+  cat <<EOF
     location /api/ {
         proxy_pass http://127.0.0.1:${API_PORT}/api/;
         proxy_http_version 1.1;
@@ -207,10 +178,48 @@ BLOCK
         try_files \$uri \$uri/ /index.html;
     }
 EOF
-)
-  fi
+}
 
-  cat >"$SITE_AVAIL" <<EOF
+write_nginx_payonly_locations() {
+  cat <<EOF
+    # Public payment portal only (DynDNS / internet)
+    location ^~ /pay/ {
+        try_files \$uri \$uri/ /index.html;
+    }
+    location ^~ /api/public/ {
+        proxy_pass http://127.0.0.1:${API_PORT}/api/public/;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+    location ^~ /assets/ {
+        try_files \$uri =404;
+    }
+    location = /index.html {
+        try_files /index.html =404;
+    }
+    location = /favicon.ico {
+        try_files /favicon.ico =404;
+    }
+    location / {
+        return 404;
+    }
+EOF
+}
+
+write_nginx_http() {
+  local lan_ip
+  lan_ip="$(detect_lan_ip)"
+  local full_locs pay_locs
+  full_locs="$(write_nginx_full_locations)"
+  pay_locs="$(write_nginx_payonly_locations)"
+
+  if [[ "$PAY_ONLY" == "1" ]]; then
+    # Two vhosts: DynDNS = pay-only; LAN IP / default = full admin panel
+    cat >"$SITE_AVAIL" <<EOF
+# MT-Billing — public DynDNS (pay portal only)
 server {
     listen ${PANEL_PORT};
     listen [::]:${PANEL_PORT};
@@ -219,9 +228,35 @@ server {
     root ${INSTALL_DIR}/client/dist;
     index index.html;
 
-${pay_block}
+${pay_locs}
+}
+
+# MT-Billing — LAN / IP access (full panel)
+server {
+    listen ${PANEL_PORT} default_server;
+    listen [::]:${PANEL_PORT} default_server;
+    server_name ${lan_ip:-_} localhost;
+
+    root ${INSTALL_DIR}/client/dist;
+    index index.html;
+
+${full_locs}
 }
 EOF
+  else
+    cat >"$SITE_AVAIL" <<EOF
+server {
+    listen ${PANEL_PORT} default_server;
+    listen [::]:${PANEL_PORT} default_server;
+    server_name ${HOSTNAME} ${lan_ip} _;
+
+    root ${INSTALL_DIR}/client/dist;
+    index index.html;
+
+${full_locs}
+}
+EOF
+  fi
 }
 
 log_info "Configuring public pay host for ${HOSTNAME}"
