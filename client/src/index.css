@@ -809,6 +809,46 @@ body {
   }
 }
 
+/* Public pay page — QR scan-line animation */
+.pay-qr-frame {
+  position: relative;
+  overflow: hidden;
+}
+.pay-qr-scanline {
+  pointer-events: none;
+  position: absolute;
+  left: 8%;
+  right: 8%;
+  height: 2px;
+  border-radius: 9999px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(14, 165, 233, 0.15) 15%,
+    rgba(14, 165, 233, 0.95) 50%,
+    rgba(14, 165, 233, 0.15) 85%,
+    transparent 100%
+  );
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.55), 0 0 2px rgba(14, 165, 233, 0.8);
+  animation: pay-qr-scan 2.4s ease-in-out infinite;
+  z-index: 2;
+}
+.pay-qr-scanline--lg {
+  height: 3px;
+  animation-duration: 2.8s;
+}
+@keyframes pay-qr-scan {
+  0%,
+  100% {
+    top: 10%;
+    opacity: 0.55;
+  }
+  50% {
+    top: calc(90% - 2px);
+    opacity: 1;
+  }
+}
+
 @layer components {
   .card {
     @apply bg-white/90 backdrop-blur-sm rounded-2xl border border-slate-200/80 shadow-card transition-all duration-300;

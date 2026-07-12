@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import {
-  CheckCircle2, Loader2, Upload, Camera, ShieldCheck, Info, Clock3, ImageIcon,
+  CheckCircle2, Loader2, Camera, ShieldCheck, Info, Clock3, ImageIcon,
+  ZoomIn, Download, X, SwitchCamera,
 } from 'lucide-react';
 import { PRODUCT_TITLE } from '../branding';
 
@@ -38,7 +39,12 @@ export default function SubscriberPay() {
   const [screenshot, setScreenshot] = useState<string | null>(null);
   const [ocrHints, setOcrHints] = useState<string[]>([]);
   const [done, setDone] = useState<any>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
+  const [qrZoomOpen, setQrZoomOpen] = useState(false);
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [cameraError, setCameraError] = useState('');
+  const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
 
   useEffect(() => {
     document.title = `Pay — ${PRODUCT_TITLE}`;
@@ -52,6 +58,57 @@ export default function SubscriberPay() {
       })
       .catch((e) => setError(e.message || 'Could not load payment link'));
   }, [token]);
+
+  const stopCamera = () => {
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+    if (videoRef.current) videoRef.current.srcObject = null;
+  };
+
+  const startCamera = async (facing: 'environment' | 'user' = facingMode) => {
+    setCameraError('');
+    stopCamera();
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setCameraError('Camera is not supported on this device/browser.');
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: {
+          facingMode: { ideal: facing },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+      });
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play().catch(() => undefined);
+      }
+    } catch {
+      setCameraError('Could not open camera. Allow camera permission and try again.');
+    }
+  };
+
+  useEffect(() => {
+    if (!cameraOpen) {
+      stopCamera();
+      return;
+    }
+    void startCamera(facingMode);
+    return () => stopCamera();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cameraOpen, facingMode]);
+
+  useEffect(() => {
+    if (!qrZoomOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setQrZoomOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [qrZoomOpen]);
 
   const runOcr = async (dataUrl: string) => {
     setOcrBusy(true);
@@ -69,21 +126,49 @@ export default function SubscriberPay() {
     }
   };
 
-  const onShot = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (file.size > 6 * 1024 * 1024) {
-      setError('Screenshot must be 6MB or smaller.');
+  const applyCapturedPhoto = (dataUrl: string) => {
+    // Rough size guard (~6MB raw base64 is far larger; keep payloads reasonable)
+    if (dataUrl.length > 8 * 1024 * 1024) {
+      setError('Photo is too large. Try again closer / with less detail.');
       return;
     }
     setError('');
-    const reader = new FileReader();
-    reader.onload = () => {
-      const url = String(reader.result || '');
-      setScreenshot(url);
-      void runOcr(url);
-    };
-    reader.readAsDataURL(file);
+    setScreenshot(dataUrl);
+    setCameraOpen(false);
+    void runOcr(dataUrl);
+  };
+
+  const capturePhoto = () => {
+    const video = videoRef.current;
+    if (!video || !video.videoWidth) {
+      setCameraError('Camera is not ready yet.');
+      return;
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.drawImage(video, 0, 0);
+    applyCapturedPhoto(canvas.toDataURL('image/jpeg', 0.85));
+  };
+
+  const downloadQr = async (src: string, label: string) => {
+    try {
+      const res = await fetch(src);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${label.replace(/\s+/g, '-').toLowerCase() || 'payment'}-qr.png`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch {
+      // Fallback: open in new tab if download fails (e.g. cross-origin)
+      window.open(src, '_blank', 'noopener,noreferrer');
+    }
   };
 
   const submit = async () => {
@@ -149,6 +234,7 @@ export default function SubscriberPay() {
       : channel === 'maya'
         ? company.mayaQr || company.paymentQr
         : company.gcashQr || company.mayaQr || company.paymentQr || null;
+  const qrLabel = channel === 'gcash' ? 'GCash' : channel === 'maya' ? 'Maya' : 'Payment';
 
   return (
     <div className="min-h-screen relative overflow-hidden">
@@ -198,9 +284,9 @@ export default function SubscriberPay() {
               </div>
               <ol className="text-sm text-slate-600 space-y-1.5 list-decimal pl-5">
                 <li>Choose <b>GCash</b> or <b>Maya</b> below (or scan with any bank app).</li>
-                <li>Scan the merchant QR (or send to the number shown) for the exact amount.</li>
+                <li>Tap the QR to enlarge, or download it, then scan and pay the exact amount.</li>
                 <li>Copy the <b>Reference / Transaction No.</b> from your receipt.</li>
-                <li>Optional: upload a screenshot — we try to read the reference automatically.</li>
+                <li>Optional: take a photo of your receipt — we try to read the reference automatically.</li>
                 <li>Submit for review. Service restores after your ISP verifies payment.</li>
               </ol>
               <p className="text-xs text-slate-600 mt-3 rounded-xl bg-white border border-slate-200 px-3 py-2.5 leading-relaxed">
@@ -246,17 +332,37 @@ export default function SubscriberPay() {
                   )}
                 </div>
 
-                {/* Merchant QR — channel-specific */}
+                {/* Merchant QR — zoom + download + scan line */}
                 {merchantQr && (
                   <div className="flex flex-col items-center gap-2 py-1">
                     <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                      {channel === 'gcash' ? 'GCash' : channel === 'maya' ? 'Maya' : 'Scan to pay'} QR
+                      {qrLabel} QR
                     </div>
-                    <img
-                      src={merchantQr}
-                      alt="Payment QR"
-                      className="w-56 h-auto max-h-72 object-contain rounded-2xl border border-slate-200 bg-white p-2 shadow-sm"
-                    />
+                    <button
+                      type="button"
+                      onClick={() => setQrZoomOpen(true)}
+                      className="pay-qr-frame group relative w-56 rounded-2xl border border-slate-200 bg-white p-2 shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-500/40"
+                      aria-label="Enlarge QR code"
+                    >
+                      <img
+                        src={merchantQr}
+                        alt="Payment QR"
+                        className="w-full h-auto max-h-72 object-contain select-none"
+                        draggable={false}
+                      />
+                      <span className="pay-qr-scanline" aria-hidden />
+                      <span className="absolute bottom-2 right-2 inline-flex items-center gap-1 rounded-lg bg-black/55 px-2 py-1 text-[10px] font-medium text-white opacity-90 group-hover:opacity-100">
+                        <ZoomIn size={12} /> Tap to zoom
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void downloadQr(merchantQr, qrLabel)}
+                      className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 hover:border-slate-300 transition"
+                    >
+                      <Download size={16} className="text-sky-600" />
+                      Download
+                    </button>
                     <div className="text-xs text-slate-500 text-center px-2 max-w-xs leading-relaxed">
                       {channel
                         ? `Open ${channel === 'maya' ? 'Maya' : 'GCash'} — or any Philippine bank app — → Scan QR → pay the exact amount`
@@ -304,12 +410,11 @@ export default function SubscriberPay() {
                   </div>
                 )}
 
-                {/* Screenshot upload */}
+                {/* Receipt photo — camera only */}
                 <div>
                   <div className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-1.5">
-                    Receipt screenshot <span className="normal-case font-normal text-slate-400">(optional)</span>
+                    Receipt photo <span className="normal-case font-normal text-slate-400">(optional)</span>
                   </div>
-                  <input ref={fileRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={onShot} />
                   {screenshot ? (
                     <div className="relative rounded-2xl overflow-hidden border border-slate-200">
                       <img src={screenshot} alt="Receipt" className="w-full max-h-56 object-contain bg-slate-50" />
@@ -323,9 +428,18 @@ export default function SubscriberPay() {
                           type="button"
                           className="bg-white/95 text-xs px-2 py-1 rounded-lg border border-slate-200"
                           onClick={() => {
+                            setCameraOpen(true);
+                            setCameraError('');
+                          }}
+                        >
+                          Retake
+                        </button>
+                        <button
+                          type="button"
+                          className="bg-white/95 text-xs px-2 py-1 rounded-lg border border-slate-200"
+                          onClick={() => {
                             setScreenshot(null);
                             setOcrHints([]);
-                            if (fileRef.current) fileRef.current.value = '';
                           }}
                         >
                           Remove
@@ -335,15 +449,15 @@ export default function SubscriberPay() {
                   ) : (
                     <button
                       type="button"
-                      onClick={() => fileRef.current?.click()}
+                      onClick={() => {
+                        setCameraOpen(true);
+                        setCameraError('');
+                      }}
                       className="w-full rounded-2xl border-2 border-dashed border-slate-200 hover:border-sky-300 hover:bg-sky-50/50 px-4 py-6 flex flex-col items-center gap-2 text-slate-500 transition"
                     >
-                      <div className="flex gap-3 text-sky-600">
-                        <Upload size={22} />
-                        <Camera size={22} />
-                      </div>
-                      <span className="text-sm font-medium text-slate-700">Upload or take a photo of your receipt</span>
-                      <span className="text-xs text-slate-400">We’ll try to read the reference number automatically</span>
+                      <Camera size={28} className="text-sky-600" />
+                      <span className="text-sm font-medium text-slate-700">Take a photo of your receipt</span>
+                      <span className="text-xs text-slate-400">Opens the camera only — no gallery picker</span>
                     </button>
                   )}
                 </div>
@@ -413,6 +527,117 @@ export default function SubscriberPay() {
           <ImageIcon size={12} /> Powered by {PRODUCT_TITLE}
         </p>
       </div>
+
+      {/* QR zoom overlay */}
+      {qrZoomOpen && merchantQr && (
+        <div
+          className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-black/85 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Enlarged payment QR"
+          onClick={() => setQrZoomOpen(false)}
+        >
+          <button
+            type="button"
+            className="absolute top-4 right-4 rounded-full bg-white/15 p-2 text-white hover:bg-white/25"
+            onClick={() => setQrZoomOpen(false)}
+            aria-label="Close"
+          >
+            <X size={22} />
+          </button>
+          <div
+            className="pay-qr-frame relative w-full max-w-sm rounded-3xl bg-white p-4 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <img
+              src={merchantQr}
+              alt={`${qrLabel} QR enlarged`}
+              className="w-full h-auto object-contain select-none"
+              draggable={false}
+            />
+            <span className="pay-qr-scanline pay-qr-scanline--lg" aria-hidden />
+          </div>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              void downloadQr(merchantQr, qrLabel);
+            }}
+            className="mt-4 inline-flex items-center gap-2 rounded-2xl bg-white px-5 py-3 text-sm font-semibold text-slate-800 shadow-lg hover:bg-slate-50"
+          >
+            <Download size={18} className="text-sky-600" />
+            Download
+          </button>
+          <p className="mt-3 text-xs text-white/70">Tap outside to close</p>
+        </div>
+      )}
+
+      {/* Camera capture modal — no file / gallery picker */}
+      {cameraOpen && (
+        <div
+          className="fixed inset-0 z-50 flex flex-col bg-black"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Take receipt photo"
+        >
+          <div className="flex items-center justify-between px-4 py-3 text-white">
+            <button
+              type="button"
+              className="rounded-full bg-white/10 p-2 hover:bg-white/20"
+              onClick={() => setCameraOpen(false)}
+              aria-label="Close camera"
+            >
+              <X size={22} />
+            </button>
+            <span className="text-sm font-medium">Receipt photo</span>
+            <button
+              type="button"
+              className="rounded-full bg-white/10 p-2 hover:bg-white/20"
+              onClick={() => setFacingMode((f) => (f === 'environment' ? 'user' : 'environment'))}
+              aria-label="Switch camera"
+            >
+              <SwitchCamera size={22} />
+            </button>
+          </div>
+
+          <div className="relative flex-1 min-h-0 bg-black flex items-center justify-center overflow-hidden">
+            {cameraError ? (
+              <div className="px-6 text-center text-sm text-rose-200 max-w-sm">{cameraError}</div>
+            ) : (
+              <video
+                ref={videoRef}
+                playsInline
+                muted
+                autoPlay
+                className="absolute inset-0 h-full w-full object-cover"
+              />
+            )}
+            {!cameraError && (
+              <div className="pointer-events-none absolute inset-8 rounded-2xl border border-white/35 shadow-[0_0_0_9999px_rgba(0,0,0,0.35)]" />
+            )}
+          </div>
+
+          <div className="px-6 py-5 pb-8 flex flex-col items-center gap-3 bg-black">
+            {cameraError ? (
+              <button
+                type="button"
+                onClick={() => void startCamera(facingMode)}
+                className="rounded-2xl bg-sky-600 px-5 py-3 text-sm font-semibold text-white"
+              >
+                Retry camera
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={capturePhoto}
+                className="h-16 w-16 rounded-full border-4 border-white bg-white/90 shadow-lg active:scale-95 transition"
+                aria-label="Capture photo"
+              />
+            )}
+            <p className="text-[11px] text-white/55 text-center">Camera only — gallery upload is disabled</p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
