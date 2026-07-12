@@ -2,29 +2,153 @@ import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import {
   CheckCircle2, Loader2, Camera, ShieldCheck, Info, Clock3, ImageIcon,
-  ZoomIn, Download, X, SwitchCamera, Upload, Copy, Check,
+  ZoomIn, Download, X, SwitchCamera, Upload, Copy, Check, AlertCircle,
 } from 'lucide-react';
 import { PRODUCT_TITLE } from '../branding';
 
 type Channel = 'gcash' | 'maya' | '';
 
-/** Extract likely GCash/Maya reference numbers from OCR text. */
+function parseMoneyToken(raw: string): number | null {
+  const n = Number(String(raw).replace(/,/g, '').replace(/[^\d.]/g, ''));
+  if (!Number.isFinite(n) || n <= 0 || n > 5_000_000) return null;
+  return Math.round(n * 100) / 100;
+}
+
+/** Upscale + contrast so Tesseract reads phone screenshots more reliably. */
+async function preprocessForOcr(dataUrl: string): Promise<string> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const maxSide = Math.max(img.width, img.height);
+        const scale = maxSide < 900 ? 2.4 : maxSide < 1400 ? 1.6 : 1.2;
+        const w = Math.max(1, Math.round(img.width * scale));
+        const h = Math.max(1, Math.round(img.height * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(dataUrl);
+          return;
+        }
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, w, h);
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(img, 0, 0, w, h);
+        const imageData = ctx.getImageData(0, 0, w, h);
+        const d = imageData.data;
+        for (let i = 0; i < d.length; i += 4) {
+          const g = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+          const boosted = Math.max(0, Math.min(255, (g - 128) * 1.45 + 128));
+          d[i] = d[i + 1] = d[i + 2] = boosted;
+        }
+        ctx.putImageData(imageData, 0, 0);
+        resolve(canvas.toDataURL('image/png'));
+      } catch {
+        resolve(dataUrl);
+      }
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
+}
+
+/** Extract likely GCash/Maya/bank reference numbers from OCR text. */
 function extractReferenceCandidates(text: string): string[] {
-  const cleaned = text.replace(/\s+/g, ' ');
-  const patterns = [
-    /\b(?:Ref(?:erence)?(?:\s*(?:No\.?|Number|#))?|Txn(?:\s*ID)?|Transaction(?:\s*(?:No\.?|ID|#))?|Trace\s*(?:No\.?)?)\s*[:#]?\s*([A-Z0-9]{6,})/gi,
-    /\b([0-9]{10,16})\b/g,
-    /\b([A-Z0-9]{8,20})\b/g,
+  const cleaned = text.replace(/[\u00A0\t]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const scored = new Map<string, number>();
+  const add = (raw: string, score: number) => {
+    const v = String(raw || '').replace(/[^A-Za-z0-9]/g, '');
+    if (v.length < 6 || v.length > 28) return;
+    if (/^09\d{9}$/.test(v)) return; // mobile number
+    if (/^63\d{10}$/.test(v)) return;
+    if (/^\d{1,5}$/.test(v)) return;
+    // Prefer mostly-digit refs (GCash/Maya) but allow alphanumeric txn ids
+    const digitRatio = (v.replace(/\D/g, '').length) / v.length;
+    const bonus = digitRatio >= 0.7 ? 2 : 0;
+    scored.set(v, Math.max(scored.get(v) || 0, score + bonus));
+  };
+
+  const labeled = [
+    /(?:Ref(?:erence)?|Txn|Trans(?:action)?|Confirmation|Trace|Control)\s*(?:No\.?|Number|#|ID|Num)?\s*[:.-]?\s*((?:[A-Z0-9]{3,5}[\s-]){2,5}[A-Z0-9]{3,5}|[A-Z0-9]{8,24})/gi,
+    /(?:Ref(?:erence)?\s*No\.?)\s*((?:\d{3,4}[\s-]){2,4}\d{3,4}|\d{10,16})/gi,
   ];
-  const found = new Set<string>();
-  for (const re of patterns) {
+  for (const re of labeled) {
     let m: RegExpExecArray | null;
-    while ((m = re.exec(cleaned))) {
-      const v = (m[1] || m[0] || '').replace(/[^A-Za-z0-9]/g, '');
-      if (v.length >= 6 && v.length <= 24) found.add(v);
-    }
+    while ((m = re.exec(cleaned))) add(m[1], 12);
   }
-  return Array.from(found).slice(0, 6);
+
+  // GCash-style grouped digits: 1234 5678 9012 or 1234-5678-9012
+  let m: RegExpExecArray | null;
+  const grouped = /\b(\d{3,4}[\s-]\d{3,4}[\s-]\d{3,4}(?:[\s-]\d{3,4})?)\b/g;
+  while ((m = grouped.exec(cleaned))) add(m[1], 10);
+
+  const longDigits = /\b(\d{10,16})\b/g;
+  while ((m = longDigits.exec(cleaned))) add(m[1], 6);
+
+  const alnum = /\b([A-Z0-9]{8,20})\b/g;
+  while ((m = alnum.exec(cleaned))) add(m[1], 3);
+
+  return Array.from(scored.entries())
+    .sort((a, b) => b[1] - a[1] || b[0].length - a[0].length)
+    .map(([v]) => v)
+    .slice(0, 8);
+}
+
+/**
+ * Extract peso amounts from receipt OCR.
+ * Prefers values near Amount/Total labels; returns best match for `due`.
+ */
+function extractReceiptAmount(text: string, due: number): { amount: number | null; candidates: number[] } {
+  const cleaned = text.replace(/[\u00A0\t]+/g, ' ').replace(/\s+/g, ' ');
+  const scored: { value: number; score: number }[] = [];
+  const push = (raw: string, score: number) => {
+    const v = parseMoneyToken(raw);
+    if (v == null) return;
+    scored.push({ value: v, score });
+  };
+
+  const labeled = [
+    /(?:Amount|Total(?:\s+Amount)?|You\s+sent|You\s+paid|Paid|Transfer(?:\s+Amount)?|Sent)\s*[:.-]?\s*(?:₱|PHP|PhP|P)?\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)/gi,
+    /(?:₱|PHP|PhP)\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)/gi,
+  ];
+  for (const re of labeled) {
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(cleaned))) push(m[1], re.source.startsWith('(?:Amount') ? 20 : 12);
+  }
+
+  // Bare money-looking decimals
+  const bare = /\b([0-9]{1,3}(?:,[0-9]{3})+\.[0-9]{2}|[0-9]+\.[0-9]{2})\b/g;
+  let m: RegExpExecArray | null;
+  while ((m = bare.exec(cleaned))) push(m[1], 5);
+
+  if (!scored.length) return { amount: null, candidates: [] };
+
+  // Dedupe by value, keep highest score
+  const bestByValue = new Map<number, number>();
+  for (const s of scored) bestByValue.set(s.value, Math.max(bestByValue.get(s.value) || 0, s.score));
+  const unique = Array.from(bestByValue.entries())
+    .map(([value, score]) => ({ value, score }))
+    .sort((a, b) => b.score - a.score || b.value - a.value);
+
+  const dueN = Number(due) || 0;
+  const tol = 0.05; // OCR cents noise
+  const covering = unique.filter((u) => u.value + tol >= dueN);
+  const pick =
+    covering.sort((a, b) => {
+      // Prefer closest to due among amounts that cover it
+      const da = Math.abs(a.value - dueN);
+      const db = Math.abs(b.value - dueN);
+      return da - db || b.score - a.score;
+    })[0] ||
+    unique[0];
+
+  return {
+    amount: pick?.value ?? null,
+    candidates: unique.map((u) => u.value).slice(0, 6),
+  };
 }
 
 /** Public subscriber payment page — no panel login required. */
@@ -38,6 +162,8 @@ export default function SubscriberPay() {
   const [ref, setRef] = useState('');
   const [screenshot, setScreenshot] = useState<string | null>(null);
   const [ocrHints, setOcrHints] = useState<string[]>([]);
+  const [ocrAmount, setOcrAmount] = useState<number | null>(null);
+  const [ocrAmountCandidates, setOcrAmountCandidates] = useState<number[]>([]);
   const [done, setDone] = useState<any>(null);
   const [qrZoomOpen, setQrZoomOpen] = useState(false);
   const [cameraOpen, setCameraOpen] = useState(false);
@@ -47,6 +173,7 @@ export default function SubscriberPay() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const dueAmountRef = useRef(0);
 
   useEffect(() => {
     document.title = `Pay — ${PRODUCT_TITLE}`;
@@ -55,6 +182,7 @@ export default function SubscriberPay() {
         const j = await r.json();
         if (!r.ok) throw new Error(j.error || 'Not found');
         setData(j);
+        dueAmountRef.current = Number(j.amount || 0);
         if (j.payChannel === 'gcash' || j.payChannel === 'maya') setChannel(j.payChannel);
         if (j.externalRef) setRef(j.externalRef);
       })
@@ -115,17 +243,39 @@ export default function SubscriberPay() {
   const runOcr = async (dataUrl: string) => {
     setOcrBusy(true);
     setOcrHints([]);
+    setOcrAmount(null);
+    setOcrAmountCandidates([]);
     try {
+      const prepared = await preprocessForOcr(dataUrl);
       const Tesseract = await import('tesseract.js');
-      const result = await Tesseract.recognize(dataUrl, 'eng', { logger: () => undefined });
-      const candidates = extractReferenceCandidates(result.data.text || '');
+      const result = await Tesseract.recognize(prepared, 'eng', {
+        logger: () => undefined,
+      });
+      const text = result.data.text || '';
+      const candidates = extractReferenceCandidates(text);
       setOcrHints(candidates);
-      if (candidates[0] && !ref.trim()) setRef(candidates[0]);
+      if (candidates[0]) {
+        setRef((prev) => (prev.trim().length >= 6 ? prev : candidates[0]));
+      }
+      const due = dueAmountRef.current || 0;
+      const { amount, candidates: amts } = extractReceiptAmount(text, due);
+      setOcrAmount(amount);
+      setOcrAmountCandidates(amts);
     } catch {
       setOcrHints([]);
+      setOcrAmount(null);
+      setOcrAmountCandidates([]);
     } finally {
       setOcrBusy(false);
     }
+  };
+
+  const clearReceipt = () => {
+    setScreenshot(null);
+    setOcrHints([]);
+    setOcrAmount(null);
+    setOcrAmountCandidates([]);
+    if (fileRef.current) fileRef.current.value = '';
   };
 
   const applyCapturedPhoto = (dataUrl: string) => {
@@ -205,6 +355,23 @@ export default function SubscriberPay() {
       setError('Enter your transaction / reference number (required).');
       return;
     }
+    const due = Number(data?.amount || 0);
+    if (screenshot) {
+      if (ocrBusy) {
+        setError('Still reading your receipt — please wait.');
+        return;
+      }
+      if (ocrAmount == null) {
+        setError('Could not read the amount from your receipt. Upload a clearer screenshot.');
+        return;
+      }
+      if (ocrAmount + 0.05 < due) {
+        setError(
+          `Receipt amount ₱${ocrAmount.toLocaleString('en-PH', { minimumFractionDigits: 2 })} is below amount due ₱${due.toLocaleString('en-PH', { minimumFractionDigits: 2 })}.`,
+        );
+        return;
+      }
+    }
     setBusy(true);
     setError('');
     try {
@@ -215,6 +382,7 @@ export default function SubscriberPay() {
           channel,
           reference: ref.trim(),
           screenshot,
+          ocrAmount: ocrAmount ?? undefined,
         }),
       });
       const j = await r.json();
@@ -260,6 +428,10 @@ export default function SubscriberPay() {
         ? company.mayaQr || company.paymentQr
         : company.gcashQr || company.mayaQr || company.paymentQr || null;
   const qrLabel = channel === 'gcash' ? 'GCash' : channel === 'maya' ? 'Maya' : 'Payment';
+  const dueAmount = Number(data.amount || 0);
+  const amountCoversDue = ocrAmount != null && ocrAmount + 0.05 >= dueAmount;
+  const canSubmitWithReceipt =
+    !screenshot || (!ocrBusy && ocrAmount != null && amountCoversDue);
 
   return (
     <div className="min-h-screen relative overflow-hidden">
@@ -311,8 +483,8 @@ export default function SubscriberPay() {
                 <li>Choose <b>GCash</b> or <b>Maya</b> below (or scan with any bank app).</li>
                 <li>Tap the QR to enlarge, or download it, then scan and pay the exact amount.</li>
                 <li>Copy the <b>Reference / Transaction No.</b> from your receipt.</li>
-                <li>Optional: take a photo or upload a receipt screenshot — we try to read the reference automatically.</li>
-                <li>Submit for review. Service restores after your ISP verifies payment.</li>
+                <li>Optional: upload or photograph your receipt — we read the reference and amount.</li>
+                <li>Submit when the receipt amount is equal to or higher than the amount due.</li>
               </ol>
               <p className="text-xs text-slate-600 mt-3 rounded-xl bg-white border border-slate-200 px-3 py-2.5 leading-relaxed">
                 <span className="font-semibold text-slate-800">QR Ph / InstaPay:</span> All payment QR codes on this page can be scanned and paid using{' '}
@@ -401,7 +573,7 @@ export default function SubscriberPay() {
                 {merchantQr && (
                   <div className="flex flex-col items-center gap-2 py-1">
                     <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                      {qrLabel} QR
+                      {qrLabel}
                     </div>
                     <button
                       type="button"
@@ -461,7 +633,7 @@ export default function SubscriberPay() {
 
                 {ocrHints.length > 0 && (
                   <div className="flex flex-wrap gap-1.5">
-                    <span className="text-[11px] text-slate-400 self-center mr-1">Detected:</span>
+                    <span className="text-[11px] text-slate-400 self-center mr-1">Detected ref:</span>
                     {ocrHints.map((h) => (
                       <button
                         key={h}
@@ -475,10 +647,82 @@ export default function SubscriberPay() {
                   </div>
                 )}
 
+                {screenshot && !ocrBusy && (
+                  <div
+                    className={`rounded-xl border px-3 py-2.5 text-sm ${
+                      amountCoversDue
+                        ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                        : ocrAmount == null
+                          ? 'bg-amber-50 border-amber-200 text-amber-900'
+                          : 'bg-rose-50 border-rose-200 text-rose-900'
+                    }`}
+                  >
+                    <div className="flex items-start gap-2">
+                      {amountCoversDue ? (
+                        <CheckCircle2 size={16} className="mt-0.5 shrink-0 text-emerald-600" />
+                      ) : (
+                        <AlertCircle size={16} className="mt-0.5 shrink-0" />
+                      )}
+                      <div className="min-w-0">
+                        {ocrAmount == null ? (
+                          <>
+                            <div className="font-medium">Could not read amount from receipt</div>
+                            <div className="text-xs mt-0.5 opacity-90">
+                              Upload a clearer full-screen screenshot showing Amount and Ref No.
+                            </div>
+                          </>
+                        ) : amountCoversDue ? (
+                          <>
+                            <div className="font-medium">
+                              Receipt amount ₱{ocrAmount.toLocaleString('en-PH', { minimumFractionDigits: 2 })} — OK to submit
+                            </div>
+                            <div className="text-xs mt-0.5 opacity-90">
+                              Equal to or higher than amount due (₱{dueAmount.toLocaleString('en-PH', { minimumFractionDigits: 2 })})
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <div className="font-medium">
+                              Receipt amount ₱{ocrAmount.toLocaleString('en-PH', { minimumFractionDigits: 2 })} is below amount due
+                            </div>
+                            <div className="text-xs mt-0.5 opacity-90">
+                              Need at least ₱{dueAmount.toLocaleString('en-PH', { minimumFractionDigits: 2 })} to submit
+                            </div>
+                          </>
+                        )}
+                        {ocrAmountCandidates.length > 1 && (
+                          <div className="flex flex-wrap gap-1.5 mt-2">
+                            <span className="text-[11px] opacity-70 self-center">Other amounts:</span>
+                            {ocrAmountCandidates.map((a) => (
+                              <button
+                                key={a}
+                                type="button"
+                                onClick={() => setOcrAmount(a)}
+                                className={`text-xs font-mono px-2 py-0.5 rounded-lg border ${
+                                  ocrAmount === a ? 'bg-white border-current font-semibold' : 'bg-white/60 border-black/10'
+                                }`}
+                              >
+                                ₱{a.toLocaleString('en-PH', { minimumFractionDigits: 2 })}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {screenshot && ocrBusy && (
+                  <div className="rounded-xl border border-sky-100 bg-sky-50 px-3 py-2.5 text-sm text-sky-800 flex items-center gap-2">
+                    <Loader2 size={16} className="animate-spin shrink-0" />
+                    Reading reference number and amount from receipt…
+                  </div>
+                )}
+
                 {/* Receipt — camera or file upload */}
                 <div>
                   <div className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-1.5">
-                    Receipt photo <span className="normal-case font-normal text-slate-400">(optional)</span>
+                    Receipt photo <span className="normal-case font-normal text-slate-400">(recommended)</span>
                   </div>
                   <input
                     ref={fileRef}
@@ -516,11 +760,7 @@ export default function SubscriberPay() {
                         <button
                           type="button"
                           className="bg-white/95 text-xs px-2 py-1 rounded-lg border border-slate-200"
-                          onClick={() => {
-                            setScreenshot(null);
-                            setOcrHints([]);
-                            if (fileRef.current) fileRef.current.value = '';
-                          }}
+                          onClick={clearReceipt}
                         >
                           Remove
                         </button>
@@ -559,11 +799,17 @@ export default function SubscriberPay() {
 
                 <button
                   type="button"
-                  disabled={busy || ocrBusy}
+                  disabled={busy || ocrBusy || !canSubmitWithReceipt}
                   onClick={submit}
                   className="w-full rounded-2xl bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-500 hover:to-indigo-500 text-white font-semibold py-3.5 shadow-lg shadow-sky-600/25 disabled:opacity-60 transition"
                 >
-                  {busy ? 'Submitting…' : 'Submit payment for review'}
+                  {busy
+                    ? 'Submitting…'
+                    : ocrBusy
+                      ? 'Reading receipt…'
+                      : screenshot && !amountCoversDue
+                        ? 'Amount must cover amount due'
+                        : 'Submit payment for review'}
                 </button>
                 <p className="text-[11px] text-center text-slate-400 flex items-center justify-center gap-1">
                   <Clock3 size={12} /> Internet restores after your ISP verifies this payment
@@ -642,7 +888,7 @@ export default function SubscriberPay() {
           >
             <img
               src={merchantQr}
-              alt={`${qrLabel} QR enlarged`}
+              alt={`${qrLabel} enlarged`}
               className="w-full h-auto object-contain select-none"
               draggable={false}
             />
