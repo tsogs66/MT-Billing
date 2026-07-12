@@ -1530,27 +1530,152 @@ function PlanFormModal({
   );
 }
 
+function escapeReceiptHtml(s: unknown): string {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/** POS-58 thermal receipt (58mm paper). Opens a print window sized for 58mm rolls. */
 function printReceipt(receipt: any) {
-  const line = (a: string, b: string) => `<div style="display:flex;justify-content:space-between;margin:2px 0"><span>${a}</span><span>${b}</span></div>`;
-  const html = `<!doctype html><html><head><title>Receipt ${receipt.account}</title>
-    <style>body{font-family:Arial,sans-serif;color:#111;padding:24px;max-width:360px;margin:auto}
-    h2{margin:0 0 2px} .muted{color:#666;font-size:12px} hr{border:none;border-top:1px dashed #bbb;margin:10px 0}
-    .tot{display:flex;justify-content:space-between;font-weight:700;font-size:16px;margin-top:6px}</style></head>
-    <body>
-      <h2>${receipt.company}</h2><div class="muted">Official Payment Receipt</div><hr/>
-      ${line('Account #', receipt.account)}
-      ${line('Customer', receipt.customer)}
-      ${line('Plan', `${receipt.plan} × ${receipt.months} mo`)}
-      ${line('Payment date', receipt.paymentDate)}
-      ${line('Next due date', receipt.newDue)}
-      <hr/>
-      ${line('Subtotal', `\u20b1${receipt.subtotal.toFixed(2)}`)}
-      ${line(`Discount (${receipt.discountDays} day/s downtime)`, `- \u20b1${receipt.discount.toFixed(2)}`)}
-      <div class="tot"><span>TOTAL</span><span>\u20b1${receipt.total.toFixed(2)}</span></div>
-      <hr/><div class="muted">Thank you for your payment.</div>
-      <script>window.onload=function(){window.print();}</script>
-    </body></html>`;
-  const w = window.open('', '_blank', 'width=420,height=640');
+  const money = (n: number) => `\u20b1${Number(n || 0).toFixed(2)}`;
+  const company = escapeReceiptHtml(receipt.company || 'ISP Billing');
+  const account = escapeReceiptHtml(receipt.account);
+  const customer = escapeReceiptHtml(receipt.customer);
+  const username = escapeReceiptHtml(receipt.username || '');
+  const plan = escapeReceiptHtml(receipt.plan);
+  const months = Number(receipt.months) || 1;
+  const paymentDate = escapeReceiptHtml(receipt.paymentDate);
+  const newDue = escapeReceiptHtml(receipt.newDue);
+  const discountDays = Number(receipt.discountDays) || 0;
+  const subtotal = Number(receipt.subtotal) || 0;
+  const discount = Number(receipt.discount) || 0;
+  const total = Number(receipt.total) || 0;
+  const now = new Date();
+  const printedAt = escapeReceiptHtml(
+    now.toLocaleString(undefined, { year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+  );
+
+  const row = (label: string, value: string) =>
+    `<div class="row"><span class="l">${label}</span><span class="v">${value}</span></div>`;
+
+  const discountBlock =
+    discount > 0
+      ? `${row(`Disc. (${discountDays}d)`, `- ${money(discount)}`)}`
+      : '';
+
+  const html = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>OR ${account}</title>
+  <style>
+    /* POS-58: 58mm roll, ~48mm printable */
+    @page { size: 58mm auto; margin: 2mm; }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: #fff;
+      color: #000;
+      font-family: "Courier New", Courier, ui-monospace, monospace;
+      font-size: 11px;
+      line-height: 1.35;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    .ticket {
+      width: 54mm;
+      max-width: 54mm;
+      margin: 0 auto;
+      padding: 2mm 1.5mm 4mm;
+    }
+    .center { text-align: center; }
+    .bold { font-weight: 700; }
+    .muted { color: #333; font-size: 10px; }
+    .tiny { font-size: 9px; color: #444; }
+    .brand {
+      font-size: 13px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.02em;
+      word-break: break-word;
+    }
+    .title { font-size: 10px; margin-top: 2px; }
+    hr {
+      border: none;
+      border-top: 1px dashed #000;
+      margin: 6px 0;
+    }
+    .row {
+      display: flex;
+      justify-content: space-between;
+      gap: 4px;
+      margin: 2px 0;
+      align-items: flex-start;
+    }
+    .row .l { flex: 0 1 auto; max-width: 55%; word-break: break-word; }
+    .row .v { flex: 1 1 auto; text-align: right; word-break: break-word; font-weight: 600; }
+    .tot {
+      display: flex;
+      justify-content: space-between;
+      font-weight: 800;
+      font-size: 13px;
+      margin-top: 4px;
+      padding-top: 2px;
+    }
+    .cut {
+      text-align: center;
+      margin-top: 8px;
+      font-size: 9px;
+      letter-spacing: 0.08em;
+    }
+    @media screen {
+      body { background: #e5e7eb; padding: 12px; }
+      .ticket {
+        background: #fff;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+      }
+    }
+    @media print {
+      html, body { width: 58mm; }
+      .ticket { width: 54mm; box-shadow: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="ticket">
+    <div class="center">
+      <div class="brand">${company}</div>
+      <div class="title bold">OFFICIAL RECEIPT</div>
+    </div>
+    <hr/>
+    ${row('Account #', account)}
+    ${row('Customer', customer)}
+    ${username ? row('Username', username) : ''}
+    ${row('Plan', `${plan} x${months}`)}
+    ${row('Paid on', paymentDate)}
+    ${row('Next due', newDue)}
+    <hr/>
+    ${row('Subtotal', money(subtotal))}
+    ${discountBlock}
+    <div class="tot"><span>TOTAL</span><span>${money(total)}</span></div>
+    <hr/>
+    <div class="center muted">Thank you for your payment.</div>
+    <div class="center tiny" style="margin-top:4px">${printedAt}</div>
+    <div class="cut">* * *</div>
+  </div>
+  <script>
+    window.onload = function () {
+      setTimeout(function () { window.print(); }, 200);
+    };
+  </script>
+</body>
+</html>`;
+
+  const w = window.open('', '_blank', 'width=280,height=560');
   if (w) {
     w.document.write(html);
     w.document.close();
