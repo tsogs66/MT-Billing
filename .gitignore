@@ -9,5 +9,6 @@ node_modules/
 server/data/backups/
 server/data/*.db
 server/data/*.db-*
+server/data/pay-proofs/
 !server/data/mt-billing.db
 *.tsbuildinfo

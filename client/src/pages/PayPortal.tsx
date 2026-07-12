@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Copy, Link2, Plus, Trash2, RefreshCw, Globe2, Save, Network } from 'lucide-react';
+import { Copy, Link2, Plus, Trash2, RefreshCw, Globe2, Save, Network, Check, X, ImageIcon } from 'lucide-react';
 import Layout from '../components/Layout';
 import { Card, Toolbar, StatusBadge, IconAction } from '../components/ui';
 import { api, peso } from '../api';
@@ -19,6 +19,7 @@ export default function PayPortal() {
   const [lanBaseUrl, setLanBaseUrl] = useState<string | null>(null);
   const [lanIp, setLanIp] = useState<string | null>(null);
   const [savingUrl, setSavingUrl] = useState(false);
+  const [proofPreview, setProofPreview] = useState<string | null>(null);
 
   const show = (m: string) => {
     setToast(m);
@@ -132,6 +133,42 @@ export default function PayPortal() {
     load();
   };
 
+  const approve = async (id: number) => {
+    if (!confirm('Approve this payment and restore the subscriber’s internet?')) return;
+    try {
+      await api.post(`/payment-links/${id}/approve`);
+      show('Payment approved — service restored.');
+      load();
+    } catch (e: any) {
+      show(e?.response?.data?.error || 'Approve failed');
+    }
+  };
+
+  const reject = async (id: number) => {
+    const note = window.prompt('Optional reject note for your records:') || '';
+    try {
+      await api.post(`/payment-links/${id}/reject`, { note });
+      show('Payment proof rejected.');
+      load();
+    } catch (e: any) {
+      show(e?.response?.data?.error || 'Reject failed');
+    }
+  };
+
+  const openProof = async (link: any) => {
+    if (!link.proofUrl && !link.proofImage) {
+      show('No screenshot uploaded');
+      return;
+    }
+    try {
+      const r = await api.get(`/payment-links/${link.id}/proof`, { responseType: 'blob' });
+      const url = URL.createObjectURL(r.data);
+      setProofPreview(url);
+    } catch {
+      show('Could not load screenshot');
+    }
+  };
+
   const sourceLabel =
     source === 'public_base_url'
       ? 'saved public URL'
@@ -194,20 +231,16 @@ export default function PayPortal() {
             <div>
               Detected LAN:{' '}
               <span className="font-mono text-slate-700">{lanBaseUrl}</span>
-              {' — '}links look like <span className="font-mono text-slate-600">{lanBaseUrl}/pay/…</span>
             </div>
           )}
           {warning && <div className="text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5">{warning}</div>}
-          <div className="text-slate-400">
-            LXC CLI: <code className="text-slate-600">sudo bash /opt/mt-billing/install/mt-billing-public-host.sh --local-ip</code>
-          </div>
         </div>
       </Card>
 
       <Card>
         <div className="text-sm text-slate-500 mb-4">
-          Create shareable pay links for subscribers (GCash / Maya / bank). Confirming payment restores the PPP secret and extends the due date.
-          Reminders automatically include a fresh link using the URL above.
+          Subscribers submit GCash/Maya proof on the pay page. Links with status <b>submitted</b> need your review — Approve restores internet.
+          Upload your merchant QR under <b>Company</b>.
         </div>
         <div className="flex flex-wrap gap-2 items-end mb-6">
           <label className="text-sm flex-1 min-w-[200px]">
@@ -241,25 +274,45 @@ export default function PayPortal() {
                 <th className="py-2">Subscriber</th>
                 <th className="py-2">Amount</th>
                 <th className="py-2">Status</th>
+                <th className="py-2">Proof / Ref</th>
                 <th className="py-2">Expires</th>
                 <th className="py-2 text-right">Actions</th>
               </tr>
             </thead>
             <tbody>
               {links.map((l) => (
-                <tr key={l.id} className="border-b border-slate-50">
+                <tr key={l.id} className="border-b border-slate-50 align-top">
                   <td className="py-2.5">
                     <div className="font-semibold">{l.username}</div>
                     <div className="text-xs text-slate-400">{l.customer} · {l.account}</div>
-                    {l.url && /^https?:\/\//i.test(l.url) && (
-                      <div className="text-[11px] text-slate-400 font-mono truncate max-w-xs mt-0.5">{l.url}</div>
-                    )}
                   </td>
                   <td className="py-2.5">{peso(l.amount)} · {l.months}mo</td>
                   <td className="py-2.5"><StatusBadge status={l.status} /></td>
+                  <td className="py-2.5 text-xs text-slate-600 min-w-[140px]">
+                    {l.payChannel || l.externalRef || l.proofImage ? (
+                      <div className="space-y-0.5">
+                        {l.payChannel && <div className="uppercase font-semibold text-slate-700">{l.payChannel}</div>}
+                        {l.externalRef && <div className="font-mono text-[11px] break-all">{l.externalRef}</div>}
+                        {l.submittedAt && <div className="text-slate-400">{String(l.submittedAt).slice(0, 16).replace('T', ' ')}</div>}
+                        {(l.proofImage || l.proofUrl) && (
+                          <button type="button" className="inline-flex items-center gap-1 text-sky-600 hover:underline" onClick={() => openProof(l)}>
+                            <ImageIcon size={12} /> Screenshot
+                          </button>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="text-slate-300">—</span>
+                    )}
+                  </td>
                   <td className="py-2.5 text-xs text-slate-500">{(l.expiresAt || l.expires_at || '').toString().slice(0, 16).replace('T', ' ')}</td>
                   <td className="py-2.5">
-                    <div className="flex justify-end gap-1">
+                    <div className="flex justify-end gap-1 flex-wrap">
+                      {(l.status === 'submitted' || l.status === 'rejected') && (
+                        <IconAction icon={Check} title="Approve & restore" tone="emerald" onClick={() => approve(l.id)} />
+                      )}
+                      {l.status === 'submitted' && (
+                        <IconAction icon={X} title="Reject" tone="rose" onClick={() => reject(l.id)} />
+                      )}
                       <IconAction icon={Copy} title="Copy link" tone="sky" onClick={() => copy(l)} />
                       <IconAction
                         icon={Link2}
@@ -274,13 +327,25 @@ export default function PayPortal() {
               ))}
               {links.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="py-8 text-center text-slate-400">No payment links yet.</td>
+                  <td colSpan={6} className="py-8 text-center text-slate-400">No payment links yet.</td>
                 </tr>
               )}
             </tbody>
           </table>
         </div>
       </Card>
+
+      {proofPreview && (
+        <div
+          className="fixed inset-0 z-[80] bg-black/60 flex items-center justify-center p-4"
+          onClick={() => {
+            URL.revokeObjectURL(proofPreview);
+            setProofPreview(null);
+          }}
+        >
+          <img src={proofPreview} alt="Payment proof" className="max-h-[90vh] max-w-full rounded-xl shadow-2xl" onClick={(e) => e.stopPropagation()} />
+        </div>
+      )}
     </Layout>
   );
 }

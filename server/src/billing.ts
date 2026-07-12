@@ -801,7 +801,12 @@ export function getPaymentLinkPublic(token: string) {
     )
     .get(token) as any;
   if (!link) return null;
-  const company = db.prepare('SELECT name, logo, address, phone, email FROM company WHERE id = 1').get() as any;
+  const company = db
+    .prepare(
+      `SELECT name, logo, address, phone, email, payment_qr, gcash_number, maya_number, payment_instructions
+       FROM company WHERE id = 1`
+    )
+    .get() as any;
   const expired = link.status === 'pending' && link.expires_at && Date.parse(link.expires_at) < Date.now();
   if (expired && link.status === 'pending') {
     db.prepare("UPDATE payment_links SET status = 'expired' WHERE id = ?").run(link.id);
@@ -815,6 +820,8 @@ export function getPaymentLinkPublic(token: string) {
     expiresAt: link.expires_at,
     paidAt: link.paid_at,
     externalRef: link.external_ref,
+    payChannel: link.pay_channel || null,
+    submittedAt: link.submitted_at || null,
     customer: link.customer_name || link.username,
     account: link.account_number,
     username: link.username,
@@ -826,7 +833,74 @@ export function getPaymentLinkPublic(token: string) {
       address: company?.address || null,
       phone: company?.phone || null,
       email: company?.email || null,
+      paymentQr: company?.payment_qr || null,
+      gcashNumber: company?.gcash_number || null,
+      mayaNumber: company?.maya_number || null,
+      paymentInstructions: company?.payment_instructions || null,
     },
+  };
+}
+
+/** Subscriber submits GCash/Maya proof — awaits admin review (does not restore yet). */
+export function submitPaymentProof(
+  token: string,
+  opts: { channel: string; reference: string; proofImage?: string | null }
+) {
+  const link = db.prepare('SELECT * FROM payment_links WHERE token = ?').get(token) as any;
+  if (!link) throw new Error('Payment link not found');
+  if (link.status === 'paid') throw new Error('This link is already paid');
+  if (link.status === 'expired') throw new Error('Payment link expired');
+  if (
+    link.status !== 'submitted' &&
+    link.status !== 'rejected' &&
+    link.expires_at &&
+    Date.parse(link.expires_at) < Date.now()
+  ) {
+    throw new Error('Payment link expired');
+  }
+
+  const channel = String(opts.channel || '').toLowerCase().trim();
+  if (channel !== 'gcash' && channel !== 'maya') {
+    throw new Error('Select GCash or Maya as the payment channel');
+  }
+  const reference = String(opts.reference || '').trim();
+  if (!reference || reference.length < 4) {
+    throw new Error('Enter the transaction / reference number from your receipt');
+  }
+
+  let proofPath: string | null = link.proof_image || null;
+  const raw = opts.proofImage;
+  if (raw && typeof raw === 'string' && raw.startsWith('data:image/')) {
+    const m = raw.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+    if (!m) throw new Error('Invalid screenshot format');
+    const mime = m[1].toLowerCase();
+    const ext = mime.includes('png') ? 'png' : mime.includes('webp') ? 'webp' : 'jpg';
+    const buf = Buffer.from(m[2], 'base64');
+    if (buf.length > 6 * 1024 * 1024) throw new Error('Screenshot must be 6MB or smaller');
+    const dir = path.resolve(process.cwd(), 'data', 'pay-proofs');
+    fs.mkdirSync(dir, { recursive: true });
+    const file = `${String(token).slice(0, 24)}-${Date.now()}.${ext}`;
+    const full = path.join(dir, file);
+    fs.writeFileSync(full, buf);
+    proofPath = `pay-proofs/${file}`;
+  }
+
+  db.prepare(
+    `UPDATE payment_links SET
+       status = 'submitted',
+       pay_channel = ?,
+       external_ref = ?,
+       proof_image = ?,
+       submitted_at = datetime('now')
+     WHERE id = ?`
+  ).run(channel, reference, proofPath, link.id);
+
+  return {
+    ok: true,
+    status: 'submitted',
+    channel,
+    reference,
+    message: 'Payment proof submitted. Your ISP will review and restore your service shortly.',
   };
 }
 
@@ -836,18 +910,34 @@ export async function markPaymentLinkPaid(token: string, externalRef?: string) {
   if (link.status === 'paid') {
     return { ok: true, alreadyPaid: true, link };
   }
-  if (link.status === 'expired' || (link.expires_at && Date.parse(link.expires_at) < Date.now())) {
-    throw new Error('Payment link expired');
+  // Allow approving submitted/rejected proofs even if the original link expiry passed
+  if (link.status !== 'submitted' && link.status !== 'rejected') {
+    if (link.status === 'expired' || (link.expires_at && Date.parse(link.expires_at) < Date.now())) {
+      throw new Error('Payment link expired');
+    }
   }
   const result = await recordPppoePayment(link.pppoe_user_id, {
     months: link.months || 1,
     source: 'pay-link',
-    external_ref: externalRef || undefined,
+    external_ref: externalRef || link.external_ref || undefined,
   });
   db.prepare(
-    `UPDATE payment_links SET status = 'paid', paid_at = datetime('now'), external_ref = ? WHERE id = ?`
+    `UPDATE payment_links SET status = 'paid', paid_at = datetime('now'),
+       external_ref = COALESCE(?, external_ref),
+       reviewed_at = datetime('now')
+     WHERE id = ?`
   ).run(externalRef || null, link.id);
   return { ok: true, alreadyPaid: false, payment: result, link };
+}
+
+export function rejectPaymentProof(id: number, note?: string) {
+  const link = db.prepare('SELECT * FROM payment_links WHERE id = ?').get(id) as any;
+  if (!link) throw new Error('Payment link not found');
+  if (link.status === 'paid') throw new Error('Already paid');
+  db.prepare(
+    `UPDATE payment_links SET status = 'rejected', reviewed_at = datetime('now'), review_note = ? WHERE id = ?`
+  ).run(note || null, id);
+  return { ok: true, status: 'rejected' };
 }
 
 export function listPaymentLinks(limit = 100) {
@@ -856,6 +946,8 @@ export function listPaymentLinks(limit = 100) {
     .prepare(
       `SELECT pl.id, pl.token, pl.amount, pl.months, pl.status, pl.expires_at AS expiresAt, pl.paid_at AS paidAt,
               pl.created_at AS createdAt, pl.external_ref AS externalRef,
+              pl.pay_channel AS payChannel, pl.proof_image AS proofImage, pl.submitted_at AS submittedAt,
+              pl.reviewed_at AS reviewedAt, pl.review_note AS reviewNote,
               u.username, u.customer_name AS customer, u.account_number AS account
        FROM payment_links pl
        JOIN pppoe_users u ON u.id = pl.pppoe_user_id
@@ -869,6 +961,7 @@ export function listPaymentLinks(limit = 100) {
       path,
       url: resolved.baseUrl ? `${resolved.baseUrl}${path}` : path,
       baseUrl: resolved.baseUrl || null,
+      proofUrl: r.proofImage ? `/api/payment-links/${r.id}/proof` : null,
     };
   });
 }

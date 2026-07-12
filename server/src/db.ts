@@ -285,6 +285,15 @@ export function migrate() {
     if (!columnExists('notify_settings', col)) db.exec(`ALTER TABLE notify_settings ADD COLUMN ${col} ${type}`);
   }
   if (!columnExists('company', 'logo')) db.exec('ALTER TABLE company ADD COLUMN logo TEXT');
+  const companyPayCols: [string, string][] = [
+    ['payment_qr', 'TEXT'],
+    ['gcash_number', 'TEXT'],
+    ['maya_number', 'TEXT'],
+    ['payment_instructions', 'TEXT'],
+  ];
+  for (const [col, type] of companyPayCols) {
+    if (!columnExists('company', col)) db.exec(`ALTER TABLE company ADD COLUMN ${col} ${type}`);
+  }
 
   if (count('app_settings') === 0) {
     db.prepare('INSERT INTO app_settings (id) VALUES (1)').run();
@@ -409,6 +418,17 @@ export function migrate() {
   `);
   if (!(db.prepare('SELECT 1 FROM fair_use_settings WHERE id = 1').get())) {
     db.prepare('INSERT INTO fair_use_settings (id) VALUES (1)').run();
+  }
+
+  const payLinkCols: [string, string][] = [
+    ['pay_channel', 'TEXT'],
+    ['proof_image', 'TEXT'],
+    ['submitted_at', 'TEXT'],
+    ['reviewed_at', 'TEXT'],
+    ['review_note', 'TEXT'],
+  ];
+  for (const [col, type] of payLinkCols) {
+    if (!columnExists('payment_links', col)) db.exec(`ALTER TABLE payment_links ADD COLUMN ${col} ${type}`);
   }
 }
 

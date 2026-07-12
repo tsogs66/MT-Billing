@@ -1,6 +1,8 @@
 import 'dotenv/config';
 import http from 'http';
 import os from 'os';
+import fs from 'fs';
+import path from 'path';
 import express from 'express';
 import cors from 'cors';
 import bcrypt from 'bcryptjs';
@@ -49,6 +51,8 @@ import { getUptime, getUptimeSummary, runUptimeChecks, startUptime, getUptimeSco
 import {
   recordPppoePayment,
   createPaymentLink,
+  submitPaymentProof,
+  rejectPaymentProof,
   getPaymentLinkPublic,
   markPaymentLinkPaid,
   listPaymentLinks,
@@ -223,11 +227,42 @@ app.get('/api/public/pay/:token', (req, res) => {
   res.json(data);
 });
 
+/** Subscriber submits payment proof (channel + reference + optional screenshot). Awaits admin review. */
+app.post('/api/public/pay/:token/submit', (req, res) => {
+  try {
+    const result = submitPaymentProof(String(req.params.token), {
+      channel: String(req.body?.channel || ''),
+      reference: String(req.body?.reference || req.body?.external_ref || ''),
+      proofImage: req.body?.screenshot || req.body?.proofImage || null,
+    });
+    res.json(result);
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message || 'Could not submit payment proof' });
+  }
+});
+
+/** Legacy confirm endpoint — kept for compatibility; prefers reviewed/admin flow. */
 app.post('/api/public/pay/:token/confirm', async (req, res) => {
   try {
-    const ref = String(req.body?.reference || req.body?.external_ref || '').trim() || undefined;
-    const result = await markPaymentLinkPaid(String(req.params.token), ref);
-    res.json(result);
+    const ref = String(req.body?.reference || req.body?.external_ref || '').trim();
+    if (!ref) {
+      return res.status(400).json({
+        error: 'Transaction / reference number is required. Use Submit payment proof on the pay page.',
+      });
+    }
+    const channel = String(req.body?.channel || '').trim();
+    if (channel) {
+      const result = submitPaymentProof(String(req.params.token), {
+        channel,
+        reference: ref,
+        proofImage: req.body?.screenshot || req.body?.proofImage || null,
+      });
+      return res.json(result);
+    }
+    // Without channel, do not auto-restore — force the new proof flow
+    return res.status(400).json({
+      error: 'Select GCash or Maya and submit your reference number for review.',
+    });
   } catch (e: any) {
     res.status(400).json({ error: e?.message || 'Payment failed' });
   }
@@ -1235,6 +1270,39 @@ app.delete('/api/payment-links/:id', (req, res) => {
   const info = db.prepare('DELETE FROM payment_links WHERE id = ?').run(Number(req.params.id));
   if (!info.changes) return res.status(404).json({ error: 'not found' });
   res.json({ ok: true });
+});
+
+app.get('/api/payment-links/:id/proof', (req, res) => {
+  const link = db.prepare('SELECT id, proof_image FROM payment_links WHERE id = ?').get(Number(req.params.id)) as
+    | { id: number; proof_image?: string }
+    | undefined;
+  if (!link?.proof_image) return res.status(404).json({ error: 'No proof image' });
+  const rel = String(link.proof_image).replace(/^\/+/, '');
+  if (rel.includes('..')) return res.status(400).json({ error: 'Invalid path' });
+  const full = path.resolve(process.cwd(), 'data', rel.startsWith('pay-proofs/') ? rel : path.join('pay-proofs', path.basename(rel)));
+  const root = path.resolve(process.cwd(), 'data', 'pay-proofs');
+  if (!full.startsWith(root) || !fs.existsSync(full)) return res.status(404).json({ error: 'File missing' });
+  res.sendFile(full);
+});
+
+app.post('/api/payment-links/:id/approve', async (req, res) => {
+  try {
+    const link = db.prepare('SELECT * FROM payment_links WHERE id = ?').get(Number(req.params.id)) as any;
+    if (!link) return res.status(404).json({ error: 'not found' });
+    const result = await markPaymentLinkPaid(link.token, link.external_ref || undefined);
+    res.json(result);
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message || 'Approve failed' });
+  }
+});
+
+app.post('/api/payment-links/:id/reject', (req, res) => {
+  try {
+    const note = String(req.body?.note || req.body?.review_note || '').trim() || undefined;
+    res.json(rejectPaymentProof(Number(req.params.id), note));
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message || 'Reject failed' });
+  }
 });
 
 // ---- Usage stats & fair-use ----
@@ -2967,13 +3035,21 @@ app.get('/api/company', (_req, res) => {
 app.put('/api/company', (req, res) => {
   const b = req.body || {};
   const c = db.prepare('SELECT * FROM company WHERE id = 1').get() as any;
-  db.prepare('UPDATE company SET name = ?, address = ?, phone = ?, email = ?, currency = ?, logo = ? WHERE id = 1').run(
+  db.prepare(
+    `UPDATE company SET name = ?, address = ?, phone = ?, email = ?, currency = ?, logo = ?,
+       payment_qr = ?, gcash_number = ?, maya_number = ?, payment_instructions = ?
+     WHERE id = 1`
+  ).run(
     b.name ?? c.name,
     b.address ?? c.address,
     b.phone ?? c.phone,
     b.email ?? c.email,
     b.currency ?? c.currency,
-    b.logo !== undefined ? b.logo : c.logo
+    b.logo !== undefined ? b.logo : c.logo,
+    b.payment_qr !== undefined ? b.payment_qr : c.payment_qr,
+    b.gcash_number !== undefined ? b.gcash_number : c.gcash_number,
+    b.maya_number !== undefined ? b.maya_number : c.maya_number,
+    b.payment_instructions !== undefined ? b.payment_instructions : c.payment_instructions
   );
   res.json(db.prepare('SELECT * FROM company WHERE id = 1').get());
 });

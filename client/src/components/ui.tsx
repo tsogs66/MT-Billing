@@ -66,6 +66,11 @@ export function Progress({ value, color = 'bg-gradient-to-r from-brand-400 to-br
 /* ─── Status badge ─── */
 
 const STATUS_STYLES: Record<string, string> = {
+  pending: 'bg-amber-100 text-amber-700 ring-1 ring-amber-200/60',
+  submitted: 'bg-sky-100 text-sky-700 ring-1 ring-sky-200/60',
+  paid: 'bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200/60',
+  rejected: 'bg-rose-100 text-rose-600 ring-1 ring-rose-200/60',
+  expired: 'bg-rose-100 text-rose-600 ring-1 ring-rose-200/60',
   Active: 'bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200/60',
   active: 'bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200/60',
   running: 'bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200/60',
@@ -75,7 +80,6 @@ const STATUS_STYLES: Record<string, string> = {
   live: 'bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200/60',
   unused: 'bg-sky-100 text-sky-700 ring-1 ring-sky-200/60',
   inactive: 'bg-slate-100 text-slate-500 ring-1 ring-slate-200/60',
-  expired: 'bg-rose-100 text-rose-600 ring-1 ring-rose-200/60',
   'non-payment': 'bg-amber-100 text-amber-700 ring-1 ring-amber-200/60',
   disabled: 'bg-rose-100 text-rose-700 ring-1 ring-rose-200/60',
   Disabled: 'bg-rose-100 text-rose-700 ring-1 ring-rose-200/60',
