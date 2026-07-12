@@ -1413,7 +1413,17 @@ app.post('/api/pppoe/fetch-mikrotik', async (req, res) => {
 app.get('/api/pppoe/profiles', async (req, res) => {
   const routerId = req.query.routerId ? Number(req.query.routerId) : null;
   const includeSystem = String(req.query.includeSystem || '') === '1';
-  // Billing plans (type=plan) are references only — never list them as PPP profiles.
+  // Billing plan names (type=plan) must never appear on the Profiles tab —
+  // they are panel-only references to MikroTik /ppp/profile entries.
+  const billingPlanNames = new Set(
+    (
+      db
+        .prepare(`SELECT name FROM profiles WHERE coalesce(type, 'pppoe') = 'plan'`)
+        .all() as { name: string }[]
+    )
+      .map((r) => String(r.name || '').trim())
+      .filter(Boolean)
+  );
   const dbProfiles = (
     db
       .prepare(
@@ -1422,7 +1432,11 @@ app.get('/api/pppoe/profiles', async (req, res) => {
          ORDER BY name`
       )
       .all() as any[]
-  ).filter((p) => includeSystem || !isSystemPppProfileName(p.name));
+  ).filter(
+    (p) =>
+      !billingPlanNames.has(String(p.name || '').trim()) &&
+      (includeSystem || !isSystemPppProfileName(p.name))
+  );
   const router = getRouterById(routerId);
   if (!router?.host || !router?.api_user) {
     return res.json({ profiles: dbProfiles, live: false });
@@ -1431,7 +1445,11 @@ app.get('/api/pppoe/profiles', async (req, res) => {
     const live = await fetchPppProfiles(router);
     const byName = new Map(dbProfiles.map((p) => [p.name, p]));
     const merged = live
-      .filter((p) => includeSystem || !isSystemPppProfileName(p.name))
+      .filter(
+        (p) =>
+          !billingPlanNames.has(String(p.name || '').trim()) &&
+          (includeSystem || !isSystemPppProfileName(p.name))
+      )
       .map((p) => {
         const dbp = byName.get(p.name);
         return {
@@ -1446,7 +1464,7 @@ app.get('/api/pppoe/profiles', async (req, res) => {
           live: true,
         };
       });
-    // Include DB-only PPP profile rows not present on the router (not billing plans).
+    // DB-only PPP profile stubs not on the router — still never include billing plans.
     for (const p of dbProfiles) {
       if (!merged.some((m) => m.name === p.name)) {
         merged.push({ ...p, mikrotikId: null, live: false });

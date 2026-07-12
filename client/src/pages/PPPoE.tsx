@@ -114,7 +114,13 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
   const loadProfiles = () =>
     api
       .get('/pppoe/profiles', { params: routerParams })
-      .then((r) => setProfiles(Array.isArray(r.data) ? r.data : r.data.profiles || []))
+      .then((r) => {
+        const list = Array.isArray(r.data) ? r.data : r.data.profiles || [];
+        // Never show billing plans on the Profiles tab (panel references only).
+        setProfiles(
+          (Array.isArray(list) ? list : []).filter((p: any) => String(p?.type || '') !== 'plan')
+        );
+      })
       .catch(() => setProfiles([]));
 
   const loadActive = (opts?: { silent?: boolean }) => {
@@ -155,7 +161,21 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
       .finally(() => setTabBusy(false));
   };
 
-  const loadPlans = () => api.get('/billing-plans').then((r) => setPlans(r.data)).catch(() => setPlans([]));
+  const loadPlans = () =>
+    api
+      .get('/billing-plans')
+      .then((r) => {
+        const list = Array.isArray(r.data) ? r.data : [];
+        setPlans(list);
+        // Drop any billing-plan names that might still be sitting in profiles state.
+        const planNames = new Set(list.map((p: any) => String(p?.name || '').trim()).filter(Boolean));
+        setProfiles((prev) =>
+          prev.filter(
+            (p) => String(p?.type || '') !== 'plan' && !planNames.has(String(p?.name || '').trim())
+          )
+        );
+      })
+      .catch(() => setPlans([]));
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -721,7 +741,23 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
         {tab === 'profiles' && (
           <>
             <Toolbar
-              left={<span>PPP Profiles <span className="font-semibold text-slate-800">{profiles.length}</span></span>}
+              left={
+                <span>
+                  PPP Profiles{' '}
+                  <span className="font-semibold text-slate-800">
+                    {
+                      profiles.filter(
+                        (p) =>
+                          String(p?.type || '') !== 'plan' &&
+                          !plans.some((pl) => String(pl.name) === String(p.name))
+                      ).length
+                    }
+                  </span>
+                  <span className="ml-2 text-xs font-normal text-slate-500">
+                    MikroTik /ppp/profile only — billing plans stay under Billing Plans
+                  </span>
+                </span>
+              }
               right={
                 <>
                   <button type="button" className="btn-secondary" onClick={loadProfiles} disabled={tabBusy}>
@@ -742,7 +778,13 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                   { key: 'type', label: 'Type' },
                   { key: 'actions', label: 'Actions', align: 'right' },
                 ]}
-                rows={profiles.map((p) => ({
+                rows={profiles
+                  .filter(
+                    (p) =>
+                      String(p?.type || '') !== 'plan' &&
+                      !plans.some((pl) => String(pl.name) === String(p.name))
+                  )
+                  .map((p) => ({
                   key: p.id || p.name,
                   cells: [
                     <span className="font-medium text-slate-800">{p.name}</span>,
@@ -933,8 +975,8 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
             setShowPlanAdd(false);
             setPlanEdit(null);
             showToast(planEdit ? 'Plan updated.' : 'Plan created.');
-            loadPlans();
-            loadProfiles();
+            // Reload plans first so Profiles tab filters out the new plan name.
+            loadPlans().then(() => loadProfiles());
           }}
         />
       )}
