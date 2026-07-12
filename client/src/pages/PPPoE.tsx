@@ -1610,10 +1610,10 @@ function printReceipt(receipt: any) {
       print-color-adjust: exact;
     }
     .ticket {
-      width: 55mm;
-      max-width: 55mm;
-      margin: 0 auto;
-      padding: 2mm 1.5mm 5mm;
+      width: 100%;
+      max-width: 58mm;
+      margin: 0;
+      padding: 2mm 0.25in 5mm 1.5mm;
       color: #000;
     }
     .center { text-align: center; }
@@ -1693,7 +1693,13 @@ function printReceipt(receipt: any) {
     }
     @media print {
       html, body { width: 58mm; color: #000 !important; }
-      .ticket { width: 55mm; box-shadow: none; }
+      .ticket {
+        width: 100%;
+        max-width: none;
+        margin: 0;
+        padding: 2mm 0.25in 5mm 1.5mm;
+        box-shadow: none;
+      }
       * { color: #000 !important; }
     }
   </style>
