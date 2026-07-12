@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Building2, UploadCloud } from 'lucide-react';
 import Layout from '../components/Layout';
-import { SettingsSection, FormField, Flash, LoadingPage } from '../components/ui';
+import { SettingsSection, FormField, Flash, LoadingPage, Toast } from '../components/ui';
 import { api } from '../api';
 import { useCompany } from '../context/CompanyContext';
 import { cropMerchantQr } from '../lib/cropMerchantQr';
@@ -9,12 +9,19 @@ import { cropMerchantQr } from '../lib/cropMerchantQr';
 export default function Company() {
   const { refresh } = useCompany();
   const [company, setCompany] = useState<any>(null);
-  const [saved, setSaved] = useState(false);
+  const [toast, setToast] = useState('');
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
+  const [saving, setSaving] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const [fileName, setFileName] = useState('No file chosen');
   const [qrBusy, setQrBusy] = useState<string | null>(null);
+  const topRef = useRef<HTMLDivElement>(null);
+
+  const showToast = (msg: string) => {
+    setToast(msg);
+    window.setTimeout(() => setToast(''), 4000);
+  };
 
   useEffect(() => {
     api.get('/company').then((r) => setCompany(r.data));
@@ -66,20 +73,31 @@ export default function Company() {
   };
 
   const save = async () => {
-    const r = await api.put('/company', company);
-    setCompany(r.data);
-    await refresh();
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2500);
+    setError('');
+    setInfo('');
+    setSaving(true);
+    try {
+      const r = await api.put('/company', company);
+      setCompany(r.data);
+      await refresh();
+      showToast('Company details saved successfully.');
+    } catch (e: any) {
+      const msg = e?.response?.data?.error || e?.message || 'Could not save company details.';
+      setError(msg);
+      topRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } finally {
+      setSaving(false);
+    }
   };
 
   if (!company) return <Layout title="Company"><LoadingPage label="Loading company profile…" /></Layout>;
 
   return (
     <Layout title="Company">
+      <div ref={topRef} />
       <Flash message={error} type="error" onDismiss={() => setError('')} />
       <Flash message={info} type="info" onDismiss={() => setInfo('')} />
-      {saved && <Flash message="Company profile saved successfully." type="success" onDismiss={() => setSaved(false)} />}
+      <Toast message={toast} />
 
       <SettingsSection icon={Building2} title="Company Branding & Information">
         <div className="space-y-6">
@@ -190,8 +208,13 @@ export default function Company() {
             />
           </FormField>
 
-          <div className="flex items-center gap-3 pt-1">
-            <button type="button" className="btn-primary" onClick={save}>Save Changes</button>
+          <div className="flex items-center gap-3 pt-1 flex-wrap">
+            <button type="button" className="btn-primary" onClick={save} disabled={saving || qrBusy !== null}>
+              {saving ? 'Saving…' : 'Save Changes'}
+            </button>
+            {toast && (
+              <span className="text-sm font-medium text-emerald-700">{toast}</span>
+            )}
           </div>
         </div>
       </SettingsSection>
