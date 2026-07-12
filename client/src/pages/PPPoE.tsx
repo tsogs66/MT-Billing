@@ -18,6 +18,8 @@ interface PUser {
   account: string;
   profile: string;
   status: string;
+  /** DB billing status before live MikroTik disable overwrite. */
+  panelStatus?: string | null;
   subscriptionDue: string;
   price: number;
   email?: string | null;
@@ -25,6 +27,8 @@ interface PUser {
   online?: boolean | number;
   sessionOnline?: boolean;
   mikrotikProfile?: string | null;
+  nonpaymentSince?: string | null;
+  expirationProfile?: string | null;
   downloadBps?: number;
   uploadBps?: number;
 }
@@ -47,6 +51,40 @@ function userStatusLabel(u: PUser): string {
   if (s === 'disabled') return 'disabled';
   if (u.status === 'Active' || s === 'active') return 'offline';
   return u.status;
+}
+
+/** True when the account is disabled due to expiry / non-payment (not a manual-only disable). */
+function isDisabledForNonPayment(u: PUser): boolean {
+  const st = String(u.status || '').toLowerCase();
+  const label = userStatusLabel(u);
+  if (st !== 'disabled' && label !== 'disabled') return false;
+
+  if (u.nonpaymentSince) return true;
+
+  const panel = String(u.panelStatus || '').toLowerCase();
+  if (panel === 'non-payment' || panel === 'nonpayment' || panel === 'expired') return true;
+
+  const mt = String(u.mikrotikProfile || '').toLowerCase();
+  const expire = String(u.expirationProfile || '').toLowerCase();
+  if (/non[-_\s]?pay/.test(mt) || (expire && mt && mt === expire)) return true;
+
+  const dueRaw = String(u.subscriptionDue || '').slice(0, 10);
+  if (dueRaw) {
+    const due = Date.parse(dueRaw);
+    if (Number.isFinite(due) && due < Date.now()) return true;
+  }
+  return false;
+}
+
+function UserStatusCell({ u }: { u: PUser }) {
+  const primary = userStatusLabel(u);
+  const showNonPayment = isDisabledForNonPayment(u) && primary !== 'non-payment';
+  return (
+    <div className="flex flex-wrap items-center gap-1" title={showNonPayment ? 'Disabled after expiry / non-payment' : undefined}>
+      <StatusBadge status={primary} />
+      {showNonPayment && <StatusBadge status="non-payment" />}
+    </div>
+  );
 }
 
 /** MikroTik system profiles — hidden from Profiles / Billing Plans lists. */
@@ -603,7 +641,9 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                     account: u.account,
                     plan: u.profile,
                     mtProfile: u.mikrotikProfile || '',
-                    status: userStatusLabel(u),
+                    status: isDisabledForNonPayment(u)
+                      ? `${userStatusLabel(u)} non-payment`
+                      : userStatusLabel(u),
                     traffic: (Number(u.downloadBps) || 0) + (Number(u.uploadBps) || 0),
                     due: u.subscriptionDue,
                   },
@@ -627,7 +667,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                     <span className="font-mono text-xs text-slate-700" title="MikroTik /ppp/secret profile">
                       {u.mikrotikProfile || '—'}
                     </span>,
-                    <StatusBadge status={userStatusLabel(u)} />,
+                    <UserStatusCell u={u} />,
                     <span className="text-xs font-medium text-slate-700 whitespace-nowrap">
                       {u.sessionOnline || u.online === 1 || u.online === true
                         ? <TrafficPair downloadBps={u.downloadBps} uploadBps={u.uploadBps} />

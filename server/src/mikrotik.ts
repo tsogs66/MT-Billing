@@ -708,6 +708,8 @@ export interface PppEnrichInput {
   status?: string;
   profile?: string;
   online?: number | boolean;
+  nonpaymentSince?: string | null;
+  expirationProfile?: string | null;
 }
 
 /**
@@ -719,12 +721,20 @@ export interface PppEnrichInput {
  * - Secret disabled on MikroTik wins — keep status disabled even if a session
  *   has not dropped yet (disable + remove-active is async on the router).
  * - Only clear a DB "disabled" flag when the secret is explicitly enabled.
+ * - `panelStatus` keeps the DB billing status so the UI can show non-payment
+ *   alongside disabled when the secret was auto-disabled for expiry.
  */
 export function enrichPppUsersFromLive<T extends PppEnrichInput>(
   users: T[],
   secrets: PppSecretRow[],
   sessions: PppActiveRow[]
-): (T & { status: string; online: number; sessionOnline: boolean; mikrotikProfile: string | null })[] {
+): (T & {
+  status: string;
+  panelStatus: string;
+  online: number;
+  sessionOnline: boolean;
+  mikrotikProfile: string | null;
+})[] {
   const byName = new Map(secrets.map((s) => [pppNameKey(s.name), s]));
   const onlineSet = new Set(sessions.map((s) => pppNameKey(s.name)).filter(Boolean));
 
@@ -732,7 +742,8 @@ export function enrichPppUsersFromLive<T extends PppEnrichInput>(
     const key = pppNameKey(u.username);
     const sec = byName.get(key);
     const sessionOnline = onlineSet.has(key);
-    let status = String(u.status || 'Active');
+    const panelStatus = String(u.status || 'Active');
+    let status = panelStatus;
 
     if (sec) {
       if (sec.disabled) {
@@ -747,6 +758,7 @@ export function enrichPppUsersFromLive<T extends PppEnrichInput>(
       ...u,
       profile: u.profile,
       status,
+      panelStatus,
       online: sessionOnline ? 1 : 0,
       sessionOnline,
       mikrotikProfile: sec?.profile || null,

@@ -646,14 +646,20 @@ app.get('/api/pppoe/users', async (req, res) => {
       ? db
           .prepare(
             `SELECT id, username, customer_name AS customer, account_number AS account, profile, status,
-                    subscription_due AS subscriptionDue, price, address, lat, lng, email, contact, online, router_id AS routerId
+                    status AS panelStatus,
+                    subscription_due AS subscriptionDue, price, address, lat, lng, email, contact, online,
+                    router_id AS routerId, nonpayment_since AS nonpaymentSince,
+                    expiration_profile AS expirationProfile
              FROM pppoe_users WHERE service = ? AND router_id = ? ORDER BY id`
           )
           .all(service, routerId)
       : db
           .prepare(
             `SELECT id, username, customer_name AS customer, account_number AS account, profile, status,
-                    subscription_due AS subscriptionDue, price, address, lat, lng, email, contact, online, router_id AS routerId
+                    status AS panelStatus,
+                    subscription_due AS subscriptionDue, price, address, lat, lng, email, contact, online,
+                    router_id AS routerId, nonpayment_since AS nonpaymentSince,
+                    expiration_profile AS expirationProfile
              FROM pppoe_users WHERE service = ? ORDER BY id`
           )
           .all(service)
@@ -690,7 +696,17 @@ app.get('/api/pppoe/users', async (req, res) => {
     }
   }
 
-  res.json(rows.map((u) => ({ ...u, live, downloadBps: u.downloadBps ?? 0, uploadBps: u.uploadBps ?? 0 })));
+  res.json(
+    rows.map((u) => ({
+      ...u,
+      live,
+      panelStatus: u.panelStatus ?? u.status,
+      nonpaymentSince: u.nonpaymentSince ?? null,
+      expirationProfile: u.expirationProfile ?? null,
+      downloadBps: u.downloadBps ?? 0,
+      uploadBps: u.uploadBps ?? 0,
+    }))
+  );
 });
 
 // Full record for the edit form.
