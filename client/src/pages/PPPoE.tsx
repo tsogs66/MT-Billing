@@ -1181,6 +1181,7 @@ function ProcessPaymentModal({ user, profiles, onClose, onPaid }: { user: PUser;
   const discount = Math.round((planPrice / 30) * Math.max(0, discountDays) * 100) / 100;
   const total = Math.max(0, subtotal - discount);
   const hasEmail = !!user.email;
+  const willRefreshSession = /non.?pay|expired|disabled/i.test(String(user.status || ''));
 
   const pay = async () => {
     setSaving(true);
@@ -1195,8 +1196,11 @@ function ProcessPaymentModal({ user, profiles, onClose, onPaid }: { user: PUser;
         send_receipt: sendReceipt,
       });
       printReceipt(r.data.receipt);
+      const bounced = r.data.sessionRefresh?.bounced;
       onPaid(
-        `Payment of ${peso(r.data.total)} recorded for ${user.username}. Due ${r.data.previousDue} \u2192 ${r.data.subscriptionDue}${r.data.emailed ? ' · receipt emailed' : ''}`
+        `Payment of ${peso(r.data.total)} recorded for ${user.username}. Due ${r.data.previousDue} \u2192 ${r.data.subscriptionDue}` +
+          (bounced ? ' · MikroTik session refreshed (5s bounce)' : '') +
+          (r.data.emailed ? ' · receipt emailed' : '')
       );
     } catch (e: any) {
       setError(e?.response?.data?.error || 'Payment failed');
@@ -1214,12 +1218,17 @@ function ProcessPaymentModal({ user, profiles, onClose, onPaid }: { user: PUser;
         <ModalFooter
           onCancel={onClose}
           onConfirm={pay}
-          confirmLabel="Process Payment & Print"
+          confirmLabel={willRefreshSession && saving ? 'Refreshing session…' : 'Process Payment & Print'}
           busy={saving}
         />
       }
     >
       {error && <div className="text-sm text-rose-600 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2 mb-4">{error}</div>}
+      {willRefreshSession && (
+        <div className="text-xs text-amber-800 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2 mb-4">
+          Account is <b>{user.status}</b>. After payment, MikroTik will disable the secret for 5 seconds then enable it again to refresh the active session.
+        </div>
+      )}
 
       <div className="space-y-4">
         <FormField label="Billing Plan">

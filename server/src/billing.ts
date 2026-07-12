@@ -1,6 +1,47 @@
 import crypto from 'crypto';
 import { db } from './db.js';
-import { updatePppSecret, setPppSecretEnabled, buildPppSecretComment } from './mikrotik.js';
+import {
+  updatePppSecret,
+  setPppSecretEnabled,
+  removePppActiveByName,
+  buildPppSecretComment,
+} from './mikrotik.js';
+
+const SESSION_REFRESH_MS = 5000;
+
+function needsSessionRefresh(status?: string | null): boolean {
+  const s = String(status || '').toLowerCase();
+  return s === 'non-payment' || s === 'nonpayment' || s === 'expired' || s === 'disabled';
+}
+
+/**
+ * Briefly disable then re-enable the PPP secret so MikroTik drops and refreshes
+ * any active session (picks up restored plan after non-payment / expiry).
+ */
+export async function bouncePppSessionForRefresh(
+  router: any,
+  username: string,
+  waitMs = SESSION_REFRESH_MS
+): Promise<{ bounced: boolean; waitMs: number; error?: string }> {
+  try {
+    await setPppSecretEnabled(router, username, false);
+    try {
+      await removePppActiveByName(router, username);
+    } catch {
+      /* best-effort session drop */
+    }
+    await new Promise((r) => setTimeout(r, Math.max(0, waitMs)));
+    await setPppSecretEnabled(router, username, true);
+    return { bounced: true, waitMs };
+  } catch (e: any) {
+    try {
+      await setPppSecretEnabled(router, username, true);
+    } catch {
+      /* leave best-effort re-enable */
+    }
+    return { bounced: false, waitMs, error: e?.message || String(e) };
+  }
+}
 
 /** Normalize a base URL (trim, no trailing slash, ensure scheme). */
 export function normalizeBaseUrl(raw?: string | null): string | undefined {
@@ -174,6 +215,9 @@ export async function recordPppoePayment(
   const user = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(userId) as any;
   if (!user) throw new Error('User not found');
 
+  const previousStatus = String(user.status || '');
+  const refreshSession = needsSessionRefresh(previousStatus);
+
   const months = Math.max(1, Math.floor(Number(opts.months) || 1));
   const previousDue: string = (user.subscription_due || new Date().toISOString().slice(0, 10)).slice(0, 10);
   const newDue = addMonthsPreserveDay(previousDue, months);
@@ -207,18 +251,35 @@ export async function recordPppoePayment(
   const updated = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(userId) as any;
   const sync = await syncUserToRouter(updated, 'restore');
 
+  let sessionRefresh: { bounced: boolean; waitMs: number; error?: string } | null = null;
+  if (refreshSession && sync.ok && updated?.router_id) {
+    const router = db.prepare('SELECT * FROM routers WHERE id = ?').get(updated.router_id) as any;
+    if (router?.host && router?.api_user) {
+      sessionRefresh = await bouncePppSessionForRefresh(router, updated.username, SESSION_REFRESH_MS);
+      db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+        sessionRefresh.bounced ? 'info' : 'warning',
+        'mikrotik',
+        sessionRefresh.bounced
+          ? `Session refresh bounce for ${updated.username} after payment (was ${previousStatus}, ${SESSION_REFRESH_MS}ms)`
+          : `Session refresh bounce failed for ${updated.username}: ${sessionRefresh.error || 'unknown'}`
+      );
+    }
+  }
+
   const company = db.prepare('SELECT * FROM company WHERE id = 1').get() as any;
   return {
     ok: true,
     months,
     plan,
     previousDue,
+    previousStatus,
     subscriptionDue: newDue,
     subtotal,
     discount,
     total,
     amount: total,
     sync,
+    sessionRefresh,
     receipt: {
       company: company?.name || 'ISP Billing',
       account: updated.account_number,

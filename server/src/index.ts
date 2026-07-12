@@ -1776,6 +1776,13 @@ app.put('/api/ipoe/leases/:mac', async (req, res) => {
   const mac = normalizeMac(decodeURIComponent(req.params.mac));
   const b = req.body || {};
   const routerId = b.routerId ? Number(b.routerId) : null;
+  const prevMeta = db.prepare('SELECT * FROM ipoe_lease_meta WHERE mac = ?').get(mac) as any;
+  const prevPayment = String(prevMeta?.payment_status || '');
+  const becomingActive = b.payment != null || b.payment_status != null
+    ? /active/i.test(String(b.payment ?? b.payment_status))
+    : false;
+  const wasRestricted = /non.?pay|disabled|blocked/i.test(prevPayment);
+
   db.prepare(
     `INSERT INTO ipoe_lease_meta (mac, name, plan_name, due_at, payment_status, comment)
      VALUES (@mac, @name, @plan_name, @due_at, @payment_status, @comment)
@@ -1794,17 +1801,35 @@ app.put('/api/ipoe/leases/:mac', async (req, res) => {
     comment: b.comment ?? null,
   });
 
-  if (b.blocked != null && routerId) {
-    const router = getRouterById(routerId);
-    if (router?.host && router?.api_user && b.id) {
+  let sessionRefresh: { bounced: boolean; waitMs: number; error?: string } | null = null;
+  const router = getRouterById(routerId);
+  const leaseId = b.id ? String(b.id) : null;
+
+  // Payment restore of a restricted lease: briefly block then unblock to refresh DHCP binding.
+  if (becomingActive && wasRestricted && router?.host && router?.api_user && leaseId) {
+    try {
+      await setDhcpLeaseBlocked(router, leaseId, true);
+      await new Promise((r) => setTimeout(r, 5000));
+      await setDhcpLeaseBlocked(router, leaseId, false);
+      sessionRefresh = { bounced: true, waitMs: 5000 };
+    } catch (e: any) {
       try {
-        await setDhcpLeaseBlocked(router, String(b.id), !!b.blocked);
+        await setDhcpLeaseBlocked(router, leaseId, false);
+      } catch {
+        /* best-effort */
+      }
+      sessionRefresh = { bounced: false, waitMs: 5000, error: e?.message || String(e) };
+    }
+  } else if (b.blocked != null && routerId && leaseId) {
+    if (router?.host && router?.api_user) {
+      try {
+        await setDhcpLeaseBlocked(router, String(leaseId), !!b.blocked);
       } catch (e: any) {
         return res.status(502).json({ error: e?.message || 'Could not update lease on MikroTik' });
       }
     }
   }
-  res.json({ ok: true, mac });
+  res.json({ ok: true, mac, sessionRefresh });
 });
 
 app.post('/api/ipoe/leases/:mac/toggle-block', async (req, res) => {

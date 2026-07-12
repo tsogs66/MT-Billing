@@ -784,6 +784,7 @@ function LeaseEditModal({ lease, plans, onClose, onSaved }: any) {
 }
 
 function LeasePayModal({ lease, plans, onClose, onSaved }: any) {
+  const { current } = useRouterDevice();
   const [plan, setPlan] = useState(lease.plan || plans[0]?.name || '');
   const [busy, setBusy] = useState(false);
   const save = async () => {
@@ -795,6 +796,8 @@ function LeasePayModal({ lease, plans, onClose, onSaved }: any) {
         plan,
         payment: 'Active',
         due: due.toLocaleString(),
+        routerId: current?.id,
+        id: lease.id,
       });
       onSaved();
     } finally {
@@ -808,6 +811,11 @@ function LeasePayModal({ lease, plans, onClose, onSaved }: any) {
           {plans.map((p: any) => <option key={p.id || p.name} value={p.name}>{p.name} ({peso(p.price)})</option>)}
         </select>
       </FormField>
+      {/non.?pay|disabled|blocked/i.test(String(lease.payment || '')) || lease.blocked ? (
+        <p className="text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2 mt-3">
+          This lease was restricted. Payment will briefly bounce the MikroTik lease (~5s) to refresh the active binding.
+        </p>
+      ) : null}
     </Modal>
   );
 }
