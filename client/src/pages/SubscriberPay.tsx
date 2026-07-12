@@ -108,17 +108,28 @@ function extractReferenceCandidates(text: string): string[] {
     scored.set(digits.length >= 10 ? digits : v, Math.max(scored.get(digits.length >= 10 ? digits : v) || 0, score + bonus));
   };
 
-  // Line-oriented: anything on a Ref/Txn line — join all digits on that line + next line
+  // Line-oriented: anything on a Ref/Txn line — join digits on that line (+ next if it looks like a ref)
   const lines = normalized.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (/(ref(?:erence)?|txn|trans(?:action)?|confirm(?:ation)?|trace|control\s*no)/i.test(line)) {
-      const chunk = `${line} ${lines[i + 1] || ''}`;
-      const digitsOnly = chunk.replace(/\D/g, '');
-      if (digitsOnly.length >= 10) add(digitsOnly, 18);
-      // Grouped digits on the line
+      const next = lines[i + 1] || '';
+      const nextDigits = next.replace(/\D/g, '');
+      const nextLooksLikeRef =
+        nextDigits.length >= 10 &&
+        nextDigits.length <= 16 &&
+        !/[₱.]/.test(next) &&
+        !/(amount|total|php|sent|paid)/i.test(next);
+      const chunk = nextLooksLikeRef ? `${line} ${next}` : line;
+      // Prefer grouped digit patterns over "all digits on the line" (avoids sucking in dates/amounts)
       const groups = chunk.match(/\d{3,5}(?:[\s-]\d{3,5}){2,5}/g);
       if (groups) for (const g of groups) add(g, 16);
+      const continuous = chunk.match(/\d{10,16}/g);
+      if (continuous) for (const g of continuous) add(g, 15);
+      // Digits-only after stripping labels on the ref line
+      const afterLabel = chunk.replace(/^.*?(?:no\.?|number|#|id|num)\s*[:.-]?\s*/i, '');
+      const digitsOnly = afterLabel.replace(/\D/g, '');
+      if (digitsOnly.length >= 10 && digitsOnly.length <= 16) add(digitsOnly, 18);
     }
   }
 
