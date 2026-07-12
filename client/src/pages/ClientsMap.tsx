@@ -303,6 +303,8 @@ export default function ClientsMap() {
   const [search, setSearch] = useState('');
   const [topoOpen, setTopoOpen] = useState(false);
   const [editNap, setEditNap] = useState<Partial<Nap> | null>(null);
+  /** NAP form: upstream from OLT or from another NAP (parentId). */
+  const [napUpstream, setNapUpstream] = useState<'olt' | 'nap'>('olt');
   const [editServer, setEditServer] = useState<Partial<ServerNode> | null>(null);
   const [mapPickServer, setMapPickServer] = useState<ServerNode | null>(null);
   const [pickFor, setPickFor] = useState<'nap' | 'server' | null>(null);
@@ -336,6 +338,35 @@ export default function ClientsMap() {
   const olts = useMemo(() => naps.filter((n) => n.kind === 'olt'), [naps]);
   const napNodes = useMemo(() => naps.filter((n) => n.kind === 'nap'), [naps]);
   const napsById = useMemo(() => Object.fromEntries(naps.map((n) => [n.id, n])), [naps]);
+
+  /** Parent NAP options for Upstream = From NAP (exclude self + anything that would cycle). */
+  const parentNapOptions = useMemo(() => {
+    const editingId = editNap?.id ? Number(editNap.id) : null;
+    return napNodes.filter((n) => {
+      if (editingId && n.id === editingId) return false;
+      if (!editingId) return true;
+      // Reject if editingId appears in n's ancestor chain (n is under editingId).
+      let cur: number | null | undefined = n.parentId;
+      const seen = new Set<number>();
+      while (cur && !seen.has(cur)) {
+        if (cur === editingId) return false;
+        seen.add(cur);
+        cur = napsById[cur]?.parentId;
+      }
+      return true;
+    });
+  }, [napNodes, editNap?.id, napsById]);
+
+  const openNewNap = () => {
+    setNapUpstream('olt');
+    setEditNap(emptyNap('nap', olt?.id || olts[0]?.id || null));
+  };
+
+  const openEditNap = (n: Nap) => {
+    const parent = n.parentId ? napsById[n.parentId] : null;
+    setNapUpstream(parent?.kind === 'nap' ? 'nap' : 'olt');
+    setEditNap({ ...n });
+  };
 
   const center: [number, number] = olt ? [olt.lat, olt.lng] : servers[0] ? [servers[0].lat, servers[0].lng] : [15.1785, 120.5945];
   const highlightId = selected?.id ?? hoveredId;
@@ -558,7 +589,7 @@ export default function ClientsMap() {
                   <button
                     type="button"
                     className="text-xs text-brand-600 hover:underline"
-                    onClick={() => setEditNap(emptyNap('nap', olt?.id || null))}
+                    onClick={openNewNap}
                   >
                     <Plus size={12} className="inline" /> New NAP
                   </button>
@@ -568,19 +599,25 @@ export default function ClientsMap() {
                   {napNodes.length === 0 ? (
                     <p className="text-sm text-slate-400 py-4 text-center">No NAPs.</p>
                   ) : (
-                    napNodes.map((n) => (
+                    napNodes.map((n) => {
+                      const parent = n.parentId ? napsById[n.parentId] : null;
+                      const fromLabel = parent
+                        ? `${parent.kind === 'nap' ? 'NAP' : 'OLT'} ${parent.name}`
+                        : null;
+                      return (
                       <TopoRow
                         key={n.id}
                         name={n.code ? `${n.code}` : n.name}
-                        sub={`${n.name}${n.parentId ? ` · From: ${napsById[n.parentId]?.name}` : ''}${n.ponPort ? ` · PON ${n.ponPort}` : ''}`}
+                        sub={`${n.name}${fromLabel ? ` · From: ${fromLabel}` : ''}${n.ponPort ? ` · PON ${n.ponPort}` : ''}`}
                         right={
                           <div className="flex gap-2">
-                            <button type="button" className="text-xs text-sky-600" onClick={() => setEditNap({ ...n })}>Edit</button>
+                            <button type="button" className="text-xs text-sky-600" onClick={() => openEditNap(n)}>Edit</button>
                             <button type="button" className="text-xs text-rose-600" onClick={() => deleteNap(n.id)}>Delete</button>
                           </div>
                         }
                       />
-                    ))
+                    );
+                    })
                   )}
                 </div>
               </TopoPanel>
@@ -681,18 +718,30 @@ export default function ClientsMap() {
               );
             })}
 
-            {olt && napNodes.map((n) => {
-              const hi = highlightChain?.oltId === olt.id && highlightChain?.napId === n.id;
-              const path = resolvePath(connectors, 'olt-nap', olt.id, n.id, defaultPath([olt.lat, olt.lng], [n.lat, n.lng]));
+            {napNodes.map((n) => {
+              const parent = n.parentId ? napsById[n.parentId] : null;
+              if (!parent) return null;
+              const hi =
+                (highlightChain?.oltId === parent.id || highlightChain?.napId === parent.id) &&
+                highlightChain?.napId === n.id;
+              const connKind = parent.kind === 'olt' ? 'olt-nap' : 'nap-nap';
+              const path = resolvePath(
+                connectors,
+                connKind,
+                parent.id,
+                n.id,
+                defaultPath([parent.lat, parent.lng], [n.lat, n.lng])
+              );
               return (
                 <Polyline
-                  key={`olt-nap-${n.id}`}
+                  key={`parent-nap-${n.id}`}
                   positions={path}
                   pathOptions={{
-                    color: '#2563eb',
+                    color: parent.kind === 'olt' ? '#2563eb' : '#7c3aed',
                     weight: hi ? 3.5 : 2,
-                    opacity: 0.8 * lineDim(hi),
+                    opacity: 0.8 * lineDim(!!hi),
                     className: lineClass(true, true),
+                    dashArray: parent.kind === 'nap' ? '6 4' : undefined,
                   }}
                 />
               );
@@ -849,24 +898,62 @@ export default function ClientsMap() {
                 </div>
                 <div className="grid grid-cols-2 gap-3 items-end">
                   <FormField label="Upstream">
-                    <select className="input" defaultValue="olt">
+                    <select
+                      className="input"
+                      value={napUpstream}
+                      onChange={(e) => {
+                        const v = e.target.value === 'nap' ? 'nap' : 'olt';
+                        setNapUpstream(v);
+                        const defaultParent =
+                          v === 'olt'
+                            ? olt?.id || olts[0]?.id || null
+                            : parentNapOptions[0]?.id || null;
+                        setEditNap({ ...editNap, parentId: defaultParent });
+                      }}
+                    >
                       <option value="olt">From OLT</option>
+                      <option value="nap">From NAP</option>
                     </select>
                   </FormField>
                   <button type="button" className="btn-secondary text-sm inline-flex items-center justify-center gap-1.5 h-[42px]" onClick={() => setPickFor('nap')}>
                     <MapPin size={14} /> Pick on Map
                   </button>
                 </div>
-                <FormField label="OLT">
-                  <select
-                    className="input"
-                    value={editNap.parentId || ''}
-                    onChange={(e) => setEditNap({ ...editNap, parentId: e.target.value ? Number(e.target.value) : null })}
-                  >
-                    <option value="">—</option>
-                    {olts.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-                  </select>
-                </FormField>
+                {napUpstream === 'olt' ? (
+                  <FormField label="OLT" required hint="Parent OLT for this NAP.">
+                    <select
+                      className="input"
+                      value={editNap.parentId || ''}
+                      onChange={(e) => setEditNap({ ...editNap, parentId: e.target.value ? Number(e.target.value) : null })}
+                    >
+                      <option value="">— Select OLT —</option>
+                      {olts.map((o) => (
+                        <option key={o.id} value={o.id}>{o.name}</option>
+                      ))}
+                    </select>
+                    {olts.length === 0 && (
+                      <p className="text-xs text-amber-700 mt-1">No OLT configured yet — add one under OLT Configuration.</p>
+                    )}
+                  </FormField>
+                ) : (
+                  <FormField label="Parent NAP" required hint="Upstream NAP this box feeds from.">
+                    <select
+                      className="input"
+                      value={editNap.parentId || ''}
+                      onChange={(e) => setEditNap({ ...editNap, parentId: e.target.value ? Number(e.target.value) : null })}
+                    >
+                      <option value="">— Select NAP —</option>
+                      {parentNapOptions.map((n) => (
+                        <option key={n.id} value={n.id}>
+                          {n.code ? `${n.code} · ${n.name}` : n.name}
+                        </option>
+                      ))}
+                    </select>
+                    {parentNapOptions.length === 0 && (
+                      <p className="text-xs text-amber-700 mt-1">No other NAPs available — add a NAP from an OLT first.</p>
+                    )}
+                  </FormField>
+                )}
                 <div className="grid grid-cols-2 gap-3">
                   <FormField label="PON Port">
                     <input className="input" type="number" value={editNap.ponPort ?? ''} onChange={(e) => setEditNap({ ...editNap, ponPort: e.target.value === '' ? null : Number(e.target.value) })} />

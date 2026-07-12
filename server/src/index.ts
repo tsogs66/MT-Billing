@@ -2689,7 +2689,8 @@ app.get('/api/naps', (req, res) => {
     .prepare(
       `SELECT n.id, n.name, n.kind, n.ports, n.lat, n.lng, n.parent_id AS parentId,
               n.code, n.status, n.address, n.splitter_ratio AS splitterRatio, n.pon_port AS ponPort,
-              (SELECT name FROM naps o WHERE o.id = n.parent_id) AS oltName
+              (SELECT name FROM naps o WHERE o.id = n.parent_id) AS oltName,
+              (SELECT kind FROM naps o WHERE o.id = n.parent_id) AS parentKind
        FROM naps n ${where} ORDER BY n.kind DESC, n.id`
     )
     .all();
