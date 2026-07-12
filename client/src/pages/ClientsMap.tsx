@@ -339,6 +339,13 @@ export default function ClientsMap() {
   const napNodes = useMemo(() => naps.filter((n) => n.kind === 'nap'), [naps]);
   const napsById = useMemo(() => Object.fromEntries(naps.map((n) => [n.id, n])), [naps]);
 
+  /** Clients assigned to the selected NAP (for NAP → Client route "To" list). */
+  const clientsUnderSelectedNap = useMemo(() => {
+    if (routeKind !== 'nap-client' || !routeFrom) return [];
+    const napId = Number(routeFrom);
+    return clients.filter((c) => Number(c.napId) === napId);
+  }, [routeKind, routeFrom, clients]);
+
   /** Parent NAP options for Upstream = From NAP (exclude self + anything that would cycle). */
   const parentNapOptions = useMemo(() => {
     const editingId = editNap?.id ? Number(editNap.id) : null;
@@ -638,20 +645,54 @@ export default function ClientsMap() {
                   </select>
                 </FormField>
                 <FormField label="From">
-                  <select className="input" value={routeFrom} onChange={(e) => setRouteFrom(e.target.value ? Number(e.target.value) : '')}>
+                  <select
+                    className="input"
+                    value={routeFrom}
+                    onChange={(e) => {
+                      const next = e.target.value ? Number(e.target.value) : '';
+                      setRouteFrom(next);
+                      // Changing NAP clears client — To list is scoped to that NAP only.
+                      if (routeKind === 'nap-client') setRouteTo('');
+                    }}
+                  >
                     <option value="">Select…</option>
                     {routeKind === 'server-olt' && servers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
                     {routeKind === 'olt-nap' && olts.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
                     {routeKind === 'nap-client' && napNodes.map((n) => <option key={n.id} value={n.id}>{n.name}</option>)}
                   </select>
                 </FormField>
-                <FormField label="To">
-                  <select className="input" value={routeTo} onChange={(e) => setRouteTo(e.target.value ? Number(e.target.value) : '')}>
-                    <option value="">Select…</option>
+                <FormField
+                  label="To"
+                  hint={
+                    routeKind === 'nap-client'
+                      ? routeFrom
+                        ? `${clientsUnderSelectedNap.length} user(s) under this NAP`
+                        : 'Select a NAP first'
+                      : undefined
+                  }
+                >
+                  <select
+                    className="input"
+                    value={routeTo}
+                    onChange={(e) => setRouteTo(e.target.value ? Number(e.target.value) : '')}
+                    disabled={routeKind === 'nap-client' && !routeFrom}
+                  >
+                    <option value="">
+                      {routeKind === 'nap-client' && !routeFrom ? 'Select NAP first…' : 'Select…'}
+                    </option>
                     {routeKind === 'server-olt' && olts.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
                     {routeKind === 'olt-nap' && napNodes.map((n) => <option key={n.id} value={n.id}>{n.name}</option>)}
-                    {routeKind === 'nap-client' && clients.map((c) => <option key={c.id} value={c.id}>{c.customer || c.username}</option>)}
+                    {routeKind === 'nap-client' &&
+                      clientsUnderSelectedNap.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.customer || c.username}
+                          {c.username && c.customer ? ` (${c.username})` : ''}
+                        </option>
+                      ))}
                   </select>
+                  {routeKind === 'nap-client' && routeFrom && clientsUnderSelectedNap.length === 0 && (
+                    <p className="text-xs text-amber-700 mt-1">No users assigned to this NAP. Set NAP on the user under PPPoE.</p>
+                  )}
                 </FormField>
                 <div className="flex flex-wrap gap-2">
                   <button type="button" className="btn-primary text-sm" onClick={startDraw}>{drawMode ? 'Drawing…' : 'Draw on Map'}</button>
