@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  ChevronDown, HelpCircle, RefreshCw, LogOut, Router as RouterIcon,
-  Menu, Search,
+  ChevronDown, RefreshCw, LogOut, Router as RouterIcon, Menu,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useRouterDevice } from '../context/RouterContext';
@@ -99,22 +98,14 @@ export default function Topbar({ title }: { title: string }) {
           )}
         </div>
 
-        <div className="hidden md:flex items-center gap-0.5">
-          <button type="button" className="theme-topbar-icon-btn p-2" title="Search">
-            <Search size={18} />
-          </button>
-          <button type="button" className="theme-topbar-icon-btn p-2" title="Help">
-            <HelpCircle size={18} />
-          </button>
-          <button
-            type="button"
-            className="theme-topbar-icon-btn p-2"
-            title="Refresh"
-            onClick={() => location.reload()}
-          >
-            <RefreshCw size={18} />
-          </button>
-        </div>
+        <button
+          type="button"
+          className="theme-topbar-icon-btn p-2"
+          title="Refresh"
+          onClick={() => location.reload()}
+        >
+          <RefreshCw size={18} />
+        </button>
 
         <div className="theme-topbar-divider hidden sm:block" />
 
