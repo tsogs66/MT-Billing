@@ -197,12 +197,16 @@ export default function SubscriberPay() {
                 How to pay
               </div>
               <ol className="text-sm text-slate-600 space-y-1.5 list-decimal pl-5">
-                <li>Choose <b>GCash</b> or <b>Maya</b> below.</li>
+                <li>Choose <b>GCash</b> or <b>Maya</b> below (or scan with any bank app).</li>
                 <li>Scan the merchant QR (or send to the number shown) for the exact amount.</li>
                 <li>Copy the <b>Reference / Transaction No.</b> from your receipt.</li>
                 <li>Optional: upload a screenshot — we try to read the reference automatically.</li>
                 <li>Submit for review. Service restores after your ISP verifies payment.</li>
               </ol>
+              <p className="text-xs text-slate-600 mt-3 rounded-xl bg-white border border-slate-200 px-3 py-2.5 leading-relaxed">
+                <span className="font-semibold text-slate-800">QR Ph / InstaPay:</span> All payment QR codes on this page can be scanned and paid using{' '}
+                <b>any participating Philippine bank</b> or e-wallet (GCash, Maya, BDO, BPI, UnionBank, and others) — not only the wallet shown on the QR.
+              </p>
               {company.paymentInstructions && (
                 <p className="text-xs text-slate-500 mt-3 border-t border-slate-200 pt-3 whitespace-pre-wrap">{company.paymentInstructions}</p>
               )}
@@ -253,10 +257,13 @@ export default function SubscriberPay() {
                       alt="Payment QR"
                       className="w-56 h-auto max-h-72 object-contain rounded-2xl border border-slate-200 bg-white p-2 shadow-sm"
                     />
-                    <div className="text-xs text-slate-400 text-center px-2">
+                    <div className="text-xs text-slate-500 text-center px-2 max-w-xs leading-relaxed">
                       {channel
-                        ? `Open ${channel === 'maya' ? 'Maya' : 'GCash'} → Scan QR → pay the exact amount`
+                        ? `Open ${channel === 'maya' ? 'Maya' : 'GCash'} — or any Philippine bank app — → Scan QR → pay the exact amount`
                         : 'Select GCash or Maya above, then scan the matching QR'}
+                      <span className="block mt-1 text-slate-400">
+                        Works with InstaPay / QR Ph — any participating PH bank or e-wallet.
+                      </span>
                     </div>
                   </div>
                 )}
