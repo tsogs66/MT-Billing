@@ -484,7 +484,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                   sortValues: {
                     user: u.username,
                     account: u.account,
-                    profile: u.mikrotikProfile || u.profile,
+                    profile: u.profile,
                     status: userStatusLabel(u),
                     traffic: (Number(u.downloadBps) || 0) + (Number(u.uploadBps) || 0),
                     due: u.subscriptionDue,
@@ -503,7 +503,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                       <div className="text-xs text-slate-400">{u.customer}</div>
                     </div>,
                     <span className="text-slate-500">{u.account}</span>,
-                    <span className="text-slate-600 font-medium">{u.mikrotikProfile || u.profile}</span>,
+                    <span className="text-slate-600 font-medium">{u.profile}</span>,
                     <StatusBadge status={userStatusLabel(u)} />,
                     <span className="text-xs font-medium text-slate-700 whitespace-nowrap">
                       {u.sessionOnline || u.online === 1 || u.online === true
@@ -934,7 +934,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
         >
           <div className="space-y-4 text-sm text-slate-600">
             <p>
-              Grace is counted from each account’s <b>due date</b>. Within grace → non-payment profile; past grace → disable on MikroTik.
+              Grace is counted from each account’s <b>due date</b>. Within grace → switch PPP profile to non-payment (comment unchanged); past grace → disable only (comment unchanged).
             </p>
             {!!recheckPreview.toExpire.length && (
               <div>

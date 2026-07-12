@@ -706,6 +706,9 @@ export interface PppEnrichInput {
 /**
  * Merge MikroTik PPP secret + active-session state onto panel user rows.
  * - Username match is case-insensitive (Winbox vs DB casing often differs).
+ * - Billing plan (`profile`) stays the panel/DB value (from secret comment).
+ *   Live RouterOS profile is only exposed as `mikrotikProfile` (often the
+ *   non-payment profile during grace) so payment restore keeps the original plan.
  * - Secret disabled on MikroTik wins — keep status disabled even if a session
  *   has not dropped yet (disable + remove-active is async on the router).
  * - Only clear a DB "disabled" flag when the secret is explicitly enabled.
@@ -723,10 +726,8 @@ export function enrichPppUsersFromLive<T extends PppEnrichInput>(
     const sec = byName.get(key);
     const sessionOnline = onlineSet.has(key);
     let status = String(u.status || 'Active');
-    let profile = u.profile;
 
     if (sec) {
-      profile = sec.profile || u.profile;
       if (sec.disabled) {
         status = 'disabled';
       } else if (status.toLowerCase() === 'disabled') {
@@ -737,7 +738,7 @@ export function enrichPppUsersFromLive<T extends PppEnrichInput>(
 
     return {
       ...u,
-      profile,
+      profile: u.profile,
       status,
       online: sessionOnline ? 1 : 0,
       sessionOnline,

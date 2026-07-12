@@ -510,7 +510,7 @@ export async function executeBillingEnforcement(opts?: {
     const classified = classifyOverdueUser(u, graceHours);
     if (!classified) continue;
 
-    // Within grace → non-payment / expire profile on MikroTik
+    // Within grace → non-payment expire profile on MikroTik (comment preserved)
     if (classified.action === 'expire') {
       if (!u.nonpayment_since) {
         db.prepare("UPDATE pppoe_users SET nonpayment_since = ?, status = 'non-payment' WHERE id = ?").run(
@@ -545,7 +545,7 @@ export async function executeBillingEnforcement(opts?: {
       continue;
     }
 
-    // Past grace (from due date) → disable
+    // Past grace (from due date) → disable secret only (do not rewrite comment)
     if (classified.action === 'disable' && (s.autodisable_enabled || forceDisable)) {
       if (!u.nonpayment_since) {
         db.prepare("UPDATE pppoe_users SET nonpayment_since = ? WHERE id = ?").run(new Date(now).toISOString(), u.id);

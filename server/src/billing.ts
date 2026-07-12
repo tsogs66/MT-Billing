@@ -170,33 +170,31 @@ export async function syncUserToRouter(
   if (!router?.host || !router?.api_user) return { ok: false, error: 'router-not-configured' };
   try {
     if (action === 'expire') {
-      const expire = user.expiration_profile && user.expiration_profile !== 'default'
-        ? user.expiration_profile
-        : 'non-payments';
+      // Within grace: switch PPP profile to non-payment only.
+      // Do NOT rewrite the secret comment — it keeps the original plan/due for payment restore.
+      const expire =
+        user.expiration_profile && user.expiration_profile !== 'default'
+          ? user.expiration_profile
+          : 'non-payments';
       try {
         await ensurePppProfile(router, expire);
       } catch {
         /* profile may already exist */
       }
       await updatePppSecret(router, user.username, {
-        password: user.password || '',
         profile: expire,
-        comment: commentFromUser({ ...user, status: 'non-payment', profile: user.profile }),
         disabled: false,
       });
       await setPppSecretEnabled(router, user.username, true);
     } else if (action === 'disable') {
+      // Past grace: disable only. Leave comment and profile untouched so payment
+      // still reads the original plan/due from the preserved comment.
       await setPppSecretEnabled(router, user.username, false);
       try {
         await removePppActiveByName(router, user.username);
       } catch {
         /* best-effort */
       }
-      await updatePppSecret(router, user.username, {
-        password: user.password || '',
-        comment: commentFromUser({ ...user, status: 'disabled' }),
-        disabled: true,
-      });
     } else if (action === 'enable' || action === 'restore') {
       await updatePppSecret(router, user.username, {
         password: user.password || '',

@@ -629,7 +629,8 @@ function routerHasApi(router: any): boolean {
 
 function secretDisabledFromStatus(status: unknown): boolean {
   const s = String(status || '').toLowerCase();
-  return s === 'disabled' || s === 'expired' || s === 'non-payment' || s === 'nonpayment';
+  // Non-payment keeps the secret enabled (expire profile only). Disable past grace.
+  return s === 'disabled' || s === 'expired';
 }
 
 app.get('/api/pppoe/users', async (req, res) => {
@@ -1209,18 +1210,31 @@ app.post('/api/pppoe/fetch-mikrotik', async (req, res) => {
       }
       const meta = parseSecretComment(sec.comment);
       const cust = meta.customer || {};
-      // Prefer live RouterOS profile for the Profile column; fall back to billing plan in comment.
+      // Billing plan always comes from the secret comment — not the live PPP profile
+      // (live profile is often non-payments during grace / after expiry switch).
+      const commentPlan = String(meta.plan || '').trim();
       const rosProfile = String(sec.profile || '').trim();
-      const plan = rosProfile || String(meta.plan || '15mbps');
+      const plan = commentPlan || rosProfile || '15mbps';
       if (!(plan in planPrice)) {
         ensurePlan.run(plan);
         planPrice[plan] = 0;
       }
       const disabled = sec.disabled === 'true' || sec.disabled === true;
+      const expireProf = String(meta.expireProfile || 'non-payments').trim();
       const existing = findUser.get(username) as any;
       const account = String(meta.accountNumber || existing?.account_number || generateAccountNumber());
       const due = meta.dueDate ? String(meta.dueDate).slice(0, 10) : new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
-      const status = disabled ? 'disabled' : normStatus(cust.status);
+      let status: string;
+      if (disabled) {
+        status = 'disabled';
+      } else if (
+        rosProfile &&
+        (rosProfile.toLowerCase() === expireProf.toLowerCase() || /non.?pay/i.test(rosProfile))
+      ) {
+        status = 'non-payment';
+      } else {
+        status = normStatus(cust.status);
+      }
       const fields = {
         username: String(username),
         password: sec.password || '',
@@ -1229,10 +1243,10 @@ app.post('/api/pppoe/fetch-mikrotik', async (req, res) => {
         profile: plan,
         status,
         subscription_due: due,
-        price: Number(planPrice[plan]) || Number(planPrice[String(meta.plan || '')]) || 0,
+        price: Number(planPrice[plan]) || Number(planPrice[commentPlan]) || 0,
         router_id: router.id,
         service,
-        expiration_profile: String(meta.expireProfile || 'default'),
+        expiration_profile: expireProf || 'default',
         contact: cust.contactNumber || null,
         email: cust.email || null,
         address: cust.address || null,
