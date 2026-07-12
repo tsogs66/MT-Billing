@@ -77,7 +77,10 @@ settingsRouter.put('/settings/app', (req, res) => {
     tz: cur.tz || 'Asia/Manila',
     ntp_server: cur.ntp_server || 'time.cloudflare.com',
     public_base_url: (() => { const v = cur.public_base_url == null ? '' : String(cur.public_base_url).trim().replace(/\/$/, ''); return v || null; })(),
-    cf_tunnel_token: cur.cf_tunnel_token || null,
+    cf_tunnel_token: (() => {
+      if (cur.cf_tunnel_token == null || cur.cf_tunnel_token === '') return null;
+      return String(cur.cf_tunnel_token).replace(/[\r\n\t ]+/g, '').replace(/^['"]|['"]$/g, '') || null;
+    })(),
     cf_tunnel_hostname: (() => {
       const v = cur.cf_tunnel_hostname == null ? '' : String(cur.cf_tunnel_hostname).trim()
         .replace(/^https?:\/\//i, '').replace(/\/.*$/, '').replace(/:\d+$/, '').replace(/\.$/, '').toLowerCase();

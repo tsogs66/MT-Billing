@@ -39,6 +39,8 @@ DB_PATH="${INSTALL_DIR}/server/data/mt-billing.db"
 ENV_FILE="${INSTALL_DIR}/server/.env"
 CONF_DIR="/etc/mt-billing"
 TOKEN_FILE="${CONF_DIR}/cloudflared.token"
+ENV_TOKEN_FILE="${CONF_DIR}/cloudflared.env"
+WRAPPER="${CONF_DIR}/run-tunnel.sh"
 UNIT_NAME="cloudflared-mt-billing.service"
 UNIT_PATH="/etc/systemd/system/${UNIT_NAME}"
 
@@ -95,6 +97,84 @@ fi
 
 normalize_host() {
   printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -e 's|^https\?://||' -e 's|/.*||' -e 's|:.*||' -e 's/\.$//'
+}
+
+sanitize_token() {
+  # Strip whitespace/newlines/quotes that break cloudflared JWT parsing
+  printf '%s' "$1" | tr -d '\r\n\t ' | sed -e 's/^["'\'']//' -e 's/["'\'']$//'
+}
+
+validate_token() {
+  local t="$1"
+  if [[ -z "$t" ]]; then
+    log_err "Tunnel token is empty"
+    return 1
+  fi
+  if [[ "$t" == *"…"* || "$t" == *"..."* || "$t" == "eyJh..."* ]]; then
+    log_err "That looks like a placeholder token, not a real Cloudflare install token."
+    echo "  In Zero Trust → Networks → Tunnels → your tunnel → Install connector, copy the full token" >&2
+    echo "  (long string starting with eyJh… — hundreds of characters)." >&2
+    return 1
+  fi
+  if [[ "$t" != eyJ* ]]; then
+    log_err "Tunnel token should start with eyJ (Cloudflare connector JWT)."
+    echo "  Do not use an API Token / Global API Key — use the tunnel install/connector token." >&2
+    return 1
+  fi
+  # Typical tunnel tokens are long JWTs (header.payload.sig)
+  if [[ ${#t} -lt 100 ]]; then
+    log_err "Tunnel token looks too short (${#t} chars). Paste the full connector token from Cloudflare."
+    return 1
+  fi
+  if [[ "$t" != *.*.* ]]; then
+    log_err "Tunnel token does not look like a JWT (expected three dot-separated parts)."
+    return 1
+  fi
+  return 0
+}
+
+cloudflared_bin() {
+  if [[ -x /usr/bin/cloudflared ]]; then
+    echo /usr/bin/cloudflared
+  elif command -v cloudflared >/dev/null 2>&1; then
+    command -v cloudflared
+  else
+    echo cloudflared
+  fi
+}
+
+probe_token() {
+  # Run briefly to surface auth errors before enabling the restart loop
+  local bin err
+  bin="$(cloudflared_bin)"
+  err="$(mktemp)"
+  set +e
+  timeout 8s "$bin" tunnel --no-autoupdate run --token "$TOKEN" >"$err" 2>&1
+  local rc=$?
+  set -e
+  # timeout → 124 means it stayed up (good). Other codes → show log.
+  if [[ "$rc" -eq 124 ]]; then
+    rm -f "$err"
+    return 0
+  fi
+  # Still running somehow
+  if grep -qiE 'Registered tunnel connection|Connected to|connIndex=' "$err" 2>/dev/null; then
+    rm -f "$err"
+    return 0
+  fi
+  log_err "cloudflared rejected the token or could not connect:"
+  sed -n '1,40p' "$err" >&2 || true
+  echo >&2
+  if grep -qiE 'unauthorized|invalid token|failed to parse|malformed|expired|403|401' "$err"; then
+    echo "  Fix: Zero Trust → Networks → Tunnels → create/open tunnel → copy a fresh Install token." >&2
+    echo "  Then re-run with --token '<paste full token>' --hostname your.real.domain" >&2
+  elif grep -qiE 'network|dial|timeout|DNS|resolve' "$err"; then
+    echo "  Fix: ensure this LXC has outbound HTTPS (443) to Cloudflare." >&2
+  else
+    echo "  Tip: hostname 'pay.yourisp.com' is only an example — use a hostname on your Cloudflare zone." >&2
+  fi
+  rm -f "$err"
+  return 1
 }
 
 set_public_base_url() {
@@ -176,15 +256,38 @@ install_cloudflared() {
 }
 
 write_unit() {
+  local bin
+  bin="$(cloudflared_bin)"
   mkdir -p "$CONF_DIR"
   chmod 750 "$CONF_DIR"
   if [[ -z "$TOKEN" ]]; then
     log_err "Tunnel token is required"
     exit 1
   fi
+  TOKEN="$(sanitize_token "$TOKEN")"
+  if ! validate_token "$TOKEN"; then
+    exit 1
+  fi
+
   umask 077
-  printf '%s\n' "$TOKEN" >"$TOKEN_FILE"
+  # Plain token file (no newline) + env file for cloudflared TUNNEL_TOKEN
+  printf '%s' "$TOKEN" >"$TOKEN_FILE"
   chmod 600 "$TOKEN_FILE"
+  # Quote value so '=' padding inside JWT is safe for systemd EnvironmentFile
+  printf 'TUNNEL_TOKEN=%s\n' "$TOKEN" >"$ENV_TOKEN_FILE"
+  chmod 600 "$ENV_TOKEN_FILE"
+
+  cat >"$WRAPPER" <<WRAP
+#!/bin/bash
+set -euo pipefail
+TOKEN="\$(tr -d '\\r\\n\\t ' <'${TOKEN_FILE}')"
+if [[ -z "\$TOKEN" || "\$TOKEN" != eyJ* ]]; then
+  echo "cloudflared-mt-billing: missing/invalid token in ${TOKEN_FILE}" >&2
+  exit 1
+fi
+exec '${bin}' tunnel --no-autoupdate run --token "\$TOKEN"
+WRAP
+  chmod 700 "$WRAPPER"
 
   cat >"$UNIT_PATH" <<EOF
 [Unit]
@@ -198,24 +301,36 @@ Type=simple
 User=root
 Restart=on-failure
 RestartSec=5
-Environment=TUNNEL_TOKEN_FILE=${TOKEN_FILE}
-ExecStart=/bin/bash -c 'exec /usr/bin/cloudflared tunnel --no-autoupdate run --token "\$(cat ${TOKEN_FILE})"'
+# Prefer wrapper (reads token file); EnvironmentFile is a backup for TUNNEL_TOKEN
+EnvironmentFile=-${ENV_TOKEN_FILE}
+ExecStart=${WRAPPER}
 LimitNOFILE=65535
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-  # Prefer cloudflared on PATH if not at /usr/bin
-  if [[ ! -x /usr/bin/cloudflared ]] && command -v cloudflared >/dev/null 2>&1; then
-    local bin
-    bin="$(command -v cloudflared)"
-    sed -i "s|/usr/bin/cloudflared|${bin}|g" "$UNIT_PATH"
-  fi
-
   systemctl daemon-reload
   systemctl enable "$UNIT_NAME" >/dev/null 2>&1 || true
   log_ok "systemd unit ${UNIT_NAME} installed"
+}
+
+dump_failure_logs() {
+  log_err "Service failed to start — recent logs:"
+  journalctl -u "$UNIT_NAME" -n 40 --no-pager -l 2>/dev/null || true
+  systemctl status "$UNIT_NAME" --no-pager -l || true
+  if [[ -f "$TOKEN_FILE" ]]; then
+    local len
+    len="$(wc -c <"$TOKEN_FILE" | tr -d ' ')"
+    echo "  Token file : ${TOKEN_FILE} (${len} bytes)" >&2
+  fi
+  echo >&2
+  echo "Common fixes:" >&2
+  echo "  1. Use a REAL tunnel connector token from Cloudflare Zero Trust (not an API key)." >&2
+  echo "  2. Hostname must be a domain on your Cloudflare account (not pay.yourisp.com)." >&2
+  echo "  3. Re-copy the install token (they can be rotated / one-time)." >&2
+  echo "  4. Test manually:" >&2
+  echo "       sudo $(cloudflared_bin) tunnel run --token \"\$(cat ${TOKEN_FILE})\"" >&2
 }
 
 do_start() {
@@ -223,9 +338,21 @@ do_start() {
     log_err "Service not installed. Run apply first (with --token / --from-db)."
     exit 1
   fi
+  systemctl reset-failed "$UNIT_NAME" 2>/dev/null || true
   systemctl start "$UNIT_NAME"
-  sleep 1
-  if systemctl is-active --quiet "$UNIT_NAME"; then
+  # Give cloudflared a moment to auth; restart loop can look "activating"
+  local i active=0
+  for i in 1 2 3 4 5 6; do
+    sleep 1
+    if systemctl is-active --quiet "$UNIT_NAME"; then
+      active=1
+      break
+    fi
+    if systemctl is-failed --quiet "$UNIT_NAME" 2>/dev/null; then
+      break
+    fi
+  done
+  if [[ "$active" == "1" ]]; then
     local url=""
     if [[ -n "$HOSTNAME" ]]; then
       HOSTNAME="$(normalize_host "$HOSTNAME")"
@@ -238,8 +365,7 @@ do_start() {
     [[ -n "$url" ]] && echo "  Pay portal : ${url}/pay/<token>"
   else
     set_db_status "error"
-    log_err "Service failed to start — check: journalctl -u ${UNIT_NAME} -n 50"
-    systemctl status "$UNIT_NAME" --no-pager -l || true
+    dump_failure_logs
     exit 1
   fi
 }
@@ -277,8 +403,7 @@ do_status() {
 do_uninstall() {
   systemctl stop "$UNIT_NAME" 2>/dev/null || true
   systemctl disable "$UNIT_NAME" 2>/dev/null || true
-  rm -f "$UNIT_PATH"
-  rm -f "$TOKEN_FILE"
+  rm -f "$UNIT_PATH" "$TOKEN_FILE" "$ENV_TOKEN_FILE" "$WRAPPER"
   systemctl daemon-reload 2>/dev/null || true
   set_db_status "stopped"
   log_ok "Cloudflare Tunnel service removed (cloudflared binary left installed)"
@@ -288,13 +413,24 @@ do_apply() {
   if [[ "$FROM_DB" == "1" ]]; then
     read_from_db
   fi
+  TOKEN="$(sanitize_token "${TOKEN}")"
   HOSTNAME="$(normalize_host "${HOSTNAME}")"
   if [[ -z "$TOKEN" ]]; then
     log_err "Missing tunnel token. Pass --token or save it in System Settings and use --from-db."
     exit 1
   fi
+  if ! validate_token "$TOKEN"; then
+    exit 1
+  fi
   if [[ -z "$HOSTNAME" ]]; then
     log_warn "No hostname set — tunnel will run, but set hostname so pay links use https://your.domain"
+  elif [[ "$HOSTNAME" == "pay.yourisp.com" || "$HOSTNAME" == "billing.yourisp.com" ]]; then
+    log_err "Hostname '${HOSTNAME}' is the documentation example, not a real domain."
+    echo "  Use a hostname on your Cloudflare zone (e.g. pay.yourdomain.com), then:" >&2
+    echo "  1) Cloudflare → Zero Trust → Tunnels → Public Hostname → add that hostname" >&2
+    echo "     Service URL: http://127.0.0.1:${LOCAL_PORT}" >&2
+    echo "  2) Re-run with --hostname pay.yourdomain.com" >&2
+    exit 1
   fi
 
   if [[ -f "$DB_PATH" ]] && command -v sqlite3 >/dev/null 2>&1; then
@@ -307,6 +443,13 @@ do_apply() {
   if [[ -n "$HOSTNAME" ]]; then
     log_info "Ensure Cloudflare Public Hostname '${HOSTNAME}' → http://127.0.0.1:${LOCAL_PORT}"
   fi
+
+  log_info "Probing token with cloudflared (8s)…"
+  if ! probe_token; then
+    set_db_status "error"
+    exit 1
+  fi
+  log_ok "Token accepted / connector can reach Cloudflare"
 
   if [[ "$NO_START" == "1" ]]; then
     set_db_status "stopped"

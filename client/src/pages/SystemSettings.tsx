@@ -307,10 +307,13 @@ function CloudflareTunnelSettings({ app, setA, save, flash, reload }: any) {
             <span className="text-sm font-semibold text-slate-700 mb-1 block">Public hostname</span>
             <input
               className="input font-mono text-sm"
-              placeholder="pay.yourisp.com"
+              placeholder="pay.yourdomain.com"
               value={app.cf_tunnel_hostname || ''}
               onChange={(e) => setA({ cf_tunnel_hostname: e.target.value })}
             />
+            <span className="text-xs text-slate-400 mt-1 block">
+              Must be a hostname on your Cloudflare zone (not the pay.yourisp.com example).
+            </span>
           </label>
           <label className="block">
             <span className="text-sm font-semibold text-slate-700 mb-1 block">Local service port</span>
@@ -327,7 +330,7 @@ function CloudflareTunnelSettings({ app, setA, save, flash, reload }: any) {
         <div className="rounded-lg bg-slate-50 border border-slate-100 px-3 py-2 text-xs text-slate-500 space-y-1">
           <div>
             CLI alternative:{' '}
-            <code className="text-slate-700">sudo bash /opt/mt-billing/install/mt-billing-cloudflare-tunnel.sh --token … --hostname pay.yourisp.com</code>
+            <code className="text-slate-700">sudo bash /opt/mt-billing/install/mt-billing-cloudflare-tunnel.sh --token … --hostname pay.yourdomain.com</code>
           </div>
           <div>
             First-time panel control may need:{' '}
