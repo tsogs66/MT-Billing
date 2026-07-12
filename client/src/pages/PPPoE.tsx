@@ -812,7 +812,14 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
         {tab === 'plans' && (
           <>
             <Toolbar
-              left={<span>Billing Plans <span className="font-semibold text-slate-800">{plans.length}</span></span>}
+              left={
+                <span>
+                  Billing Plans <span className="font-semibold text-slate-800">{plans.length}</span>
+                  <span className="ml-2 text-xs font-normal text-slate-500">
+                    Panel labels that point at MikroTik PPP profiles — never created on the router
+                  </span>
+                </span>
+              }
               right={
                 <>
                   <button type="button" className="btn-secondary" onClick={loadPlans}>
@@ -1338,22 +1345,22 @@ function PlanFormModal({
   return (
     <Modal
       title={isEdit ? 'Edit Billing Plan' : 'Add New Plan'}
-      subtitle="Plan name is panel billing only. Profile is a reference to an existing MikroTik /ppp/profile — nothing is created on the router."
+      subtitle="Panel-only. The plan name is never added to MikroTik — it only points at an existing /ppp/profile."
       onClose={onClose}
       footer={<ModalFooter onCancel={onClose} onConfirm={save} confirmLabel={isEdit ? 'Save Changes' : 'Create Plan'} busy={busy} />}
     >
       {error && <div className="text-sm text-rose-600 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2 mb-4">{error}</div>}
       <div className="space-y-4">
-        <FormField label="Plan Name" required>
+        <FormField label="Plan Name" required hint="Used only in this panel and in the PPP secret comment — not created on the router.">
           <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. UNLI500" autoFocus />
         </FormField>
         <FormField
-          label="Profile"
+          label="MikroTik PPP Profile"
           required
           hint={
             profileOptions.length
-              ? 'Reference only — must already exist on MikroTik (Profiles tab). Payment and plan changes apply this profile to /ppp/secret without creating it.'
-              : 'No PPP profiles yet — fetch or add profiles on the Profiles tab first.'
+              ? 'Must already exist under Profiles (MikroTik /ppp/profile). Saving this plan does not create or modify that profile.'
+              : 'No PPP profiles yet — fetch or add them on the Profiles tab first.'
           }
         >
           <select

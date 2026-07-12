@@ -170,8 +170,14 @@ export function getBillingPlan(planName: string): {
 } | null {
   const plan = String(planName || '').trim();
   if (!plan) return null;
+  // Prefer type=plan (panel billing). Fall back to legacy rows without type.
   const row = db
-    .prepare('SELECT name, price, rate_limit, ppp_profile FROM profiles WHERE name = ?')
+    .prepare(
+      `SELECT name, price, rate_limit, ppp_profile FROM profiles
+       WHERE name = ?
+       ORDER BY CASE WHEN coalesce(type, '') = 'plan' THEN 0 ELSE 1 END
+       LIMIT 1`
+    )
     .get(plan) as { name: string; price: number; rate_limit?: string; ppp_profile?: string } | undefined;
   if (!row) return null;
   return {

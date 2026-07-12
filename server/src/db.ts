@@ -254,13 +254,13 @@ export function migrate() {
       db.exec(`ALTER TABLE pppoe_users ADD COLUMN ${col} ${type}`);
     }
   }
-  ensureBillingPlans();
-  ensureIpoeBillingDefaults();
-  ensureNotifySettings();
-
   if (!columnExists('profiles', 'ppp_profile')) {
     db.exec('ALTER TABLE profiles ADD COLUMN ppp_profile TEXT');
   }
+
+  ensureBillingPlans();
+  ensureIpoeBillingDefaults();
+  ensureNotifySettings();
 
   // Gateway configuration columns (added over time).
   const notifyCols: [string, string][] = [
@@ -533,7 +533,10 @@ function ensureNotifySettings() {
   }
 }
 
-/** Ensure the UNLI billing plans referenced by the Add-User template exist. */
+/**
+ * Panel billing plans only (type=plan). They reference an existing MikroTik
+ * /ppp/profile via ppp_profile — they are never pushed to the router.
+ */
 function ensureBillingPlans() {
   const plans: [string, string, number][] = [
     ['UNLI500', '30M/30M', 500],
