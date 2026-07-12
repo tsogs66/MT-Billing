@@ -58,7 +58,8 @@ export function initSchema() {
       name TEXT NOT NULL,
       rate_limit TEXT,
       price REAL DEFAULT 0,
-      type TEXT DEFAULT 'pppoe'
+      type TEXT DEFAULT 'pppoe',
+      ppp_profile TEXT
     );
 
     CREATE TABLE IF NOT EXISTS pppoe_users (
@@ -256,6 +257,10 @@ export function migrate() {
   ensureBillingPlans();
   ensureIpoeBillingDefaults();
   ensureNotifySettings();
+
+  if (!columnExists('profiles', 'ppp_profile')) {
+    db.exec('ALTER TABLE profiles ADD COLUMN ppp_profile TEXT');
+  }
 
   // Gateway configuration columns (added over time).
   const notifyCols: [string, string][] = [

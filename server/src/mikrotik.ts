@@ -875,14 +875,7 @@ export async function addPppSecret(
     rateLimit?: string;
   }
 ): Promise<void> {
-  if (fields.profile) {
-    try {
-      await ensurePppProfile(conn, fields.profile, fields.rateLimit);
-    } catch {
-      /* profile create best-effort; secret add may still work with default */
-    }
-  }
-
+  // Do not auto-create PPP profiles — billing plans must reference an existing MikroTik profile.
   const tryAdd = async (profile?: string) => {
     const args = secretWriteArgs({
       name: fields.name,
@@ -935,14 +928,7 @@ export async function updatePppSecret(
     rateLimit?: string;
   }
 ): Promise<void> {
-  if (fields.profile) {
-    try {
-      await ensurePppProfile(conn, fields.profile, fields.rateLimit);
-    } catch {
-      /* best-effort */
-    }
-  }
-
+  // Do not auto-create PPP profiles — use an existing MikroTik profile from the billing plan.
   const args = [`=numbers=${nameOrId}`, ...secretWriteArgs(fields)];
   try {
     await withRouter(conn, (api) => api.write('/ppp/secret/set', args), { timeoutSec: 20 });

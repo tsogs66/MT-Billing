@@ -161,6 +161,33 @@ function commentFromUser(u: any): string {
   });
 }
 
+/** Billing plan row + linked MikroTik PPP profile (must already exist on the router). */
+export function getBillingPlan(planName: string): {
+  name: string;
+  price: number;
+  rateLimit: string;
+  pppProfile: string;
+} | null {
+  const plan = String(planName || '').trim();
+  if (!plan) return null;
+  const row = db
+    .prepare('SELECT name, price, rate_limit, ppp_profile FROM profiles WHERE name = ?')
+    .get(plan) as { name: string; price: number; rate_limit?: string; ppp_profile?: string } | undefined;
+  if (!row) return null;
+  const linked = String(row.ppp_profile || '').trim();
+  return {
+    name: row.name,
+    price: Number(row.price) || 0,
+    rateLimit: String(row.rate_limit || '').trim(),
+    pppProfile: linked || row.name,
+  };
+}
+
+/** MikroTik /ppp/secret profile name for a billing plan (never creates profiles). */
+export function mikrotikProfileForPlan(planName: string): string {
+  return getBillingPlan(planName)?.pppProfile || String(planName || '').trim();
+}
+
 /**
  * Change a user's billing plan: update DB, rewrite PPP secret comment + profile
  * on MikroTik, then briefly disable/enable so the active session picks up the plan.
@@ -195,9 +222,7 @@ export async function changePppoeUserPlan(
   }
 
   const previousPlan = String(user.profile || '');
-  const prof = db.prepare('SELECT name, price, rate_limit FROM profiles WHERE name = ?').get(plan) as
-    | { name: string; price: number; rate_limit?: string }
-    | undefined;
+  const prof = getBillingPlan(plan);
   if (!prof) {
     return {
       ok: false,
@@ -210,8 +235,20 @@ export async function changePppoeUserPlan(
       error: `Billing plan "${plan}" not found`,
     };
   }
+  if (!String(prof.pppProfile || '').trim()) {
+    return {
+      ok: false,
+      id: userId,
+      username: user.username,
+      previousPlan,
+      plan,
+      sync: { ok: false, error: 'plan-missing-profile' },
+      sessionRefresh: null,
+      error: `Billing plan "${plan}" has no MikroTik PPP profile linked`,
+    };
+  }
 
-  const price = Number(prof.price) || 0;
+  const price = prof.price;
   db.prepare('UPDATE pppoe_users SET profile = ?, price = ? WHERE id = ?').run(plan, price, userId);
   const updated = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(userId) as any;
 
@@ -222,20 +259,13 @@ export async function changePppoeUserPlan(
     const router = db.prepare('SELECT * FROM routers WHERE id = ?').get(updated.router_id) as any;
     if (router?.host && router?.api_user) {
       try {
-        try {
-          await ensurePppProfile(router, plan, prof.rate_limit || undefined);
-        } catch {
-          /* profile may already exist */
-        }
+        // Use the plan's linked MikroTik profile only — never create profiles here.
         await updatePppSecret(router, updated.username, {
           password: updated.password || '',
-          profile: plan,
+          profile: prof.pppProfile,
           comment: commentFromUser({ ...updated, profile: plan }),
           disabled: false,
-          rateLimit: prof.rate_limit || undefined,
         });
-        // Ensure enabled after profile/comment update (disabled accounts stay disabled in DB,
-        // but bounce below re-enables briefly — respect disabled status).
         const isDisabled = String(updated.status || '').toLowerCase() === 'disabled';
         if (isDisabled) {
           await setPppSecretEnabled(router, updated.username, false);
@@ -256,7 +286,7 @@ export async function changePppoeUserPlan(
   db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
     sync.ok ? 'info' : 'warning',
     'billing',
-    `Plan change for ${updated.username}: ${previousPlan || '—'} → ${plan}` +
+    `Plan change for ${updated.username}: ${previousPlan || '—'} → ${plan} (MT profile ${prof.pppProfile})` +
       (sessionRefresh?.bounced ? ' (5s session bounce)' : sync.error ? ` (router: ${sync.error})` : '')
   );
 
@@ -371,9 +401,10 @@ export async function syncUserToRouter(
         /* best-effort */
       }
     } else if (action === 'enable' || action === 'restore') {
+      const mtProfile = mikrotikProfileForPlan(user.profile);
       await updatePppSecret(router, user.username, {
         password: user.password || '',
-        profile: user.profile || undefined,
+        profile: mtProfile || undefined,
         comment: commentFromUser({ ...user, status: 'Active' }),
         disabled: false,
       });

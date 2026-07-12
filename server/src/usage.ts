@@ -8,6 +8,7 @@ import {
   parseRosRate,
 } from './mikrotik.js';
 import { notifyClientChannels } from './notify.js';
+import { getBillingPlan } from './billing.js';
 
 /** Map hostnames / domains to platform / service categories (DNS popularity only). */
 const SERVICE_RULES: { id: string; name: string; category: string; match: RegExp }[] = [
@@ -180,10 +181,8 @@ export async function pollUsageAndFairUse() {
         bytesDelta += deltaDown + deltaUp;
 
         if (!settings.enabled || !user) continue;
-        const prof = db.prepare('SELECT rate_limit FROM profiles WHERE name = ?').get(user.profile) as
-          | { rate_limit?: string }
-          | undefined;
-        const limitRaw = String(prof?.rate_limit || '');
+        const prof = getBillingPlan(user.profile);
+        const limitRaw = String(prof?.rateLimit || '');
         const downLimit = parseRosRate(limitRaw.split('/')[0] || limitRaw);
         if (downLimit <= 0) continue;
         const cap = (downLimit * (Number(settings.cap_percent) || 95)) / 100;

@@ -776,6 +776,10 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                     <div className="flex items-start justify-between gap-2">
                       <div>
                         <div className="font-bold text-slate-900 text-lg">{p.name}</div>
+                        <div className="text-xs text-slate-500 mt-1">
+                          Profile{' '}
+                          <span className="font-mono font-medium text-slate-700">{p.pppProfile || '—'}</span>
+                        </div>
                       </div>
                       <div className="flex gap-1">
                         <IconAction icon={Pencil} title="Edit plan" tone="sky" onClick={() => setPlanEdit(p)} />
@@ -1186,18 +1190,15 @@ function PlanFormModal({
 
   const matchProfileName = (() => {
     if (!profileOptions.length) return '';
+    const linked = String(initial?.pppProfile || '').trim();
+    if (linked && profileOptions.some((p) => p.name === linked)) return linked;
     const byName = profileOptions.find((p) => p.name === initial?.name);
     if (byName) return String(byName.name);
-    const rl = String(initial?.rateLimit || '').trim();
-    if (rl) {
-      const byRate = profileOptions.find((p) => String(p.rateLimit || '').trim() === rl);
-      if (byRate) return String(byRate.name);
-    }
-    return '';
+    return profileOptions[0]?.name || '';
   })();
 
   const [name, setName] = useState(initial?.name || '');
-  const [profileName, setProfileName] = useState(matchProfileName || profileOptions[0]?.name || '');
+  const [profileName, setProfileName] = useState(matchProfileName);
   const [price, setPrice] = useState(String(initial?.price ?? ''));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -1211,13 +1212,18 @@ function PlanFormModal({
       return;
     }
     if (!profileName) {
-      setError('Select a PPP profile for the rate limit');
+      setError('Select a MikroTik PPP profile for this plan');
       return;
     }
     setBusy(true);
     setError('');
     try {
-      const payload = { name: name.trim(), rateLimit, price: Number(price) || 0 };
+      const payload = {
+        name: name.trim(),
+        pppProfile: profileName,
+        rateLimit,
+        price: Number(price) || 0,
+      };
       if (isEdit) await api.put(`/billing-plans/${initial.id}`, payload);
       else await api.post('/billing-plans', payload);
       onSaved();
@@ -1231,7 +1237,7 @@ function PlanFormModal({
   return (
     <Modal
       title={isEdit ? 'Edit Billing Plan' : 'Add New Plan'}
-      subtitle="Panel pricing used for payments and receipts. Pick the PPP profile for this plan."
+      subtitle="Plan is stored in the PPP secret comment. Profile is the existing MikroTik /ppp/profile applied to the secret."
       onClose={onClose}
       footer={<ModalFooter onCancel={onClose} onConfirm={save} confirmLabel={isEdit ? 'Save Changes' : 'Create Plan'} busy={busy} />}
     >
@@ -1245,8 +1251,8 @@ function PlanFormModal({
           required
           hint={
             profileOptions.length
-              ? 'Rate limit is managed on the Profiles tab.'
-              : 'No PPP profiles yet — add or fetch profiles first.'
+              ? 'Must already exist on MikroTik (Profiles tab). Changing a user’s plan applies this profile — it is not created.'
+              : 'No PPP profiles yet — fetch or add profiles on the Profiles tab first.'
           }
         >
           <select
