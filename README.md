@@ -195,6 +195,17 @@ Or grant UI updates only, then use **Update from GitHub** again:
 curl -fsSL https://raw.githubusercontent.com/tsogs66/MT-Billing/main/install/mt-billing-grant-updater-root.sh | sudo bash
 ```
 
+### Public pay links (LAN IP)
+
+For collectors on the same LAN/VPN as the LXC (no Cloudflare / DynDNS):
+
+```bash
+sudo bash /opt/mt-billing/install/mt-billing-public-host.sh --local-ip
+```
+
+Or in the panel: **Payment Links → Use LAN IP**. Links become
+`http://<lxc-ip>/pay/...`.
+
 ### Public pay links (Cloudflare Tunnel)
 
 Best option when the panel is behind NAT / CGNAT and you cannot port-forward.

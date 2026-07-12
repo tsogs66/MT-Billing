@@ -4,19 +4,23 @@
 # Source: https://github.com/tsogs66/MT-Billing
 #
 # Configure this LXC/VM to host subscriber payment links on a DynDNS (or any)
-# public hostname. Sets nginx + PUBLIC_BASE_URL / panel public_base_url.
+# public hostname — or bind pay links to this host's LAN IP.
+# Sets nginx (hostname mode) + PUBLIC_BASE_URL / panel public_base_url.
 #
 # Usage (inside the MT-Billing guest as root):
 #   sudo bash /opt/mt-billing/install/mt-billing-public-host.sh yourname.duckdns.org
 #   sudo bash /opt/mt-billing/install/mt-billing-public-host.sh billing.yourisp.dyndns.org --https
 #   sudo bash /opt/mt-billing/install/mt-billing-public-host.sh yourname.duckdns.org --pay-only
+#   sudo bash /opt/mt-billing/install/mt-billing-public-host.sh --local-ip
 #
-# Prerequisites:
+# Prerequisites (DynDNS mode):
 #   1. DynDNS hostname points at your public IP
 #   2. Router port-forwards TCP 80 (and 443 if --https) → this LXC
 #   3. Outbound DNS works from the LXC
 #
 # Options:
+#   --local-ip    Detect this host's LAN IPv4 and set pay links to http://IP
+#                 (no nginx/DynDNS changes — for LAN/VPN collectors)
 #   --https       Obtain/renew Let's Encrypt cert via certbot (needs port 80 open)
 #   --pay-only    Public vhost only serves /pay/* and /api/public/* (safer)
 #   --http-only   Force http:// links (default unless --https succeeds)
@@ -33,6 +37,7 @@ HOSTNAME=""
 DO_HTTPS=0
 PAY_ONLY=0
 FORCE_HTTP=0
+USE_LOCAL_IP=0
 CERTBOT_EMAIL=""
 
 log_info() { printf '\033[1;34m[INFO]\033[0m %s\n' "$*"; }
@@ -41,11 +46,12 @@ log_err() { printf '\033[1;31m[ERROR]\033[0m %s\n' "$*" >&2; }
 log_warn() { printf '\033[1;33m[WARN]\033[0m %s\n' "$*"; }
 
 usage() {
-  sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --local-ip) USE_LOCAL_IP=1; shift ;;
     --https) DO_HTTPS=1; shift ;;
     --pay-only) PAY_ONLY=1; shift ;;
     --http-only) FORCE_HTTP=1; shift ;;
@@ -70,14 +76,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "$(id -u)" -ne 0 ]]; then
-  log_err "Run as root (e.g. sudo bash $0 yourname.duckdns.org)"
-  exit 1
-fi
-
-HOSTNAME="$(printf '%s' "$HOSTNAME" | tr '[:upper:]' '[:lower:]' | sed -e 's|^https\?://||' -e 's|/.*||' -e 's|:.*||' -e 's/\.$//')"
-if [[ -z "$HOSTNAME" || "$HOSTNAME" == *' '* ]]; then
-  log_err "Pass your DynDNS hostname."
-  echo "Example: sudo bash $0 myisp.duckdns.org --https" >&2
+  log_err "Run as root (e.g. sudo bash $0 --local-ip)"
   exit 1
 fi
 
@@ -86,15 +85,80 @@ if [[ ! -d "$INSTALL_DIR" ]]; then
   exit 1
 fi
 
-if ! command -v nginx >/dev/null 2>&1; then
-  log_err "nginx is not installed"
-  exit 1
-fi
-
 DB_PATH="${INSTALL_DIR}/server/data/mt-billing.db"
 ENV_FILE="${INSTALL_DIR}/server/.env"
 SITE_AVAIL="/etc/nginx/sites-available/mt-billing"
 SITE_ENABLED="/etc/nginx/sites-enabled/mt-billing"
+
+detect_lan_ip() {
+  local ip=""
+  ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  if [[ -z "$ip" ]] && command -v ip >/dev/null 2>&1; then
+    ip="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')"
+  fi
+  printf '%s' "$ip"
+}
+
+set_public_base_url() {
+  local base="$1"
+  mkdir -p "$(dirname "$ENV_FILE")"
+  if [[ -f "$ENV_FILE" ]]; then
+    if grep -q '^PUBLIC_BASE_URL=' "$ENV_FILE" 2>/dev/null; then
+      sed -i "s|^PUBLIC_BASE_URL=.*|PUBLIC_BASE_URL=${base}|" "$ENV_FILE"
+    else
+      printf '\nPUBLIC_BASE_URL=%s\n' "$base" >>"$ENV_FILE"
+    fi
+  else
+    printf 'PUBLIC_BASE_URL=%s\n' "$base" >"$ENV_FILE"
+  fi
+
+  if [[ -f "$DB_PATH" ]] && command -v sqlite3 >/dev/null 2>&1; then
+    sqlite3 "$DB_PATH" "UPDATE app_settings SET public_base_url = '${base//\'/\'\'}' WHERE id = 1;" 2>/dev/null || true
+    # Clear non-running Cloudflare placeholder URL so LAN wins for copied links
+    sqlite3 "$DB_PATH" "UPDATE app_settings SET cf_tunnel_url = NULL, cf_tunnel_status = 'stopped', cf_tunnel_enabled = 0 WHERE id = 1 AND IFNULL(cf_tunnel_status,'') != 'running';" 2>/dev/null || true
+  fi
+}
+
+# ---- LAN IP mode (no nginx / DynDNS) ----
+if [[ "$USE_LOCAL_IP" == "1" ]]; then
+  LAN_IP="$(detect_lan_ip)"
+  if [[ -z "$LAN_IP" ]]; then
+    log_err "Could not detect a LAN IPv4 address (hostname -I empty)"
+    exit 1
+  fi
+  if [[ "$PANEL_PORT" != "80" ]]; then
+    PUBLIC_BASE="http://${LAN_IP}:${PANEL_PORT}"
+  else
+    PUBLIC_BASE="http://${LAN_IP}"
+  fi
+  set_public_base_url "$PUBLIC_BASE"
+  log_ok "Pay portal URL → ${PUBLIC_BASE}"
+  if systemctl is-active --quiet mt-billing-api 2>/dev/null; then
+    log_info "Restarting mt-billing-api to load PUBLIC_BASE_URL"
+    systemctl restart mt-billing-api || true
+  fi
+  echo
+  log_ok "Done (LAN mode)"
+  echo "  LAN IP      : ${LAN_IP}"
+  echo "  Pay links   : ${PUBLIC_BASE}/pay/<token>"
+  echo "  Reachable from devices on the same LAN/VPN as this LXC."
+  echo
+  echo "In the panel: Payment Links → Active base should show ${PUBLIC_BASE}"
+  exit 0
+fi
+
+HOSTNAME="$(printf '%s' "$HOSTNAME" | tr '[:upper:]' '[:lower:]' | sed -e 's|^https\?://||' -e 's|/.*||' -e 's|:.*||' -e 's/\.$//')"
+if [[ -z "$HOSTNAME" || "$HOSTNAME" == *' '* ]]; then
+  log_err "Pass your DynDNS hostname, or use --local-ip."
+  echo "Example: sudo bash $0 myisp.duckdns.org --https" >&2
+  echo "     or: sudo bash $0 --local-ip" >&2
+  exit 1
+fi
+
+if ! command -v nginx >/dev/null 2>&1; then
+  log_err "nginx is not installed"
+  exit 1
+fi
 
 write_nginx_http() {
   local pay_block=""
@@ -158,24 +222,6 @@ server {
 ${pay_block}
 }
 EOF
-}
-
-set_public_base_url() {
-  local base="$1"
-  mkdir -p "$(dirname "$ENV_FILE")"
-  if [[ -f "$ENV_FILE" ]]; then
-    if grep -q '^PUBLIC_BASE_URL=' "$ENV_FILE" 2>/dev/null; then
-      sed -i "s|^PUBLIC_BASE_URL=.*|PUBLIC_BASE_URL=${base}|" "$ENV_FILE"
-    else
-      printf '\nPUBLIC_BASE_URL=%s\n' "$base" >>"$ENV_FILE"
-    fi
-  else
-    printf 'PUBLIC_BASE_URL=%s\n' "$base" >"$ENV_FILE"
-  fi
-
-  if [[ -f "$DB_PATH" ]] && command -v sqlite3 >/dev/null 2>&1; then
-    sqlite3 "$DB_PATH" "UPDATE app_settings SET public_base_url = '${base//\'/\'\'}' WHERE id = 1;" 2>/dev/null || true
-  fi
 }
 
 log_info "Configuring public pay host for ${HOSTNAME}"

@@ -55,6 +55,9 @@ import {
   ensureFreshPayLink,
   resolvePublicBaseUrl,
   normalizeBaseUrl,
+  detectLanBaseUrl,
+  detectLanIpv4,
+  applyLanPayBaseUrl,
   bulkChangePppoeUserPlans,
   getBillingPlan,
   mikrotikProfileForPlan,
@@ -1136,6 +1139,7 @@ app.get('/api/payment-links/config', (_req, res) => {
     )
     .get() as any;
   const resolved = resolvePublicBaseUrl();
+  const lanBaseUrl = detectLanBaseUrl() || null;
   res.json({
     publicBaseUrl: app?.public_base_url || '',
     envPublicBaseUrl: process.env.PUBLIC_BASE_URL || null,
@@ -1144,6 +1148,8 @@ app.get('/api/payment-links/config', (_req, res) => {
       app?.cf_tunnel_status === 'running'
         ? app?.cf_tunnel_url || (app?.cf_tunnel_hostname ? `https://${app.cf_tunnel_hostname}` : null)
         : null,
+    lanIp: detectLanIpv4(),
+    lanBaseUrl,
     effective: resolved.baseUrl || null,
     source: resolved.source,
     warning: resolved.warning || null,
@@ -1164,7 +1170,34 @@ app.put('/api/payment-links/config', (req, res) => {
     effective: resolved.baseUrl || null,
     source: resolved.source,
     warning: resolved.warning || null,
+    lanBaseUrl: detectLanBaseUrl() || null,
   });
+});
+
+/** One-click: set pay portal base to this host’s LAN IP (LXC/VM). */
+app.post('/api/payment-links/config/use-lan', (req, res) => {
+  try {
+    const port = req.body?.port != null ? Number(req.body.port) : undefined;
+    const applied = applyLanPayBaseUrl({ port });
+    process.env.PUBLIC_BASE_URL = applied.baseUrl;
+    const resolved = resolvePublicBaseUrl();
+    db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+      'info',
+      'payment-links',
+      `Pay portal base set to LAN IP ${applied.baseUrl}`
+    );
+    res.json({
+      ok: true,
+      publicBaseUrl: applied.baseUrl,
+      lanIp: applied.ip,
+      lanBaseUrl: applied.baseUrl,
+      effective: resolved.baseUrl || applied.baseUrl,
+      source: resolved.source,
+      warning: resolved.warning || null,
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Could not detect LAN IP' });
+  }
 });
 
 app.post('/api/payment-links', (req, res) => {

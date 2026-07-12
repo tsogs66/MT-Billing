@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Copy, Link2, Plus, Trash2, RefreshCw, Globe2, Save } from 'lucide-react';
+import { Copy, Link2, Plus, Trash2, RefreshCw, Globe2, Save, Network } from 'lucide-react';
 import Layout from '../components/Layout';
 import { Card, Toolbar, StatusBadge, IconAction } from '../components/ui';
 import { api, peso } from '../api';
@@ -16,6 +16,8 @@ export default function PayPortal() {
   const [effective, setEffective] = useState<string | null>(null);
   const [source, setSource] = useState('none');
   const [warning, setWarning] = useState<string | null>(null);
+  const [lanBaseUrl, setLanBaseUrl] = useState<string | null>(null);
+  const [lanIp, setLanIp] = useState<string | null>(null);
   const [savingUrl, setSavingUrl] = useState(false);
 
   const show = (m: string) => {
@@ -29,6 +31,8 @@ export default function PayPortal() {
       setEffective(r.data.effective || null);
       setSource(r.data.source || 'none');
       setWarning(r.data.warning || null);
+      setLanBaseUrl(r.data.lanBaseUrl || null);
+      setLanIp(r.data.lanIp || null);
     });
 
   const load = () => {
@@ -54,10 +58,30 @@ export default function PayPortal() {
       setEffective(r.data.effective || null);
       setSource(r.data.source || 'none');
       setWarning(r.data.warning || null);
+      if (r.data.lanBaseUrl) setLanBaseUrl(r.data.lanBaseUrl);
       show(r.data.effective ? `Public pay URL saved: ${r.data.effective}` : 'Public pay URL cleared');
       load();
     } catch (e: any) {
       show(e?.response?.data?.error || 'Could not save public URL');
+    } finally {
+      setSavingUrl(false);
+    }
+  };
+
+  const useLanIp = async () => {
+    setSavingUrl(true);
+    try {
+      const r = await api.post('/payment-links/config/use-lan');
+      setPublicBaseUrl(r.data.publicBaseUrl || '');
+      setEffective(r.data.effective || r.data.lanBaseUrl || null);
+      setSource(r.data.source || 'public_base_url');
+      setWarning(r.data.warning || null);
+      setLanBaseUrl(r.data.lanBaseUrl || null);
+      setLanIp(r.data.lanIp || null);
+      show(`Pay links now use LAN IP: ${r.data.publicBaseUrl}`);
+      load();
+    } catch (e: any) {
+      show(e?.response?.data?.error || 'Could not detect LAN IP');
     } finally {
       setSavingUrl(false);
     }
@@ -75,7 +99,6 @@ export default function PayPortal() {
     if (!userId) return;
     setBusy(true);
     try {
-      // Do not force LAN origin — server prefers configured public URL
       const r = await api.post('/payment-links', {
         userId: Number(userId),
         months,
@@ -118,9 +141,11 @@ export default function PayPortal() {
           ? 'Cloudflare Tunnel'
           : source === 'ngrok'
             ? 'ngrok tunnel'
-            : source === 'preferred'
-              ? 'panel origin (local)'
-              : 'not configured';
+            : source === 'lan'
+              ? 'detected LAN IP'
+              : source === 'preferred'
+                ? 'panel origin (local)'
+                : 'not configured';
 
   return (
     <Layout title="Payment Links">
@@ -134,25 +159,26 @@ export default function PayPortal() {
             <Globe2 size={20} />
           </div>
           <div className="min-w-0">
-            <div className="font-semibold text-slate-800">Public pay portal URL</div>
+            <div className="font-semibold text-slate-800">Pay portal URL</div>
             <p className="text-sm text-slate-500 mt-0.5">
-              Use a public hostname so subscribers can open pay links from anywhere. Prefer{' '}
-              <span className="font-medium text-slate-700">Cloudflare Tunnel</span> (System Settings → Cloudflare Tunnel)
-              when you cannot open ports, or DynDNS +{' '}
-              <span className="font-mono text-slate-600">install/mt-billing-public-host.sh</span>.
+              For collectors on your LAN/VPN, use this panel’s <span className="font-medium text-slate-700">LAN IP</span>.
+              For internet subscribers, use Cloudflare Tunnel or DynDNS.
             </p>
           </div>
         </div>
         <div className="flex flex-wrap gap-2 items-end">
           <label className="text-sm flex-1 min-w-[240px]">
-            <span className="text-xs text-slate-500">Public base URL</span>
+            <span className="text-xs text-slate-500">Base URL</span>
             <input
               className="input mt-1 font-mono text-sm"
-              placeholder="https://billing.yourisp.com"
+              placeholder={lanBaseUrl || 'http://192.168.x.x'}
               value={publicBaseUrl}
               onChange={(e) => setPublicBaseUrl(e.target.value)}
             />
           </label>
+          <button type="button" className="btn-secondary" disabled={savingUrl || !lanBaseUrl} onClick={useLanIp} title={lanBaseUrl || 'No LAN IP detected'}>
+            <Network size={16} /> Use LAN IP{lanIp ? ` (${lanIp})` : ''}
+          </button>
           <button type="button" className="btn-primary" disabled={savingUrl} onClick={savePublicUrl}>
             <Save size={16} /> Save URL
           </button>
@@ -164,11 +190,16 @@ export default function PayPortal() {
             {' · '}
             source <span className="font-medium text-slate-700">{sourceLabel}</span>
           </div>
+          {lanBaseUrl && (
+            <div>
+              Detected LAN:{' '}
+              <span className="font-mono text-slate-700">{lanBaseUrl}</span>
+              {' — '}links look like <span className="font-mono text-slate-600">{lanBaseUrl}/pay/…</span>
+            </div>
+          )}
           {warning && <div className="text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5">{warning}</div>}
           <div className="text-slate-400">
-            Tip: Cloudflare Tunnel needs no port-forward. DynDNS users: point the URL at this panel (port 80/443 via nginx).
-            You can also set <code className="text-slate-600">PUBLIC_BASE_URL</code> in{' '}
-            <code className="text-slate-600">server/.env</code>.
+            LXC CLI: <code className="text-slate-600">sudo bash /opt/mt-billing/install/mt-billing-public-host.sh --local-ip</code>
           </div>
         </div>
       </Card>
@@ -176,7 +207,7 @@ export default function PayPortal() {
       <Card>
         <div className="text-sm text-slate-500 mb-4">
           Create shareable pay links for subscribers (GCash / Maya / bank). Confirming payment restores the PPP secret and extends the due date.
-          Reminders automatically include a fresh link using the public URL above.
+          Reminders automatically include a fresh link using the URL above.
         </div>
         <div className="flex flex-wrap gap-2 items-end mb-6">
           <label className="text-sm flex-1 min-w-[200px]">
@@ -226,7 +257,7 @@ export default function PayPortal() {
                   </td>
                   <td className="py-2.5">{peso(l.amount)} · {l.months}mo</td>
                   <td className="py-2.5"><StatusBadge status={l.status} /></td>
-                  <td className="py-2.5 text-xs text-slate-500">{(l.expiresAt || '').slice(0, 16).replace('T', ' ')}</td>
+                  <td className="py-2.5 text-xs text-slate-500">{(l.expiresAt || l.expires_at || '').toString().slice(0, 16).replace('T', ' ')}</td>
                   <td className="py-2.5">
                     <div className="flex justify-end gap-1">
                       <IconAction icon={Copy} title="Copy link" tone="sky" onClick={() => copy(l)} />

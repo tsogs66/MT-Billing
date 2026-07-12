@@ -1,4 +1,7 @@
 import crypto from 'crypto';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import { db } from './db.js';
 import {
   updatePppSecret,
@@ -72,13 +75,50 @@ export function isPrivateBaseUrl(url: string): boolean {
   }
 }
 
+function ipv4Score(ip: string): number {
+  // Prefer typical LAN ranges used on Proxmox LXCs; deprioritize Docker/CGNAT-ish ranges.
+  if (/^192\.168\./.test(ip)) return 100;
+  if (/^10\./.test(ip)) return 90;
+  if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(ip)) {
+    if (/^172\.17\./.test(ip)) return 10; // docker0
+    return 70;
+  }
+  return 20;
+}
+
+/** Best non-loopback IPv4 on this host (LXC/VM LAN address). */
+export function detectLanIpv4(): string | null {
+  const ifaces = os.networkInterfaces();
+  let best: { ip: string; score: number } | null = null;
+  for (const list of Object.values(ifaces)) {
+    for (const iface of list || []) {
+      const fam = String(iface.family);
+      if ((fam !== 'IPv4' && fam !== '4') || iface.internal) continue;
+      const ip = iface.address;
+      if (!ip || ip.startsWith('127.')) continue;
+      const score = ipv4Score(ip);
+      if (!best || score > best.score) best = { ip, score };
+    }
+  }
+  return best?.ip || null;
+}
+
+/** Suggested pay-portal base using this host's LAN IP (http://x.x.x.x). */
+export function detectLanBaseUrl(port?: number | null): string | undefined {
+  const ip = detectLanIpv4();
+  if (!ip) return undefined;
+  const p = Number(port);
+  if (p && p > 0 && p !== 80) return `http://${ip}:${p}`;
+  return `http://${ip}`;
+}
+
 /**
  * Public base URL for subscriber pay links (SMS/email/share).
  * Prefer configured public URL over LAN panel origin.
  */
 export function resolvePublicBaseUrl(preferred?: string | null): {
   baseUrl?: string;
-  source: 'public_base_url' | 'env' | 'cloudflare' | 'ngrok' | 'preferred' | 'none';
+  source: 'public_base_url' | 'env' | 'cloudflare' | 'ngrok' | 'lan' | 'preferred' | 'none';
   warning?: string;
 } {
   const app = db
@@ -104,9 +144,11 @@ export function resolvePublicBaseUrl(preferred?: string | null): {
           : undefined)
       : undefined;
 
+  const lanUrl = detectLanBaseUrl();
+
   const ordered: {
     url?: string;
-    source: 'public_base_url' | 'env' | 'cloudflare' | 'ngrok' | 'preferred';
+    source: 'public_base_url' | 'env' | 'cloudflare' | 'ngrok' | 'lan' | 'preferred';
   }[] = [
     { url: normalizeBaseUrl(app?.public_base_url), source: 'public_base_url' },
     { url: normalizeBaseUrl(process.env.PUBLIC_BASE_URL), source: 'env' },
@@ -116,6 +158,7 @@ export function resolvePublicBaseUrl(preferred?: string | null): {
       source: 'ngrok',
     },
     { url: normalizeBaseUrl(preferred), source: 'preferred' },
+    { url: lanUrl, source: 'lan' },
   ];
 
   const publicHit = ordered.find((c) => c.url && !isPrivateBaseUrl(c.url!));
@@ -127,7 +170,9 @@ export function resolvePublicBaseUrl(preferred?: string | null): {
       baseUrl: anyHit.url,
       source: anyHit.source,
       warning:
-        'Pay links use a local/private address. Set a public URL (domain, Cloudflare Tunnel, or ngrok) so subscribers can open them from anywhere.',
+        anyHit.source === 'lan' || isPrivateBaseUrl(anyHit.url)
+          ? 'Pay links use this panel’s LAN IP (reachable on your local network / VPN). For internet subscribers, set Cloudflare Tunnel or a public hostname.'
+          : 'Pay links use a local/private address. Set a public URL (domain, Cloudflare Tunnel, or ngrok) so subscribers can open them from anywhere.',
     };
   }
   return {
@@ -135,6 +180,45 @@ export function resolvePublicBaseUrl(preferred?: string | null): {
     source: 'none',
     warning: 'No public pay portal URL configured. Set one under Payment Links or System Settings.',
   };
+}
+
+/** Persist LAN IP as the configured pay-portal base (clears broken placeholder public URLs). */
+export function applyLanPayBaseUrl(opts?: { port?: number | null; clearCloudflare?: boolean }): {
+  baseUrl: string;
+  ip: string;
+} {
+  const base = detectLanBaseUrl(opts?.port);
+  const ip = detectLanIpv4();
+  if (!base || !ip) throw new Error('Could not detect a LAN IPv4 address on this host.');
+
+  db.prepare('UPDATE app_settings SET public_base_url = ? WHERE id = 1').run(base);
+
+  if (opts?.clearCloudflare !== false) {
+    // Stop preferring a failed / placeholder Cloudflare hostname for copied links
+    db.prepare(
+      `UPDATE app_settings SET
+         cf_tunnel_status = CASE WHEN cf_tunnel_status = 'running' THEN cf_tunnel_status ELSE 'stopped' END,
+         cf_tunnel_url = CASE WHEN cf_tunnel_status = 'running' THEN cf_tunnel_url ELSE NULL END
+       WHERE id = 1`
+    ).run();
+  }
+
+  try {
+    const envPath = path.resolve(process.cwd(), '.env');
+    if (fs.existsSync(envPath)) {
+      let text = fs.readFileSync(envPath, 'utf8');
+      if (/^PUBLIC_BASE_URL=/m.test(text)) {
+        text = text.replace(/^PUBLIC_BASE_URL=.*$/m, `PUBLIC_BASE_URL=${base}`);
+      } else {
+        text = `${text.replace(/\s*$/, '')}\nPUBLIC_BASE_URL=${base}\n`;
+      }
+      fs.writeFileSync(envPath, text);
+    }
+  } catch {
+    /* best-effort .env sync */
+  }
+
+  return { baseUrl: base, ip };
 }
 
 export function absolutePayUrl(pathOrToken: string, preferred?: string | null): string {
