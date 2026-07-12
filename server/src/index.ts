@@ -96,6 +96,7 @@ import {
   isExpiredAccount,
   isNonPaymentAccount,
   isBillingActiveAccount,
+  sendPaymentReceiptEmail,
 } from './notify.js';
 
 initSchema();
@@ -1286,9 +1287,13 @@ app.post('/api/pppoe/users/:id/payment', async (req, res) => {
     let emailed = false;
     if (b.send_receipt && result.user?.email) {
       const receipt = result.receipt;
-      const msg = `Official Receipt\nAccount #: ${receipt.account}\nCustomer: ${receipt.customer}\nPlan: ${receipt.plan}\nPayment date: ${receipt.paymentDate}\nNext due: ${receipt.newDue}\nTOTAL: ${receipt.total.toFixed(2)}`;
-      const r = await sendManual({ channel: 'email', target: 'client', clientId: id, subject: 'Payment Receipt', message: msg });
-      emailed = r.sent > 0;
+      const r = await sendPaymentReceiptEmail({
+        to: result.user.email,
+        clientId: id,
+        customerName: result.user.customer_name || receipt?.customer,
+        receipt,
+      });
+      emailed = r.sent;
     }
     res.json({ ...result, emailed });
   } catch (e: any) {

@@ -1,4 +1,5 @@
 import { db } from './db.js';
+import { buildBrandedEmail, buildReceiptEmailBody, parseLogoDataUrl } from './emailTemplate.js';
 
 export interface NotifySettings {
   reminder_enabled: number;
@@ -104,7 +105,13 @@ function normalizePhone(n: string): string {
   return digits;
 }
 
-async function sendEmailSmtp(s: NotifySettings, to: string, subject: string, message: string) {
+async function sendEmailSmtp(
+  s: NotifySettings,
+  to: string,
+  subject: string,
+  message: string,
+  opts?: { html?: string; logo?: ReturnType<typeof parseLogoDataUrl>; logoCid?: string | null }
+) {
   const mailer = await getMailer();
   if (!mailer) return { status: 'failed', detail: 'SMTP configured but nodemailer not installed' };
   try {
@@ -114,7 +121,40 @@ async function sendEmailSmtp(s: NotifySettings, to: string, subject: string, mes
       secure: !!s.smtp_secure,
       auth: s.smtp_user ? { user: s.smtp_user, pass: s.smtp_pass || '' } : undefined,
     });
-    await transport.sendMail({ from: s.smtp_from || s.email_from, to, subject, text: message });
+
+    let html = opts?.html;
+    let text = message;
+    let logo = opts?.logo ?? null;
+    let logoCid = opts?.logoCid ?? null;
+
+    if (!html) {
+      const branded = buildBrandedEmail({ subject, plainText: message });
+      html = branded.html;
+      text = branded.text;
+      logo = branded.logo;
+      logoCid = branded.logoCid;
+    }
+
+    const attachments =
+      logo && logoCid
+        ? [
+            {
+              filename: `logo.${logo.ext}`,
+              content: logo.buffer,
+              contentType: logo.mime,
+              cid: logoCid,
+            },
+          ]
+        : undefined;
+
+    await transport.sendMail({
+      from: s.smtp_from || s.email_from,
+      to,
+      subject,
+      text,
+      html,
+      attachments,
+    });
     return { status: 'sent', detail: `sent via SMTP ${s.smtp_host}` };
   } catch (e: any) {
     return { status: 'failed', detail: `SMTP error: ${e?.message || 'send failed'}` };
@@ -261,20 +301,36 @@ function statusKey(status?: string | null): string {
  * message is recorded as simulated so the workflow is fully demonstrable
  * without external credentials.
  */
-async function deliver(channel: 'email' | 'sms', recipient: string | null, subject: string, message: string) {
+async function deliver(
+  channel: 'email' | 'sms',
+  recipient: string | null,
+  subject: string,
+  message: string,
+  opts?: { html?: string; logo?: ReturnType<typeof parseLogoDataUrl>; logoCid?: string | null }
+) {
   if (!recipient) return { status: 'failed', detail: `no ${channel} address on file` };
   const s = getSettings();
 
-  if (channel === 'email' && s.smtp_host) return sendEmailSmtp(s, recipient, subject, message);
+  if (channel === 'email' && s.smtp_host) return sendEmailSmtp(s, recipient, subject, message, opts);
   if (channel === 'sms' && s.sms_api_url && s.sms_api_user && s.sms_api_pass) return sendSmsBulk(s, recipient, message);
 
   const webhook = channel === 'email' ? process.env.NOTIFY_EMAIL_WEBHOOK : process.env.NOTIFY_SMS_WEBHOOK;
   if (webhook) {
     try {
+      const branded =
+        channel === 'email' && !opts?.html
+          ? buildBrandedEmail({ subject, plainText: message })
+          : null;
       const r = await fetch(webhook, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ channel, to: recipient, subject, message }),
+        body: JSON.stringify({
+          channel,
+          to: recipient,
+          subject,
+          message,
+          html: opts?.html || branded?.html || undefined,
+        }),
       });
       return r.ok ? { status: 'sent', detail: 'delivered via gateway' } : { status: 'failed', detail: `gateway HTTP ${r.status}` };
     } catch {
@@ -344,7 +400,14 @@ async function notifyClient(client: Client, channels: ('email' | 'sms')[], subje
   const results: string[] = [];
   for (const ch of channels) {
     const recipient = ch === 'email' ? client.email : client.contact;
-    const r = await deliver(ch, recipient || null, subjectF, messageF);
+    const emailOpts =
+      ch === 'email'
+        ? (() => {
+            const branded = buildBrandedEmail({ subject: subjectF, plainText: messageF });
+            return { html: branded.html, logo: branded.logo, logoCid: branded.logoCid };
+          })()
+        : undefined;
+    const r = await deliver(ch, recipient || null, subjectF, messageF, emailOpts);
     record({
       channel: ch,
       recipient: recipient || null,
@@ -370,6 +433,35 @@ export async function notifyClientChannels(
   type: string
 ) {
   return notifyClient(client as Client, channels, subject, message, type);
+}
+
+/** Send a branded HTML payment receipt email to a subscriber. */
+export async function sendPaymentReceiptEmail(opts: {
+  to: string;
+  clientId?: number;
+  customerName?: string | null;
+  receipt: any;
+}): Promise<{ sent: boolean; detail: string }> {
+  const subject = `Payment Receipt — ${opts.receipt?.account || opts.customerName || 'Account'}`;
+  const { bodyHtml, plainText } = buildReceiptEmailBody(opts.receipt);
+  const branded = buildBrandedEmail({ subject, bodyHtml, plainText });
+  const r = await deliver('email', opts.to, subject, plainText, {
+    html: branded.html,
+    logo: branded.logo,
+    logoCid: branded.logoCid,
+  });
+  record({
+    channel: 'email',
+    recipient: opts.to,
+    client_id: opts.clientId ?? null,
+    customer_name: opts.customerName ?? opts.receipt?.customer ?? null,
+    subject,
+    message: plainText,
+    type: 'payment_receipt',
+    status: r.status,
+    detail: r.detail,
+  });
+  return { sent: r.status === 'sent', detail: r.detail };
 }
 
 /** Manual broadcast/one-off send initiated from the Notifications page. */
