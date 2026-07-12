@@ -95,6 +95,7 @@ import {
   getSettings as getNotifySettingsRaw,
   isExpiredAccount,
   isNonPaymentAccount,
+  isBillingActiveAccount,
 } from './notify.js';
 
 initSchema();
@@ -346,34 +347,65 @@ app.get('/api/dashboard/router/:id', async (req, res) => {
   const r = getRouter(Number(req.params.id));
   if (!r) return res.status(404).json({ error: 'router not found' });
 
-  const users = db
-    .prepare(
-      `SELECT username, status, online,
-              subscription_due AS subscriptionDue,
-              nonpayment_since AS nonpaymentSince
-       FROM pppoe_users WHERE router_id = ?`
-    )
-    .all(r.id) as {
+  type Row = {
     username: string;
     status: string;
+    panelStatus: string;
     online: number;
     subscriptionDue: string | null;
     nonpaymentSince: string | null;
-  }[];
+    expirationProfile: string | null;
+    mikrotikProfile: string | null;
+  };
+
+  let users = db
+    .prepare(
+      `SELECT username, status, status AS panelStatus, online,
+              subscription_due AS subscriptionDue,
+              nonpayment_since AS nonpaymentSince,
+              expiration_profile AS expirationProfile,
+              NULL AS mikrotikProfile
+       FROM pppoe_users WHERE router_id = ?`
+    )
+    .all(r.id) as Row[];
 
   let liveSessions = false;
-  let enriched = users.map((u) => ({
-    ...u,
-    panelStatus: u.status,
-    online: u.online,
-    sessionOnline: false as boolean,
-    mikrotikProfile: null as string | null,
-  }));
   if (r.host && r.api_user) {
     try {
       const [secrets, sessions] = await Promise.all([fetchPppSecrets(r), fetchPppActive(r)]);
-      enriched = enrichPppUsersFromLive(users, secrets, sessions);
-      liveSessions = true;
+      const enriched = enrichPppUsersFromLive(users, secrets, sessions);
+      const markNp = db.prepare(
+        `UPDATE pppoe_users
+         SET status = 'non-payment',
+             nonpayment_since = COALESCE(nonpayment_since, ?)
+         WHERE router_id = ? AND username = ? AND lower(status) = 'active'`
+      );
+      const nowIso = new Date().toISOString();
+      for (let i = 0; i < users.length; i++) {
+        const e = enriched[i];
+        let panel = String(e.panelStatus || users[i].status || '');
+        const mtProfile = e.mikrotikProfile || null;
+        users[i].mikrotikProfile = mtProfile;
+        const onNpProfile =
+          !!mtProfile &&
+          (/non[-_\s]?pay/i.test(mtProfile) ||
+            (!!users[i].expirationProfile &&
+              /non[-_\s]?pay/i.test(String(users[i].expirationProfile)) &&
+              mtProfile.toLowerCase() === String(users[i].expirationProfile).toLowerCase()));
+        if (
+          onNpProfile &&
+          String(panel).toLowerCase() === 'active' &&
+          String(e.status).toLowerCase() !== 'disabled'
+        ) {
+          panel = 'non-payment';
+          markNp.run(nowIso, r.id, users[i].username);
+          users[i].nonpaymentSince = users[i].nonpaymentSince || nowIso;
+        }
+        users[i].panelStatus = panel;
+        users[i].status = e.status;
+        users[i].online = e.online;
+      }
+
       const updOnline = db.prepare('UPDATE pppoe_users SET online = ? WHERE router_id = ? AND username = ?');
       const updStatus = db.prepare(
         "UPDATE pppoe_users SET status = 'Active' WHERE router_id = ? AND username = ? AND lower(status) = 'disabled'"
@@ -381,17 +413,19 @@ app.get('/api/dashboard/router/:id', async (req, res) => {
       const tx = db.transaction(() => {
         for (const u of enriched) {
           updOnline.run(u.online ? 1 : 0, r.id, u.username);
-          // Do not auto-clear billing holds (non-payment / overdue) just because the secret is enabled.
           const panel = String(u.panelStatus || '').toLowerCase().replace(/\s+/g, '-');
           const billingHold =
-            panel === 'non-payment' ||
-            panel === 'nonpayment' ||
-            panel === 'expired' ||
-            !!u.nonpaymentSince ||
+            isNonPaymentAccount({
+              status: u.panelStatus,
+              panelStatus: u.panelStatus,
+              nonpaymentSince: u.nonpaymentSince,
+              mikrotikProfile: u.mikrotikProfile,
+              expirationProfile: (u as any).expirationProfile,
+            }) ||
             isExpiredAccount({
               status: u.panelStatus,
               panelStatus: u.panelStatus,
-              subscriptionDue: u.subscriptionDue,
+              subscriptionDue: (u as any).subscriptionDue,
               nonpaymentSince: u.nonpaymentSince,
             });
           if (String(u.status).toLowerCase() === 'active' && panel === 'disabled' && !billingHold) {
@@ -400,26 +434,24 @@ app.get('/api/dashboard/router/:id', async (req, res) => {
         }
       });
       tx();
+      liveSessions = true;
     } catch {
       /* keep DB rows */
     }
   }
 
-  const isBillingActive = (u: { status: string; panelStatus?: string }) => {
-    const panel = String(u.panelStatus || u.status || '').toLowerCase();
-    return panel === 'active';
-  };
-  const activeUsers = enriched.filter(isBillingActive);
+  const classify = (u: Row) => ({
+    status: u.panelStatus || u.status,
+    panelStatus: u.panelStatus || u.status,
+    nonpaymentSince: u.nonpaymentSince,
+    mikrotikProfile: u.mikrotikProfile,
+    expirationProfile: u.expirationProfile,
+    subscriptionDue: u.subscriptionDue,
+  });
+  const activeUsers = users.filter((u) => isBillingActiveAccount(classify(u)));
+  const online = activeUsers.filter((u) => !!u.online).length;
   const offline = activeUsers.filter((u) => !u.online).length;
-  const liveOnline = activeUsers.filter((u) => !!u.online).length;
-  const expired = enriched.filter((u) =>
-    isExpiredAccount({
-      status: u.panelStatus || u.status,
-      panelStatus: u.panelStatus || u.status,
-      subscriptionDue: u.subscriptionDue,
-      nonpaymentSince: u.nonpaymentSince,
-    })
-  ).length;
+  const expired = users.filter((u) => isExpiredAccount(classify(u))).length;
 
   const liveStats = await fetchRouterDashboardStats(r);
 
@@ -433,7 +465,9 @@ app.get('/api/dashboard/router/:id', async (req, res) => {
     cpuLoad: liveStats.cpuLoad,
     memPct: liveStats.memPct,
     memTotal: liveStats.memTotalMb,
-    activePPPoE: liveSessions ? liveOnline : activeUsers.length,
+    // Same definition as Account Status → Active (billing-active), not live session count
+    activePPPoE: activeUsers.length,
+    online,
     offline,
     expired,
   });
@@ -582,29 +616,22 @@ app.get('/api/dashboard/status', async (req, res) => {
 
   const panelOf = (r: StatusRow) => String(r.panelStatus || r.status || '').toLowerCase().replace(/\s+/g, '-');
   const liveOf = (r: StatusRow) => String(r.status || '').toLowerCase();
-  const npRow = (r: StatusRow) =>
-    isNonPaymentAccount({
-      status: r.panelStatus || r.status,
-      panelStatus: r.panelStatus || r.status,
-      nonpaymentSince: r.nonpaymentSince,
-      mikrotikProfile: r.mikrotikProfile,
-      expirationProfile: r.expirationProfile,
-    });
-  const active = rows.filter((r) => panelOf(r) === 'active' && !npRow(r));
+  const classify = (r: StatusRow) => ({
+    status: r.panelStatus || r.status,
+    panelStatus: r.panelStatus || r.status,
+    nonpaymentSince: r.nonpaymentSince,
+    mikrotikProfile: r.mikrotikProfile,
+    expirationProfile: r.expirationProfile,
+    subscriptionDue: r.subscriptionDue,
+  });
+  const active = rows.filter((r) => isBillingActiveAccount(classify(r)));
   res.json({
     total: rows.length,
     online: active.filter((r) => !!r.online).length,
     offline: active.filter((r) => !r.online).length,
     active: active.length,
-    expired: rows.filter((r) =>
-      isExpiredAccount({
-        status: r.panelStatus || r.status,
-        panelStatus: r.panelStatus || r.status,
-        subscriptionDue: r.subscriptionDue,
-        nonpaymentSince: r.nonpaymentSince,
-      })
-    ).length,
-    nonPayment: rows.filter((r) => npRow(r)).length,
+    expired: rows.filter((r) => isExpiredAccount(classify(r))).length,
+    nonPayment: rows.filter((r) => isNonPaymentAccount(classify(r))).length,
     inactive: rows.filter((r) => panelOf(r) === 'inactive').length,
     disabled: rows.filter((r) => liveOf(r) === 'disabled' || panelOf(r) === 'disabled').length,
     live,

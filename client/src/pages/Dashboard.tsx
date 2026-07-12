@@ -34,6 +34,7 @@ interface RouterStat {
   memPct: number;
   memTotal: number;
   activePPPoE: number;
+  online?: number;
   offline: number;
   expired: number;
 }
@@ -397,10 +398,14 @@ function DashboardLicensed() {
               <Progress value={router?.memPct ?? 0} color="bg-gradient-to-r from-emerald-400 to-emerald-500" />
             </div>
             <div className="grid grid-cols-3 gap-3 pt-2">
-              <MiniStat icon={<Users size={16} />} label="Active PPPoE" value={router?.activePPPoE ?? 0} tone="text-emerald-600" bg="bg-emerald-50 border-emerald-100" />
+              <MiniStat icon={<Users size={16} />} label="Active" value={router?.activePPPoE ?? 0} tone="text-sky-600" bg="bg-sky-50 border-sky-100" />
               <MiniStat icon={<WifiOff size={16} />} label="Offline" value={router?.offline ?? 0} tone="text-amber-600" bg="bg-amber-50 border-amber-100" />
               <MiniStat icon={<AlertTriangle size={16} />} label="Expired" value={router?.expired ?? 0} tone="text-rose-600" bg="bg-rose-50 border-rose-100" />
             </div>
+            <p className="text-[11px] text-slate-400 pt-1">
+              Active / Offline / Expired use the same rules as Account Status above
+              {router?.online != null ? ` (Online sessions: ${router.online})` : ''}.
+            </p>
           </div>
           )}
         </Card>

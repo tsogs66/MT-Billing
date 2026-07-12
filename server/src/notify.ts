@@ -234,6 +234,23 @@ export function isNonPaymentAccount(row: {
   return false;
 }
 
+/** Billing-active accounts — shared by Account Status + Router Status tiles. */
+export function isBillingActiveAccount(row: {
+  status?: string | null;
+  panelStatus?: string | null;
+  nonpaymentSince?: string | null;
+  nonpayment_since?: string | null;
+  mikrotikProfile?: string | null;
+  expirationProfile?: string | null;
+  expiration_profile?: string | null;
+}): boolean {
+  const panel = String(row.panelStatus ?? row.status ?? '')
+    .toLowerCase()
+    .replace(/\s+/g, '-');
+  if (panel !== 'active') return false;
+  return !isNonPaymentAccount(row);
+}
+
 function statusKey(status?: string | null): string {
   return String(status || '').toLowerCase().replace(/\s+/g, '-');
 }
