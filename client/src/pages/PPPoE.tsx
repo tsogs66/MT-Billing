@@ -73,6 +73,9 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
   const [fetching, setFetching] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [showBulkPlan, setShowBulkPlan] = useState(false);
+  const [bulkPlan, setBulkPlan] = useState('');
+  const [bulkPlanError, setBulkPlanError] = useState('');
   const [tabError, setTabError] = useState('');
   const [tabBusy, setTabBusy] = useState(false);
   const [profileEdit, setProfileEdit] = useState<any | null>(null);
@@ -342,6 +345,41 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
     }
   };
 
+  const openBulkChangePlan = () => {
+    if (!selected.size) return;
+    const opts = plans.filter((p) => !isSystemPppName(p.name));
+    setBulkPlan(opts[0]?.name || '');
+    setBulkPlanError('');
+    setShowBulkPlan(true);
+  };
+
+  const confirmBulkChangePlan = async () => {
+    const ids = [...selected];
+    if (!ids.length) return;
+    if (!bulkPlan) {
+      setBulkPlanError('Select a billing plan');
+      return;
+    }
+    setBulkBusy(true);
+    setBulkPlanError('');
+    try {
+      const r = await api.post('/pppoe/users/bulk-change-plan', { ids, plan: bulkPlan });
+      const failed = Array.isArray(r.data.failed) ? r.data.failed.length : 0;
+      showToast(
+        `Plan → ${r.data.plan}: ${r.data.updated} updated` +
+          (r.data.bounced ? `, ${r.data.bounced} session refresh (5s)` : '') +
+          (failed ? `, ${failed} failed` : '')
+      );
+      setShowBulkPlan(false);
+      setSelected(new Set());
+      loadUsers();
+    } catch (e: any) {
+      setBulkPlanError(e?.response?.data?.error || 'Bulk plan change failed.');
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
   const bulkDelete = async () => {
     const ids = [...selected];
     if (!ids.length) return;
@@ -414,6 +452,9 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                 <>
                   {someSelected && (
                     <>
+                      <button type="button" className="btn-secondary text-sky-700 border-sky-200 hover:bg-sky-50" onClick={openBulkChangePlan} disabled={bulkBusy}>
+                        <ReceiptText size={16} /> Change plan
+                      </button>
                       <button type="button" className="btn-secondary text-amber-700 border-amber-200 hover:bg-amber-50" onClick={bulkDisable} disabled={bulkBusy}>
                         <KeyRound size={16} /> Disable selected
                       </button>
@@ -830,6 +871,40 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
             loadProfiles();
           }}
         />
+      )}
+
+      {showBulkPlan && (
+        <Modal
+          title="Change plan for selected users"
+          subtitle={`${selected.size} user(s) selected`}
+          onClose={() => !bulkBusy && setShowBulkPlan(false)}
+          footer={
+            <ModalFooter
+              onCancel={() => setShowBulkPlan(false)}
+              onConfirm={confirmBulkChangePlan}
+              confirmLabel={bulkBusy ? 'Updating…' : 'Change plan & refresh'}
+              busy={bulkBusy}
+            />
+          }
+        >
+          {bulkPlanError && (
+            <div className="text-sm text-rose-600 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2 mb-4">{bulkPlanError}</div>
+          )}
+          <div className="space-y-4">
+            <FormField label="New billing plan" required hint="Updates panel plan, PPP secret comment, and MikroTik profile.">
+              <select className="input" value={bulkPlan} onChange={(e) => setBulkPlan(e.target.value)} disabled={bulkBusy}>
+                {plans.filter((p) => !isSystemPppName(p.name)).map((p) => (
+                  <option key={p.id} value={p.name}>
+                    {p.name}{p.price != null ? ` (${peso(p.price)})` : ''}
+                  </option>
+                ))}
+              </select>
+            </FormField>
+            <div className="text-xs text-amber-800 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2 leading-relaxed">
+              After confirm, each secret is updated then disabled for <b>5 seconds</b> and enabled again so active sessions pick up the new plan.
+            </div>
+          </div>
+        </Modal>
       )}
 
       {toggleFor && (

@@ -54,6 +54,7 @@ import {
   ensureFreshPayLink,
   resolvePublicBaseUrl,
   normalizeBaseUrl,
+  bulkChangePppoeUserPlans,
 } from './billing.js';
 import {
   startUsageScheduler,
@@ -952,6 +953,34 @@ app.post('/api/pppoe/users/bulk-disable', (req, res) => {
     );
   }
   res.json({ ok: true, count });
+});
+
+app.post('/api/pppoe/users/bulk-change-plan', async (req, res) => {
+  const ids = (Array.isArray(req.body?.ids) ? req.body.ids : [])
+    .map((id: unknown) => Number(id))
+    .filter((id: number) => Number.isFinite(id) && id > 0);
+  const plan = String(req.body?.plan || '').trim();
+  if (!ids.length) return res.status(400).json({ error: 'No user IDs provided.' });
+  if (!plan) return res.status(400).json({ error: 'Select a billing plan.' });
+  if (isSystemPppProfileName(plan)) {
+    return res.status(400).json({ error: 'Select a billing plan (not default / non-payments).' });
+  }
+  const planRow = db.prepare('SELECT name FROM profiles WHERE name = ?').get(plan);
+  if (!planRow) return res.status(404).json({ error: `Billing plan "${plan}" not found.` });
+
+  try {
+    const result = await bulkChangePppoeUserPlans(ids, plan);
+    res.json({
+      ok: result.ok,
+      plan: result.plan,
+      updated: result.updated,
+      bounced: result.bounced,
+      failed: result.failed,
+      message: `Changed plan to ${result.plan} for ${result.updated} user(s); session refresh bounce on ${result.bounced}.`,
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Bulk plan change failed' });
+  }
 });
 
 app.post('/api/pppoe/users/bulk-delete', async (req, res) => {

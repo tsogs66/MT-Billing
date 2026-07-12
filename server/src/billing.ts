@@ -161,6 +161,181 @@ function commentFromUser(u: any): string {
   });
 }
 
+/**
+ * Change a user's billing plan: update DB, rewrite PPP secret comment + profile
+ * on MikroTik, then briefly disable/enable so the active session picks up the plan.
+ */
+export async function changePppoeUserPlan(
+  userId: number,
+  planName: string,
+  opts?: { bounce?: boolean }
+): Promise<{
+  ok: boolean;
+  id: number;
+  username: string;
+  previousPlan: string;
+  plan: string;
+  sync: { ok: boolean; error?: string };
+  sessionRefresh: { bounced: boolean; waitMs: number; error?: string } | null;
+  error?: string;
+}> {
+  const plan = String(planName || '').trim();
+  const user = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(userId) as any;
+  if (!user) {
+    return {
+      ok: false,
+      id: userId,
+      username: '',
+      previousPlan: '',
+      plan,
+      sync: { ok: false, error: 'not-found' },
+      sessionRefresh: null,
+      error: 'User not found',
+    };
+  }
+
+  const previousPlan = String(user.profile || '');
+  const prof = db.prepare('SELECT name, price, rate_limit FROM profiles WHERE name = ?').get(plan) as
+    | { name: string; price: number; rate_limit?: string }
+    | undefined;
+  if (!prof) {
+    return {
+      ok: false,
+      id: userId,
+      username: user.username,
+      previousPlan,
+      plan,
+      sync: { ok: false, error: 'plan-not-found' },
+      sessionRefresh: null,
+      error: `Billing plan "${plan}" not found`,
+    };
+  }
+
+  const price = Number(prof.price) || 0;
+  db.prepare('UPDATE pppoe_users SET profile = ?, price = ? WHERE id = ?').run(plan, price, userId);
+  const updated = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(userId) as any;
+
+  let sync: { ok: boolean; error?: string } = { ok: false, error: 'no router' };
+  let sessionRefresh: { bounced: boolean; waitMs: number; error?: string } | null = null;
+
+  if (updated?.router_id) {
+    const router = db.prepare('SELECT * FROM routers WHERE id = ?').get(updated.router_id) as any;
+    if (router?.host && router?.api_user) {
+      try {
+        try {
+          await ensurePppProfile(router, plan, prof.rate_limit || undefined);
+        } catch {
+          /* profile may already exist */
+        }
+        await updatePppSecret(router, updated.username, {
+          password: updated.password || '',
+          profile: plan,
+          comment: commentFromUser({ ...updated, profile: plan }),
+          disabled: false,
+          rateLimit: prof.rate_limit || undefined,
+        });
+        // Ensure enabled after profile/comment update (disabled accounts stay disabled in DB,
+        // but bounce below re-enables briefly — respect disabled status).
+        const isDisabled = String(updated.status || '').toLowerCase() === 'disabled';
+        if (isDisabled) {
+          await setPppSecretEnabled(router, updated.username, false);
+          sync = { ok: true };
+        } else {
+          await setPppSecretEnabled(router, updated.username, true);
+          sync = { ok: true };
+          if (opts?.bounce !== false) {
+            sessionRefresh = await bouncePppSessionForRefresh(router, updated.username, SESSION_REFRESH_MS);
+          }
+        }
+      } catch (e: any) {
+        sync = { ok: false, error: e?.message || String(e) };
+      }
+    }
+  }
+
+  db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+    sync.ok ? 'info' : 'warning',
+    'billing',
+    `Plan change for ${updated.username}: ${previousPlan || '—'} → ${plan}` +
+      (sessionRefresh?.bounced ? ' (5s session bounce)' : sync.error ? ` (router: ${sync.error})` : '')
+  );
+
+  return {
+    ok: true,
+    id: userId,
+    username: updated.username,
+    previousPlan,
+    plan,
+    sync,
+    sessionRefresh,
+    error: undefined,
+  };
+}
+
+export async function bulkChangePppoeUserPlans(
+  ids: number[],
+  planName: string
+): Promise<{
+  ok: boolean;
+  plan: string;
+  updated: number;
+  bounced: number;
+  failed: { id: number; username?: string; error: string }[];
+  results: Awaited<ReturnType<typeof changePppoeUserPlan>>[];
+}> {
+  const plan = String(planName || '').trim();
+  const uniqueIds = [...new Set(ids.filter((id) => Number.isFinite(id) && id > 0))];
+
+  // Phase 1: update DB + MikroTik comment/profile (no bounce yet)
+  const phase1: Awaited<ReturnType<typeof changePppoeUserPlan>>[] = [];
+  for (const id of uniqueIds) {
+    phase1.push(await changePppoeUserPlan(id, plan, { bounce: false }));
+  }
+
+  // Phase 2: bounce all enabled secrets in parallel (~5s total)
+  const bounceJobs = phase1
+    .filter((r) => r.ok && r.sync.ok)
+    .map(async (r) => {
+      const user = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(r.id) as any;
+      if (!user?.router_id) return { ...r, sessionRefresh: null as typeof r.sessionRefresh };
+      if (String(user.status || '').toLowerCase() === 'disabled') {
+        return { ...r, sessionRefresh: null as typeof r.sessionRefresh };
+      }
+      const router = db.prepare('SELECT * FROM routers WHERE id = ?').get(user.router_id) as any;
+      if (!router?.host || !router?.api_user) return { ...r, sessionRefresh: null as typeof r.sessionRefresh };
+      const sessionRefresh = await bouncePppSessionForRefresh(router, user.username, SESSION_REFRESH_MS);
+      return { ...r, sessionRefresh };
+    });
+
+  const results = phase1.map((r) => ({ ...r }));
+  const bouncedResults = await Promise.all(bounceJobs);
+  for (const br of bouncedResults) {
+    const idx = results.findIndex((r) => r.id === br.id);
+    if (idx >= 0) results[idx] = br;
+  }
+
+  const failed = results
+    .filter((r) => {
+      if (r.error) return true;
+      if (!r.sync?.ok && r.sync?.error && r.sync.error !== 'no router') return true;
+      return false;
+    })
+    .map((r) => ({
+      id: r.id,
+      username: r.username,
+      error: r.error || r.sync?.error || 'failed',
+    }));
+
+  return {
+    ok: failed.length === 0,
+    plan,
+    updated: results.filter((r) => !r.error).length,
+    bounced: results.filter((r) => r.sessionRefresh?.bounced).length,
+    failed,
+    results,
+  };
+}
+
 export async function syncUserToRouter(
   user: any,
   action: 'restore' | 'expire' | 'disable' | 'enable'
