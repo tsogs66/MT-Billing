@@ -260,7 +260,10 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
     if (tab === 'active') loadActive();
     if (tab === 'servers') loadServers();
     if (tab === 'profiles') loadProfiles();
-    if (tab === 'plans') loadPlans();
+    if (tab === 'plans') {
+      loadPlans();
+      loadProfiles();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, current?.id]);
 
@@ -723,7 +726,9 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                     <div className="flex items-start justify-between gap-2">
                       <div>
                         <div className="font-bold text-slate-900 text-lg">{p.name}</div>
-                        <div className="text-xs text-slate-400 font-mono mt-0.5">{p.rateLimit || 'No rate limit'}</div>
+                        <div className="text-xs text-slate-400 font-mono mt-0.5">
+                          {p.rateLimit ? `Rate: ${p.rateLimit}` : 'No profile rate limit'}
+                        </div>
                       </div>
                       <div className="flex gap-1">
                         <IconAction icon={Pencil} title="Edit plan" tone="sky" onClick={() => setPlanEdit(p)} />
@@ -806,6 +811,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
       {(showPlanAdd || planEdit) && (
         <PlanFormModal
           initial={planEdit}
+          profiles={profiles}
           onClose={() => {
             setShowPlanAdd(false);
             setPlanEdit(null);
@@ -1085,29 +1091,52 @@ function ProfileFormModal({
 
 function PlanFormModal({
   initial,
+  profiles,
   onClose,
   onSaved,
 }: {
   initial: any | null;
+  profiles: any[];
   onClose: () => void;
   onSaved: () => void;
 }) {
   const isEdit = !!initial?.id;
+  const profileOptions = Array.isArray(profiles) ? profiles : [];
+
+  const matchProfileName = (() => {
+    if (!profileOptions.length) return '';
+    const byName = profileOptions.find((p) => p.name === initial?.name);
+    if (byName) return String(byName.name);
+    const rl = String(initial?.rateLimit || '').trim();
+    if (rl) {
+      const byRate = profileOptions.find((p) => String(p.rateLimit || '').trim() === rl);
+      if (byRate) return String(byRate.name);
+    }
+    return '';
+  })();
+
   const [name, setName] = useState(initial?.name || '');
-  const [rateLimit, setRateLimit] = useState(initial?.rateLimit || '');
+  const [profileName, setProfileName] = useState(matchProfileName || profileOptions[0]?.name || '');
   const [price, setPrice] = useState(String(initial?.price ?? ''));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+
+  const selectedProfile = profileOptions.find((p) => p.name === profileName);
+  const rateLimit = String(selectedProfile?.rateLimit || '').trim();
 
   const save = async () => {
     if (!name.trim()) {
       setError('Plan name is required');
       return;
     }
+    if (!profileName) {
+      setError('Select a PPP profile for the rate limit');
+      return;
+    }
     setBusy(true);
     setError('');
     try {
-      const payload = { name: name.trim(), rateLimit: rateLimit.trim(), price: Number(price) || 0 };
+      const payload = { name: name.trim(), rateLimit, price: Number(price) || 0 };
       if (isEdit) await api.put(`/billing-plans/${initial.id}`, payload);
       else await api.post('/billing-plans', payload);
       onSaved();
@@ -1121,7 +1150,7 @@ function PlanFormModal({
   return (
     <Modal
       title={isEdit ? 'Edit Billing Plan' : 'Add New Plan'}
-      subtitle="Panel pricing used for payments and receipts."
+      subtitle="Panel pricing used for payments and receipts. Rate limit comes from the selected PPP profile."
       onClose={onClose}
       footer={<ModalFooter onCancel={onClose} onConfirm={save} confirmLabel={isEdit ? 'Save Changes' : 'Create Plan'} busy={busy} />}
     >
@@ -1130,8 +1159,31 @@ function PlanFormModal({
         <FormField label="Plan Name" required>
           <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. UNLI500" autoFocus />
         </FormField>
-        <FormField label="Rate Limit" hint="Shown on cards; match a PPP profile when possible.">
-          <input className="input font-mono" value={rateLimit} onChange={(e) => setRateLimit(e.target.value)} placeholder="25M/25M" />
+        <FormField
+          label="Rate Limit Profile"
+          required
+          hint={
+            profileOptions.length
+              ? rateLimit
+                ? `Uses rate limit ${rateLimit} from profile “${profileName}”.`
+                : `Profile “${profileName}” has no rate limit set on MikroTik.`
+              : 'No PPP profiles yet — add or fetch profiles first.'
+          }
+        >
+          <select
+            className="input"
+            value={profileName}
+            onChange={(e) => setProfileName(e.target.value)}
+            disabled={!profileOptions.length}
+          >
+            {!profileOptions.length && <option value="">No profiles available</option>}
+            {profileOptions.map((p) => (
+              <option key={p.id || p.name} value={p.name}>
+                {p.name}
+                {p.rateLimit ? ` — ${p.rateLimit}` : ' — no rate limit'}
+              </option>
+            ))}
+          </select>
         </FormField>
         <FormField label="Monthly Price" required>
           <input className="input" type="number" min={0} step="0.01" value={price} onChange={(e) => setPrice(e.target.value)} placeholder="999" />
