@@ -726,9 +726,6 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                     <div className="flex items-start justify-between gap-2">
                       <div>
                         <div className="font-bold text-slate-900 text-lg">{p.name}</div>
-                        <div className="text-xs text-slate-400 font-mono mt-0.5">
-                          {p.rateLimit ? `Rate: ${p.rateLimit}` : 'No profile rate limit'}
-                        </div>
                       </div>
                       <div className="flex gap-1">
                         <IconAction icon={Pencil} title="Edit plan" tone="sky" onClick={() => setPlanEdit(p)} />
@@ -1150,7 +1147,7 @@ function PlanFormModal({
   return (
     <Modal
       title={isEdit ? 'Edit Billing Plan' : 'Add New Plan'}
-      subtitle="Panel pricing used for payments and receipts. Rate limit comes from the selected PPP profile."
+      subtitle="Panel pricing used for payments and receipts. Pick the PPP profile for this plan."
       onClose={onClose}
       footer={<ModalFooter onCancel={onClose} onConfirm={save} confirmLabel={isEdit ? 'Save Changes' : 'Create Plan'} busy={busy} />}
     >
@@ -1160,13 +1157,11 @@ function PlanFormModal({
           <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. UNLI500" autoFocus />
         </FormField>
         <FormField
-          label="Rate Limit Profile"
+          label="Profile"
           required
           hint={
             profileOptions.length
-              ? rateLimit
-                ? `Uses rate limit ${rateLimit} from profile “${profileName}”.`
-                : `Profile “${profileName}” has no rate limit set on MikroTik.`
+              ? 'Rate limit is managed on the Profiles tab.'
               : 'No PPP profiles yet — add or fetch profiles first.'
           }
         >
@@ -1180,7 +1175,6 @@ function PlanFormModal({
             {profileOptions.map((p) => (
               <option key={p.id || p.name} value={p.name}>
                 {p.name}
-                {p.rateLimit ? ` — ${p.rateLimit}` : ' — no rate limit'}
               </option>
             ))}
           </select>
