@@ -1507,13 +1507,14 @@ app.get('/api/pppoe/active', async (req, res) => {
     return res.status(400).json({ error: 'Router API credentials not configured.', sessions: [], live: false });
   }
   try {
-    const sessions = await fetchPppActive(router);
+    const [sessions, secrets] = await Promise.all([fetchPppActive(router), fetchPppSecrets(router)]);
     const users = db
       .prepare(
         `SELECT username, customer_name AS customer, profile FROM pppoe_users WHERE service = ? AND router_id = ?`
       )
       .all(service, router.id) as any[];
-    const byUser = new Map(users.map((u) => [u.username, u]));
+    const byUser = new Map(users.map((u) => [pppNameKey(u.username), u]));
+    const secretByName = new Map(secrets.map((s) => [pppNameKey(s.name), s]));
     const filtered = sessions.filter(
       (s) => !service || s.service === 'any' || !s.service || s.service.includes(service) || service === 'pppoe'
     );
@@ -1527,12 +1528,16 @@ app.get('/api/pppoe/active', async (req, res) => {
       /* traffic optional */
     }
     const out = filtered.map((s) => {
-      const u = byUser.get(s.name);
-      const t = traffic[s.name];
+      const key = pppNameKey(s.name);
+      const u = byUser.get(key);
+      const sec = secretByName.get(key);
+      const t = traffic[s.name] || traffic[Object.keys(traffic).find((k) => pppNameKey(k) === key) || ''];
+      // Profile column: always from /ppp/secret, not the active-session row / billing plan.
+      const secretProfile = String(sec?.profile || '').trim();
       return {
         username: s.name,
         customer: u?.customer || s.name,
-        profile: s.profile !== '-' ? s.profile : u?.profile || '-',
+        profile: secretProfile || '—',
         address: s.address,
         uptime: s.uptime,
         caller: s.caller && s.caller !== '-' ? s.caller : '—',

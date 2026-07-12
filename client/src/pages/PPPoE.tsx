@@ -566,6 +566,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                   { key: 'user', label: 'Username / Customer' },
                   { key: 'account', label: 'Account #' },
                   { key: 'plan', label: 'Plan' },
+                  { key: 'mtProfile', label: 'Profile' },
                   { key: 'status', label: 'Status' },
                   { key: 'traffic', label: (
                     <span>
@@ -581,6 +582,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                     user: u.username,
                     account: u.account,
                     plan: u.profile,
+                    mtProfile: u.mikrotikProfile || '',
                     status: userStatusLabel(u),
                     traffic: (Number(u.downloadBps) || 0) + (Number(u.uploadBps) || 0),
                     due: u.subscriptionDue,
@@ -599,7 +601,12 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                       <div className="text-xs text-slate-400">{u.customer}</div>
                     </div>,
                     <span className="text-slate-500">{u.account}</span>,
-                    <span className="text-slate-600 font-medium">{u.profile}</span>,
+                    <span className="text-slate-600 font-medium" title="Billing plan (from comment / panel)">
+                      {u.profile || '—'}
+                    </span>,
+                    <span className="font-mono text-xs text-slate-700" title="MikroTik /ppp/secret profile">
+                      {u.mikrotikProfile || '—'}
+                    </span>,
                     <StatusBadge status={userStatusLabel(u)} />,
                     <span className="text-xs font-medium text-slate-700 whitespace-nowrap">
                       {u.sessionOnline || u.online === 1 || u.online === true
@@ -695,7 +702,9 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                       cells: [
                         <span className="font-semibold text-slate-800">{a.username}</span>,
                         a.customer,
-                        a.profile,
+                        <span className="font-mono text-xs text-slate-700" title="MikroTik /ppp/secret profile">
+                          {a.profile || '—'}
+                        </span>,
                         <span className="font-mono text-xs">{a.address}</span>,
                         <TrafficPair downloadBps={down} uploadBps={up} />,
                         a.uptime,
