@@ -159,7 +159,7 @@ function daysUntil(due?: string | null): number | null {
 }
 
 /** Hours past the end of the due date (positive = overdue). Null if no/invalid due or still on/before due day. */
-function hoursPastDue(due?: string | null): number | null {
+export function hoursPastDue(due?: string | null): number | null {
   if (!due) return null;
   const raw = String(due).trim();
   let dueDay = raw.slice(0, 10);
@@ -173,6 +173,33 @@ function hoursPastDue(due?: string | null): number | null {
   if (!Number.isFinite(overdueFrom)) return null;
   const hours = (Date.now() - overdueFrom) / 3600000;
   return hours > 0 ? hours : null;
+}
+
+/** True when the subscription due date has passed (account is expired / overdue). */
+export function isSubscriptionExpired(due?: string | null): boolean {
+  return hoursPastDue(due) != null;
+}
+
+/**
+ * Dashboard “Expired” accounts: past due date, or billing status already marked
+ * expired / non-payment / disabled-after-nonpayment.
+ */
+export function isExpiredAccount(row: {
+  status?: string | null;
+  panelStatus?: string | null;
+  subscriptionDue?: string | null;
+  subscription_due?: string | null;
+  nonpaymentSince?: string | null;
+  nonpayment_since?: string | null;
+}): boolean {
+  const panel = String(row.panelStatus ?? row.status ?? '')
+    .toLowerCase()
+    .replace(/\s+/g, '-');
+  if (panel === 'expired' || panel === 'non-payment' || panel === 'nonpayment') return true;
+  const due = row.subscriptionDue ?? row.subscription_due ?? null;
+  const npSince = row.nonpaymentSince ?? row.nonpayment_since ?? null;
+  if (panel === 'disabled' && (npSince || isSubscriptionExpired(due))) return true;
+  return isSubscriptionExpired(due);
 }
 
 function statusKey(status?: string | null): string {
