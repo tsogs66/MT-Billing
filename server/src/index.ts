@@ -22,6 +22,7 @@ import {
   fetchPppActive,
   enrichPppUsersFromLive,
   pppNameKey,
+  isSystemPppProfileName,
   fetchPppProfiles,
   addPppProfile,
   updatePppProfile,
@@ -713,6 +714,9 @@ app.post('/api/pppoe/users', async (req, res) => {
   } = b;
   if (!username) return res.status(400).json({ error: 'username is required' });
   if (!password) return res.status(400).json({ error: 'password is required to create the MikroTik PPP secret' });
+  if (!profile || isSystemPppProfileName(profile)) {
+    return res.status(400).json({ error: 'Select a billing plan (not default / non-payments)' });
+  }
 
   const routerId = Number(b.router_id || b.routerId || 0);
   if (!routerId) {
@@ -808,6 +812,9 @@ app.put('/api/pppoe/users/:id', async (req, res) => {
   // If the billing plan changed, sync the stored price to the plan's price
   // (unless an explicit price override is supplied).
   const newProfile = b.profile ?? existing.profile;
+  if (b.profile != null && isSystemPppProfileName(newProfile)) {
+    return res.status(400).json({ error: 'Select a billing plan (not default / non-payments)' });
+  }
   let price = b.price ?? existing.price;
   if (b.profile && b.profile !== existing.profile && b.price == null) {
     const prof = db.prepare('SELECT price FROM profiles WHERE name = ?').get(newProfile) as { price: number } | undefined;
@@ -1286,7 +1293,10 @@ app.post('/api/pppoe/fetch-mikrotik', async (req, res) => {
 
 app.get('/api/pppoe/profiles', async (req, res) => {
   const routerId = req.query.routerId ? Number(req.query.routerId) : null;
-  const dbProfiles = db.prepare('SELECT id, name, rate_limit AS rateLimit, price, type FROM profiles ORDER BY name').all() as any[];
+  const includeSystem = String(req.query.includeSystem || '') === '1';
+  const dbProfiles = (
+    db.prepare('SELECT id, name, rate_limit AS rateLimit, price, type FROM profiles ORDER BY name').all() as any[]
+  ).filter((p) => includeSystem || !isSystemPppProfileName(p.name));
   const router = getRouterById(routerId);
   if (!router?.host || !router?.api_user) {
     return res.json({ profiles: dbProfiles, live: false });
@@ -1294,20 +1304,22 @@ app.get('/api/pppoe/profiles', async (req, res) => {
   try {
     const live = await fetchPppProfiles(router);
     const byName = new Map(dbProfiles.map((p) => [p.name, p]));
-    const merged = live.map((p) => {
-      const dbp = byName.get(p.name);
-      return {
-        id: dbp?.id ?? p.id,
-        mikrotikId: p.id,
-        name: p.name,
-        rateLimit: p.rateLimit || dbp?.rateLimit || '',
-        price: dbp?.price ?? 0,
-        type: dbp?.type || 'pppoe',
-        localAddress: p.localAddress,
-        remoteAddress: p.remoteAddress,
-        live: true,
-      };
-    });
+    const merged = live
+      .filter((p) => includeSystem || !isSystemPppProfileName(p.name))
+      .map((p) => {
+        const dbp = byName.get(p.name);
+        return {
+          id: dbp?.id ?? p.id,
+          mikrotikId: p.id,
+          name: p.name,
+          rateLimit: p.rateLimit || dbp?.rateLimit || '',
+          price: dbp?.price ?? 0,
+          type: dbp?.type || 'pppoe',
+          localAddress: p.localAddress,
+          remoteAddress: p.remoteAddress,
+          live: true,
+        };
+      });
     // Include DB-only billing plans not present on the router.
     for (const p of dbProfiles) {
       if (!merged.some((m) => m.name === p.name)) {
@@ -1331,6 +1343,9 @@ app.post('/api/pppoe/profiles', async (req, res) => {
   const price = Number(b.price) || 0;
   const routerId = b.routerId ? Number(b.routerId) : null;
   if (!name) return res.status(400).json({ error: 'name is required' });
+  if (isSystemPppProfileName(name)) {
+    return res.status(400).json({ error: 'Cannot manage MikroTik system profiles (default / non-payments) here' });
+  }
   const router = getRouterById(routerId);
   if (router?.host && router?.api_user) {
     try {
@@ -1385,8 +1400,14 @@ app.put('/api/pppoe/profiles/:id', async (req, res) => {
   }
 
   if (existing) {
+    if (isSystemPppProfileName(existing.name) || isSystemPppProfileName(name)) {
+      return res.status(400).json({ error: 'Cannot manage MikroTik system profiles (default / non-payments) here' });
+    }
     db.prepare('UPDATE profiles SET name = ?, rate_limit = ?, price = ? WHERE id = ?').run(name, rateLimit, price, id);
     return res.json(db.prepare('SELECT id, name, rate_limit AS rateLimit, price, type FROM profiles WHERE id = ?').get(id));
+  }
+  if (isSystemPppProfileName(name)) {
+    return res.status(400).json({ error: 'Cannot manage MikroTik system profiles (default / non-payments) here' });
   }
   const info = db.prepare('INSERT INTO profiles (name, rate_limit, price, type) VALUES (?, ?, ?, ?)').run(name, rateLimit, price, 'pppoe');
   res.status(201).json(db.prepare('SELECT id, name, rate_limit AS rateLimit, price, type FROM profiles WHERE id = ?').get(info.lastInsertRowid));
@@ -1508,7 +1529,8 @@ app.get('/api/pppoe/servers', async (req, res) => {
 });
 
 app.get('/api/billing-plans', (_req, res) => {
-  res.json(db.prepare('SELECT id, name, rate_limit AS rateLimit, price FROM profiles ORDER BY name').all());
+  const rows = db.prepare('SELECT id, name, rate_limit AS rateLimit, price FROM profiles ORDER BY name').all() as any[];
+  res.json(rows.filter((p) => !isSystemPppProfileName(p.name)));
 });
 
 app.post('/api/billing-plans', (req, res) => {
@@ -1517,6 +1539,9 @@ app.post('/api/billing-plans', (req, res) => {
   const rateLimit = String(b.rateLimit || b.rate_limit || '').trim();
   const price = Number(b.price) || 0;
   if (!name) return res.status(400).json({ error: 'Plan name is required' });
+  if (isSystemPppProfileName(name)) {
+    return res.status(400).json({ error: 'default / non-payments are system profiles, not billing plans' });
+  }
   const exists = db.prepare('SELECT id FROM profiles WHERE name = ?').get(name);
   if (exists) return res.status(409).json({ error: 'A plan with that name already exists' });
   const info = db.prepare('INSERT INTO profiles (name, rate_limit, price, type) VALUES (?, ?, ?, ?)').run(name, rateLimit, price, 'pppoe');
@@ -1527,11 +1552,17 @@ app.put('/api/billing-plans/:id', (req, res) => {
   const id = Number(req.params.id);
   const existing = db.prepare('SELECT * FROM profiles WHERE id = ?').get(id) as any;
   if (!existing) return res.status(404).json({ error: 'not found' });
+  if (isSystemPppProfileName(existing.name)) {
+    return res.status(400).json({ error: 'default / non-payments are system profiles, not billing plans' });
+  }
   const b = req.body || {};
   const name = String(b.name ?? existing.name).trim();
   const rateLimit = String(b.rateLimit ?? b.rate_limit ?? existing.rate_limit ?? '').trim();
   const price = b.price != null ? Number(b.price) : existing.price;
   if (!name) return res.status(400).json({ error: 'Plan name is required' });
+  if (isSystemPppProfileName(name)) {
+    return res.status(400).json({ error: 'default / non-payments are system profiles, not billing plans' });
+  }
   const conflict = db.prepare('SELECT id FROM profiles WHERE name = ? AND id != ?').get(name, id);
   if (conflict) return res.status(409).json({ error: 'A plan with that name already exists' });
   // Keep user.profile in sync if renamed

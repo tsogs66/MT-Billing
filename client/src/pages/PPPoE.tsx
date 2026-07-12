@@ -49,6 +49,15 @@ function userStatusLabel(u: PUser): string {
   return u.status;
 }
 
+/** MikroTik system profiles — hidden from Profiles / Billing Plans lists. */
+function isSystemPppName(name: string | null | undefined): boolean {
+  const n = String(name || '').trim().toLowerCase();
+  if (!n) return false;
+  return n.includes('default') || /non[-_\s]?pay/.test(n);
+}
+
+const SYSTEM_EXPIRE_PROFILES = ['non-payments', 'default'];
+
 export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; title: string }) {
   const [tab, setTab] = useState('users');
   const [users, setUsers] = useState<PUser[]>([]);
@@ -469,7 +478,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                   },
                   { key: 'user', label: 'Username / Customer' },
                   { key: 'account', label: 'Account #' },
-                  { key: 'profile', label: 'Profile' },
+                  { key: 'plan', label: 'Plan' },
                   { key: 'status', label: 'Status' },
                   { key: 'traffic', label: (
                     <span>
@@ -484,7 +493,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                   sortValues: {
                     user: u.username,
                     account: u.account,
-                    profile: u.profile,
+                    plan: u.profile,
                     status: userStatusLabel(u),
                     traffic: (Number(u.downloadBps) || 0) + (Number(u.uploadBps) || 0),
                     due: u.subscriptionDue,
@@ -745,7 +754,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
       {showAdd && (
         <UserFormModal
           service={service}
-          profiles={profiles}
+          plans={plans}
           naps={undefined}
           editUser={null}
           routerId={current?.id}
@@ -761,7 +770,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
       {editFor && (
         <UserFormModal
           service={service}
-          profiles={profiles}
+          plans={plans}
           naps={undefined}
           editUser={editFor}
           routerId={current?.id}
@@ -777,7 +786,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
       {payFor && (
         <ProcessPaymentModal
           user={payFor}
-          profiles={profiles}
+          plans={plans}
           onClose={() => setPayFor(null)}
           onPaid={(msg) => {
             setPayFor(null);
@@ -1098,7 +1107,7 @@ function PlanFormModal({
   onSaved: () => void;
 }) {
   const isEdit = !!initial?.id;
-  const profileOptions = Array.isArray(profiles) ? profiles : [];
+  const profileOptions = (Array.isArray(profiles) ? profiles : []).filter((p) => !isSystemPppName(p.name));
 
   const matchProfileName = (() => {
     if (!profileOptions.length) return '';
@@ -1214,17 +1223,18 @@ function printReceipt(receipt: any) {
   }
 }
 
-function ProcessPaymentModal({ user, profiles, onClose, onPaid }: { user: PUser; profiles: any[]; onClose: () => void; onPaid: (msg: string) => void }) {
-  const [plan, setPlan] = useState(user.profile || profiles[0]?.name || '');
+function ProcessPaymentModal({ user, plans, onClose, onPaid }: { user: PUser; plans: any[]; onClose: () => void; onPaid: (msg: string) => void }) {
+  const planOptions = Array.isArray(plans) ? plans.filter((p) => !isSystemPppName(p.name)) : [];
+  const [plan, setPlan] = useState(user.profile || planOptions[0]?.name || '');
   const [months, setMonths] = useState(1);
-  const [nonPaymentProfile, setNonPaymentProfile] = useState('default');
+  const [nonPaymentProfile, setNonPaymentProfile] = useState('non-payments');
   const [paymentDate, setPaymentDate] = useState(new Date().toISOString().slice(0, 10));
   const [discountDays, setDiscountDays] = useState(0);
   const [sendReceipt, setSendReceipt] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
-  const planPrice = profiles.find((p) => p.name === plan)?.price ?? user.price ?? 0;
+  const planPrice = planOptions.find((p) => p.name === plan)?.price ?? user.price ?? 0;
   const subtotal = planPrice * months;
   const discount = Math.round((planPrice / 30) * Math.max(0, discountDays) * 100) / 100;
   const total = Math.max(0, subtotal - discount);
@@ -1281,7 +1291,8 @@ function ProcessPaymentModal({ user, profiles, onClose, onPaid }: { user: PUser;
       <div className="space-y-4">
         <FormField label="Billing Plan">
           <select className="input" value={plan} onChange={(e) => setPlan(e.target.value)}>
-            {profiles.map((p) => <option key={p.id} value={p.name}>{p.name} ({peso(p.price)})</option>)}
+            {!planOptions.length && <option value="">No billing plans</option>}
+            {planOptions.map((p) => <option key={p.id} value={p.name}>{p.name} ({peso(p.price)})</option>)}
           </select>
         </FormField>
 
@@ -1302,10 +1313,11 @@ function ProcessPaymentModal({ user, profiles, onClose, onPaid }: { user: PUser;
           <span className="text-xs text-slate-400 mt-1 block">Extends expiration by whole month(s) from the current due date.</span>
         </div>
 
-        <FormField label="Non-Payment Profile" hint="Profile to apply on due date.">
+        <FormField label="Non-Payment Profile" hint="MikroTik profile applied when the due date is reached (within grace).">
           <select className="input" value={nonPaymentProfile} onChange={(e) => setNonPaymentProfile(e.target.value)}>
-            <option value="default">default</option>
-            {profiles.map((p) => <option key={p.id} value={p.name}>{p.name}</option>)}
+            {SYSTEM_EXPIRE_PROFILES.map((name) => (
+              <option key={name} value={name}>{name}</option>
+            ))}
           </select>
         </FormField>
 
@@ -1340,14 +1352,14 @@ function ProcessPaymentModal({ user, profiles, onClose, onPaid }: { user: PUser;
 
 function UserFormModal({
   service,
-  profiles,
+  plans,
   editUser,
   routerId,
   onClose,
   onSaved,
 }: {
   service: string;
-  profiles: any[];
+  plans: any[];
   naps?: any;
   editUser?: PUser | null;
   routerId?: number;
@@ -1355,9 +1367,9 @@ function UserFormModal({
   onSaved: () => void;
 }) {
   const isEdit = !!editUser;
-  const defaultPlan = profiles.find((p) => p.name === 'UNLI500')?.name || profiles[0]?.name || '15mbps';
-  const defaultExpire =
-    profiles.find((p) => /non.?pay/i.test(String(p.name)))?.name || 'non-payments';
+  const planOptions = Array.isArray(plans) ? plans.filter((p) => !isSystemPppName(p.name)) : [];
+  const defaultPlan = planOptions.find((p) => p.name === 'UNLI500')?.name || planOptions[0]?.name || '';
+  const defaultExpire = 'non-payments';
   const [form, setForm] = useState({
     username: '',
     password: '',
@@ -1413,6 +1425,10 @@ function UserFormModal({
   const save = async () => {
     if (!form.username.trim()) {
       setError('Username is required');
+      return;
+    }
+    if (!form.profile.trim()) {
+      setError('Select a billing plan');
       return;
     }
     if (!isEdit && !form.password.trim()) {
@@ -1482,9 +1498,14 @@ function UserFormModal({
             </div>
           </FormField>
 
-          <FormField label="Billing Plan">
+          <FormField label="Billing Plan" required>
             <select className="input" value={form.profile} onChange={(e) => set({ profile: e.target.value })}>
-              {profiles.map((p) => <option key={p.id} value={p.name}>{p.name}</option>)}
+              {!planOptions.length && <option value="">No billing plans — add one under Billing Plans</option>}
+              {planOptions.map((p) => (
+                <option key={p.id} value={p.name}>
+                  {p.name}{p.price != null ? ` (${peso(p.price)})` : ''}
+                </option>
+              ))}
             </select>
           </FormField>
 
@@ -1492,12 +1513,10 @@ function UserFormModal({
             <FormField label="Expiration Date">
               <input className="input" type="date" value={form.subscription_due} onChange={(e) => set({ subscription_due: e.target.value })} />
             </FormField>
-            <FormField label="Expiration Profile">
+            <FormField label="Expiration Profile" hint="MikroTik profile used within grace (not a billing plan).">
               <select className="input" value={form.expiration_profile} onChange={(e) => set({ expiration_profile: e.target.value })}>
-                <option value="non-payments">non-payments</option>
-                <option value="default">default</option>
-                {profiles.filter((p) => !/^(non-payments|default)$/i.test(String(p.name))).map((p) => (
-                  <option key={p.id} value={p.name}>{p.name}</option>
+                {SYSTEM_EXPIRE_PROFILES.map((name) => (
+                  <option key={name} value={name}>{name}</option>
                 ))}
               </select>
             </FormField>

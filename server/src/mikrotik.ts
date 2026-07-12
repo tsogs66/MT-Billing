@@ -696,6 +696,13 @@ export function pppNameKey(name: string | null | undefined): string {
   return String(name || '').trim().toLowerCase();
 }
 
+/** MikroTik system profiles — not shown as customer profiles or billing plans. */
+export function isSystemPppProfileName(name: string | null | undefined): boolean {
+  const n = String(name || '').trim().toLowerCase();
+  if (!n) return false;
+  return n.includes('default') || /non[-_\s]?pay/.test(n);
+}
+
 export interface PppEnrichInput {
   username: string;
   status?: string;
