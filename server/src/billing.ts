@@ -803,7 +803,7 @@ export function getPaymentLinkPublic(token: string) {
   if (!link) return null;
   const company = db
     .prepare(
-      `SELECT name, logo, address, phone, email, payment_qr, gcash_number, maya_number, payment_instructions
+      `SELECT name, logo, address, phone, email, payment_qr, gcash_qr, maya_qr, gcash_number, maya_number, payment_instructions
        FROM company WHERE id = 1`
     )
     .get() as any;
@@ -834,6 +834,8 @@ export function getPaymentLinkPublic(token: string) {
       phone: company?.phone || null,
       email: company?.email || null,
       paymentQr: company?.payment_qr || null,
+      gcashQr: company?.gcash_qr || company?.payment_qr || null,
+      mayaQr: company?.maya_qr || company?.payment_qr || null,
       gcashNumber: company?.gcash_number || null,
       mayaNumber: company?.maya_number || null,
       paymentInstructions: company?.payment_instructions || null,

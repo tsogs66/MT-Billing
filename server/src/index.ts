@@ -3037,7 +3037,7 @@ app.put('/api/company', (req, res) => {
   const c = db.prepare('SELECT * FROM company WHERE id = 1').get() as any;
   db.prepare(
     `UPDATE company SET name = ?, address = ?, phone = ?, email = ?, currency = ?, logo = ?,
-       payment_qr = ?, gcash_number = ?, maya_number = ?, payment_instructions = ?
+       payment_qr = ?, gcash_qr = ?, maya_qr = ?, gcash_number = ?, maya_number = ?, payment_instructions = ?
      WHERE id = 1`
   ).run(
     b.name ?? c.name,
@@ -3047,6 +3047,8 @@ app.put('/api/company', (req, res) => {
     b.currency ?? c.currency,
     b.logo !== undefined ? b.logo : c.logo,
     b.payment_qr !== undefined ? b.payment_qr : c.payment_qr,
+    b.gcash_qr !== undefined ? b.gcash_qr : c.gcash_qr,
+    b.maya_qr !== undefined ? b.maya_qr : c.maya_qr,
     b.gcash_number !== undefined ? b.gcash_number : c.gcash_number,
     b.maya_number !== undefined ? b.maya_number : c.maya_number,
     b.payment_instructions !== undefined ? b.payment_instructions : c.payment_instructions

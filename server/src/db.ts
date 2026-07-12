@@ -287,6 +287,8 @@ export function migrate() {
   if (!columnExists('company', 'logo')) db.exec('ALTER TABLE company ADD COLUMN logo TEXT');
   const companyPayCols: [string, string][] = [
     ['payment_qr', 'TEXT'],
+    ['gcash_qr', 'TEXT'],
+    ['maya_qr', 'TEXT'],
     ['gcash_number', 'TEXT'],
     ['maya_number', 'TEXT'],
     ['payment_instructions', 'TEXT'],

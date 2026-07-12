@@ -143,6 +143,12 @@ export default function SubscriberPay() {
   const rejected = data.status === 'rejected';
   const company = data.company || {};
   const accountHint = channel === 'gcash' ? company.gcashNumber : channel === 'maya' ? company.mayaNumber : null;
+  const merchantQr =
+    channel === 'gcash'
+      ? company.gcashQr || company.paymentQr
+      : channel === 'maya'
+        ? company.mayaQr || company.paymentQr
+        : company.gcashQr || company.mayaQr || company.paymentQr || null;
 
   return (
     <div className="min-h-screen relative overflow-hidden">
@@ -236,15 +242,28 @@ export default function SubscriberPay() {
                   )}
                 </div>
 
-                {/* Merchant QR */}
-                {company.paymentQr && (
+                {/* Merchant QR — channel-specific */}
+                {merchantQr && (
                   <div className="flex flex-col items-center gap-2 py-1">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                      {channel === 'gcash' ? 'GCash' : channel === 'maya' ? 'Maya' : 'Scan to pay'} QR
+                    </div>
                     <img
-                      src={company.paymentQr}
+                      src={merchantQr}
                       alt="Payment QR"
-                      className="w-52 h-52 object-contain rounded-2xl border border-slate-200 bg-white p-2 shadow-sm"
+                      className="w-56 h-auto max-h-72 object-contain rounded-2xl border border-slate-200 bg-white p-2 shadow-sm"
                     />
-                    <div className="text-xs text-slate-400">Scan with {channel === 'maya' ? 'Maya' : channel === 'gcash' ? 'GCash' : 'GCash / Maya'}</div>
+                    <div className="text-xs text-slate-400 text-center px-2">
+                      {channel
+                        ? `Open ${channel === 'maya' ? 'Maya' : 'GCash'} → Scan QR → pay the exact amount`
+                        : 'Select GCash or Maya above, then scan the matching QR'}
+                    </div>
+                  </div>
+                )}
+                {!merchantQr && channel && (
+                  <div className="text-xs text-amber-800 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2">
+                    No {channel === 'maya' ? 'Maya' : 'GCash'} QR uploaded yet. Your ISP should add it under Company settings.
+                    {accountHint ? <> Meanwhile send to <span className="font-mono font-semibold">{accountHint}</span>.</> : null}
                   </div>
                 )}
 
