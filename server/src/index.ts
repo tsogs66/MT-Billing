@@ -94,6 +94,7 @@ import {
   startNotifyScheduler,
   getSettings as getNotifySettingsRaw,
   isExpiredAccount,
+  isNonPaymentAccount,
 } from './notify.js';
 
 initSchema();
@@ -473,19 +474,23 @@ app.get('/api/dashboard/status', async (req, res) => {
     routerId: number;
     subscriptionDue: string | null;
     nonpaymentSince: string | null;
+    expirationProfile: string | null;
+    mikrotikProfile: string | null;
   };
   let rows = (routerId
     ? db
         .prepare(
           `SELECT username, status, status AS panelStatus, online, router_id AS routerId,
-                  subscription_due AS subscriptionDue, nonpayment_since AS nonpaymentSince
+                  subscription_due AS subscriptionDue, nonpayment_since AS nonpaymentSince,
+                  expiration_profile AS expirationProfile, NULL AS mikrotikProfile
            FROM pppoe_users ${where}`
         )
         .all(routerId)
     : db
         .prepare(
           `SELECT username, status, status AS panelStatus, online, router_id AS routerId,
-                  subscription_due AS subscriptionDue, nonpayment_since AS nonpaymentSince
+                  subscription_due AS subscriptionDue, nonpayment_since AS nonpaymentSince,
+                  expiration_profile AS expirationProfile, NULL AS mikrotikProfile
            FROM pppoe_users`
         )
         .all()) as StatusRow[];
@@ -497,11 +502,36 @@ app.get('/api/dashboard/status', async (req, res) => {
     try {
       const [secrets, sessions] = await Promise.all([fetchPppSecrets(router), fetchPppActive(router)]);
       const enriched = enrichPppUsersFromLive(subset, secrets, sessions);
+      const markNp = db.prepare(
+        `UPDATE pppoe_users
+         SET status = 'non-payment',
+             nonpayment_since = COALESCE(nonpayment_since, ?)
+         WHERE router_id = ? AND username = ? AND lower(status) = 'active'`
+      );
+      const nowIso = new Date().toISOString();
       for (let i = 0; i < subset.length; i++) {
-        // Keep DB billing status separately — live "disabled" must not hide expired/non-payment counts.
-        subset[i].panelStatus = enriched[i].panelStatus || subset[i].status;
-        subset[i].status = enriched[i].status;
-        subset[i].online = enriched[i].online;
+        const e = enriched[i];
+        let panel = String(e.panelStatus || subset[i].status || '');
+        const mtProfile = e.mikrotikProfile || null;
+        subset[i].mikrotikProfile = mtProfile;
+        const onNpProfile =
+          !!mtProfile &&
+          (/non[-_\s]?pay/i.test(mtProfile) ||
+            (!!subset[i].expirationProfile &&
+              /non[-_\s]?pay/i.test(String(subset[i].expirationProfile)) &&
+              mtProfile.toLowerCase() === String(subset[i].expirationProfile).toLowerCase()));
+        if (
+          onNpProfile &&
+          String(panel).toLowerCase() === 'active' &&
+          String(e.status).toLowerCase() !== 'disabled'
+        ) {
+          panel = 'non-payment';
+          markNp.run(nowIso, rid, subset[i].username);
+          subset[i].nonpaymentSince = subset[i].nonpaymentSince || nowIso;
+        }
+        subset[i].panelStatus = panel;
+        subset[i].status = e.status;
+        subset[i].online = e.online;
       }
       const updOnline = db.prepare('UPDATE pppoe_users SET online = ? WHERE router_id = ? AND username = ?');
       const updStatus = db.prepare(
@@ -512,10 +542,13 @@ app.get('/api/dashboard/status', async (req, res) => {
           updOnline.run(u.online ? 1 : 0, rid, u.username);
           const panel = String(u.panelStatus || '').toLowerCase().replace(/\s+/g, '-');
           const billingHold =
-            panel === 'non-payment' ||
-            panel === 'nonpayment' ||
-            panel === 'expired' ||
-            !!u.nonpaymentSince ||
+            isNonPaymentAccount({
+              status: u.panelStatus,
+              panelStatus: u.panelStatus,
+              nonpaymentSince: u.nonpaymentSince,
+              mikrotikProfile: u.mikrotikProfile,
+              expirationProfile: (u as any).expirationProfile,
+            }) ||
             isExpiredAccount({
               status: u.panelStatus,
               panelStatus: u.panelStatus,
@@ -549,13 +582,20 @@ app.get('/api/dashboard/status', async (req, res) => {
 
   const panelOf = (r: StatusRow) => String(r.panelStatus || r.status || '').toLowerCase().replace(/\s+/g, '-');
   const liveOf = (r: StatusRow) => String(r.status || '').toLowerCase();
-  const active = rows.filter((r) => panelOf(r) === 'active');
+  const npRow = (r: StatusRow) =>
+    isNonPaymentAccount({
+      status: r.panelStatus || r.status,
+      panelStatus: r.panelStatus || r.status,
+      nonpaymentSince: r.nonpaymentSince,
+      mikrotikProfile: r.mikrotikProfile,
+      expirationProfile: r.expirationProfile,
+    });
+  const active = rows.filter((r) => panelOf(r) === 'active' && !npRow(r));
   res.json({
     total: rows.length,
     online: active.filter((r) => !!r.online).length,
     offline: active.filter((r) => !r.online).length,
     active: active.length,
-    // Overdue by due date + billing statuses (automation uses non-payment, not "expired")
     expired: rows.filter((r) =>
       isExpiredAccount({
         status: r.panelStatus || r.status,
@@ -564,7 +604,7 @@ app.get('/api/dashboard/status', async (req, res) => {
         nonpaymentSince: r.nonpaymentSince,
       })
     ).length,
-    nonPayment: rows.filter((r) => panelOf(r) === 'non-payment' || panelOf(r) === 'nonpayment').length,
+    nonPayment: rows.filter((r) => npRow(r)).length,
     inactive: rows.filter((r) => panelOf(r) === 'inactive').length,
     disabled: rows.filter((r) => liveOf(r) === 'disabled' || panelOf(r) === 'disabled').length,
     live,

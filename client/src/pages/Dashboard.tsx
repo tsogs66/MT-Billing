@@ -317,7 +317,7 @@ function DashboardLicensed() {
     <Layout title="Dashboard">
       <SectionTitle icon={Activity}>Account Status{current ? ` — ${current.name}` : ''}</SectionTitle>
       <p className="text-xs text-slate-500 -mt-2 mb-3">
-        Expired = past subscription due date (includes non-payment / disabled-after-due). Non-payment = currently on the limited profile.
+        Expired = past due date. Non-payment = limited profile / unpaid hold (including disabled after grace).
       </p>
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4 mb-8">
         <StatTile label="Online" value={statusCounts?.online ?? '—'} dot="bg-emerald-500" tone="text-emerald-600" icon={CircleDot} accent="from-emerald-500/15 to-transparent" delay={0} />

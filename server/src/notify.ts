@@ -202,6 +202,38 @@ export function isExpiredAccount(row: {
   return isSubscriptionExpired(due);
 }
 
+/**
+ * Dashboard “Non-payment” accounts: limited / unpaid billing hold.
+ * Includes explicit status, nonpayment_since (also after auto-disable), and
+ * live MikroTik profile on the expire / non-payments profile.
+ */
+export function isNonPaymentAccount(row: {
+  status?: string | null;
+  panelStatus?: string | null;
+  nonpaymentSince?: string | null;
+  nonpayment_since?: string | null;
+  mikrotikProfile?: string | null;
+  expirationProfile?: string | null;
+  expiration_profile?: string | null;
+}): boolean {
+  const panel = String(row.panelStatus ?? row.status ?? '')
+    .toLowerCase()
+    .replace(/\s+/g, '-');
+  if (panel === 'non-payment' || panel === 'nonpayment' || panel === 'expired') return true;
+
+  const npSince = row.nonpaymentSince ?? row.nonpayment_since ?? null;
+  if (npSince) return true;
+
+  const mt = String(row.mikrotikProfile || '').trim().toLowerCase();
+  if (!mt) return false;
+  if (/non[-_\s]?pay/.test(mt)) return true;
+  const exp = String(row.expirationProfile ?? row.expiration_profile ?? '')
+    .trim()
+    .toLowerCase();
+  if (exp && mt === exp && /non[-_\s]?pay/.test(exp)) return true;
+  return false;
+}
+
 function statusKey(status?: string | null): string {
   return String(status || '').toLowerCase().replace(/\s+/g, '-');
 }
