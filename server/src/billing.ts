@@ -8,7 +8,7 @@ import {
   ensurePppProfile,
 } from './mikrotik.js';
 
-const SESSION_REFRESH_MS = 5000;
+const SESSION_REFRESH_MS = 2000;
 
 function needsSessionRefresh(status?: string | null): boolean {
   const s = String(status || '').toLowerCase();
@@ -293,7 +293,7 @@ export async function changePppoeUserPlan(
     sync.ok ? 'info' : 'warning',
     'billing',
     `Plan change for ${updated.username}: ${previousPlan || '—'} → ${plan} (MT profile ${prof.pppProfile})` +
-      (sessionRefresh?.bounced ? ' (5s session bounce)' : sync.error ? ` (router: ${sync.error})` : '')
+      (sessionRefresh?.bounced ? ' (2s session bounce)' : sync.error ? ` (router: ${sync.error})` : '')
   );
 
   return {
@@ -328,7 +328,7 @@ export async function bulkChangePppoeUserPlans(
     phase1.push(await changePppoeUserPlan(id, plan, { bounce: false }));
   }
 
-  // Phase 2: bounce all enabled secrets in parallel (~5s total)
+  // Phase 2: bounce all enabled secrets in parallel (~2s total)
   const bounceJobs = phase1
     .filter((r) => r.ok && r.sync.ok)
     .map(async (r) => {

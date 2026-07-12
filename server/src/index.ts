@@ -20,6 +20,7 @@ import {
   fetchRouterInterfaceTraffic,
   fetchPppSecrets,
   fetchPppActive,
+  fetchPppSecretsAndActive,
   enrichPppUsersFromLive,
   pppNameKey,
   isSystemPppProfileName,
@@ -642,6 +643,8 @@ function secretDisabledFromStatus(status: unknown): boolean {
 app.get('/api/pppoe/users', async (req, res) => {
   const service = String(req.query.service || 'pppoe');
   const routerId = req.query.routerId ? Number(req.query.routerId) : null;
+  // traffic=0 skips expensive per-session monitor-traffic (used by silent UI polls).
+  const wantTraffic = String(req.query.traffic ?? '1') !== '0';
   let rows = (
     routerId
       ? db
@@ -671,25 +674,28 @@ app.get('/api/pppoe/users', async (req, res) => {
   let live = false;
   if (router?.host && router?.api_user) {
     try {
-      const [secrets, sessions] = await Promise.all([fetchPppSecrets(router), fetchPppActive(router)]);
+      // One TCP session for secrets + active (avoids double connect on 1–Ns polls).
+      const { secrets, sessions } = await fetchPppSecretsAndActive(router);
       rows = enrichPppUsersFromLive(rows, secrets, sessions).map((u) => ({ ...u, live: true }));
       live = true;
-      const onlineNames = rows.filter((u) => u.sessionOnline).map((u) => String(u.username));
-      if (onlineNames.length) {
-        try {
-          const traffic = await fetchPppActiveTraffic(router, onlineNames);
-          const byKey = new Map<string, { download: number; upload: number }>();
-          for (const [name, t] of Object.entries(traffic)) byKey.set(pppNameKey(name), t);
-          rows = rows.map((u) => {
-            const t = byKey.get(pppNameKey(u.username));
-            return {
-              ...u,
-              downloadBps: t?.download ?? 0,
-              uploadBps: t?.upload ?? 0,
-            };
-          });
-        } catch {
-          /* traffic optional */
+      if (wantTraffic) {
+        const onlineNames = rows.filter((u) => u.sessionOnline).map((u) => String(u.username));
+        if (onlineNames.length) {
+          try {
+            const traffic = await fetchPppActiveTraffic(router, onlineNames);
+            const byKey = new Map<string, { download: number; upload: number }>();
+            for (const [name, t] of Object.entries(traffic)) byKey.set(pppNameKey(name), t);
+            rows = rows.map((u) => {
+              const t = byKey.get(pppNameKey(u.username));
+              return {
+                ...u,
+                downloadBps: t?.download ?? 0,
+                uploadBps: t?.upload ?? 0,
+              };
+            });
+          } catch {
+            /* traffic optional */
+          }
         }
       }
     } catch {
@@ -1641,6 +1647,7 @@ app.delete('/api/pppoe/profiles/:id', async (req, res) => {
 app.get('/api/pppoe/active', async (req, res) => {
   const service = String(req.query.service || 'pppoe');
   const routerId = req.query.routerId ? Number(req.query.routerId) : null;
+  const wantTraffic = String(req.query.traffic ?? '1') !== '0';
   const router = getRouterById(routerId);
   if (!router) {
     return res.status(400).json({ error: 'Select a router in the top bar.', sessions: [], live: false });
@@ -1649,7 +1656,7 @@ app.get('/api/pppoe/active', async (req, res) => {
     return res.status(400).json({ error: 'Router API credentials not configured.', sessions: [], live: false });
   }
   try {
-    const [sessions, secrets] = await Promise.all([fetchPppActive(router), fetchPppSecrets(router)]);
+    const { secrets, sessions } = await fetchPppSecretsAndActive(router);
     const users = db
       .prepare(
         `SELECT username, customer_name AS customer, profile FROM pppoe_users WHERE service = ? AND router_id = ?`
@@ -1661,13 +1668,15 @@ app.get('/api/pppoe/active', async (req, res) => {
       (s) => !service || s.service === 'any' || !s.service || s.service.includes(service) || service === 'pppoe'
     );
     let traffic: Record<string, { download: number; upload: number }> = {};
-    try {
-      traffic = await fetchPppActiveTraffic(
-        router,
-        filtered.map((s) => s.name)
-      );
-    } catch {
-      /* traffic optional */
+    if (wantTraffic) {
+      try {
+        traffic = await fetchPppActiveTraffic(
+          router,
+          filtered.map((s) => s.name)
+        );
+      } catch {
+        /* traffic optional */
+      }
     }
     const out = filtered.map((s) => {
       const key = pppNameKey(s.name);
@@ -2140,16 +2149,16 @@ app.put('/api/ipoe/leases/:mac', async (req, res) => {
   if (becomingActive && wasRestricted && router?.host && router?.api_user && leaseId) {
     try {
       await setDhcpLeaseBlocked(router, leaseId, true);
-      await new Promise((r) => setTimeout(r, 5000));
+      await new Promise((r) => setTimeout(r, 2000));
       await setDhcpLeaseBlocked(router, leaseId, false);
-      sessionRefresh = { bounced: true, waitMs: 5000 };
+      sessionRefresh = { bounced: true, waitMs: 2000 };
     } catch (e: any) {
       try {
         await setDhcpLeaseBlocked(router, leaseId, false);
       } catch {
         /* best-effort */
       }
-      sessionRefresh = { bounced: false, waitMs: 5000, error: e?.message || String(e) };
+      sessionRefresh = { bounced: false, waitMs: 2000, error: e?.message || String(e) };
     }
   } else if (b.blocked != null && routerId && leaseId) {
     if (router?.host && router?.api_user) {

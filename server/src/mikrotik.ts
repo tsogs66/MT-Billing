@@ -691,6 +691,39 @@ export async function fetchPppActive(conn: RouterConn): Promise<PppActiveRow[]> 
   });
 }
 
+/** Secrets + active in one TCP session (avoids double connect on busy list polls). */
+export async function fetchPppSecretsAndActive(conn: RouterConn): Promise<{
+  secrets: PppSecretRow[];
+  sessions: PppActiveRow[];
+}> {
+  return withRouter(conn, async (api) => {
+    const [secretRows, activeRows] = await Promise.all([
+      api.write('/ppp/secret/print') as Promise<Record<string, string>[]>,
+      api.write('/ppp/active/print') as Promise<Record<string, string>[]>,
+    ]);
+    const secrets: PppSecretRow[] = (secretRows || []).map((s) => ({
+      id: s['.id'] || '',
+      name: s.name || '',
+      password: s.password || '',
+      profile: s.profile || '',
+      service: s.service || 'pppoe',
+      comment: s.comment || '',
+      disabled: rosBool(s.disabled),
+      callerId: s['caller-id'] || '',
+    }));
+    const sessions: PppActiveRow[] = (activeRows || []).map((a) => ({
+      id: a['.id'] || '',
+      name: a.name || '',
+      address: a.address || '-',
+      uptime: a.uptime || '-',
+      caller: a['caller-id'] || a.caller || '-',
+      service: a.service || 'pppoe',
+      profile: a.profile || '-',
+    }));
+    return { secrets, sessions };
+  }, { timeoutSec: 20 });
+}
+
 /** Case-insensitive lookup for PPP secret / active session names. */
 export function pppNameKey(name: string | null | undefined): string {
   return String(name || '').trim().toLowerCase();
@@ -1189,9 +1222,11 @@ export async function fetchPppActiveTraffic(
       if (m) byUser.set(pppNameKey(m[1]), name);
     }
     const out: Record<string, { download: number; upload: number }> = {};
-    const wanted = usernames.filter((u) => byUser.has(pppNameKey(u)));
     // Probe a few at a time — each monitor-traffic is a round trip.
-    const CONC = 6;
+    // Cap concurrency and total probes so list polls cannot melt the router/host.
+    const CONC = 4;
+    const MAX_PROBE = 20;
+    const wanted = usernames.filter((u) => byUser.has(pppNameKey(u))).slice(0, MAX_PROBE);
     for (let i = 0; i < wanted.length; i += CONC) {
       const chunk = wanted.slice(i, i + CONC);
       await Promise.all(

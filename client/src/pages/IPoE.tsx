@@ -813,7 +813,7 @@ function LeasePayModal({ lease, plans, onClose, onSaved }: any) {
       </FormField>
       {/non.?pay|disabled|blocked/i.test(String(lease.payment || '')) || lease.blocked ? (
         <p className="text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2 mt-3">
-          This lease was restricted. Payment will briefly bounce the MikroTik lease (~5s) to refresh the active binding.
+          This lease was restricted. Payment will briefly bounce the MikroTik lease (~2s) to refresh the active binding.
         </p>
       ) : null}
     </Modal>

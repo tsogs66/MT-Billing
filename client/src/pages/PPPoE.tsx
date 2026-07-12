@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Users, WifiOff, Activity, Layers, Server, ReceiptText, Plus, Pencil, Trash2, KeyRound, Eye, EyeOff, MapPin, DownloadCloud, RefreshCw, Link2, ShieldOff, ShieldCheck, Loader2, ClipboardCheck } from 'lucide-react';
 import Layout from '../components/Layout';
 import {
@@ -144,10 +144,33 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
   const routerQ = current?.id ? `&routerId=${current.id}` : '';
   const routerParams = current?.id ? { routerId: current.id } : {};
 
-  const loadUsers = (opts?: { silent?: boolean }) =>
-    api.get(`/pppoe/users?service=${service}${routerQ}`).then((r) => setUsers(r.data)).catch(() => {
-      if (!opts?.silent) setUsers([]);
-    });
+  const loadUsers = (opts?: { silent?: boolean; traffic?: boolean }) => {
+    // Full loads include live traffic; silent polls skip it unless traffic:true.
+    const includeTraffic = opts?.traffic ?? !opts?.silent;
+    const q = `/pppoe/users?service=${service}${routerQ}&traffic=${includeTraffic ? 1 : 0}`;
+    return api
+      .get(q)
+      .then((r) => {
+        const next = Array.isArray(r.data) ? r.data : [];
+        if (opts?.silent && !includeTraffic) {
+          setUsers((prev) => {
+            const prevById = new Map(prev.map((u) => [u.id, u]));
+            return next.map((u: PUser) => {
+              const old = prevById.get(u.id);
+              if (old && (old.downloadBps || old.uploadBps)) {
+                return { ...u, downloadBps: old.downloadBps, uploadBps: old.uploadBps };
+              }
+              return u;
+            });
+          });
+        } else {
+          setUsers(next);
+        }
+      })
+      .catch(() => {
+        if (!opts?.silent) setUsers([]);
+      });
+  };
 
   const loadProfiles = () =>
     api
@@ -161,15 +184,30 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
       })
       .catch(() => setProfiles([]));
 
-  const loadActive = (opts?: { silent?: boolean }) => {
+  const loadActive = (opts?: { silent?: boolean; traffic?: boolean }) => {
     if (!opts?.silent) {
       setTabBusy(true);
       setTabError('');
     }
+    const includeTraffic = opts?.traffic ?? !opts?.silent;
     return api
-      .get('/pppoe/active', { params: { service, ...routerParams } })
+      .get('/pppoe/active', { params: { service, ...routerParams, traffic: includeTraffic ? 1 : 0 } })
       .then((r) => {
-        setActive(r.data.sessions || (Array.isArray(r.data) ? r.data : []));
+        const next = r.data.sessions || (Array.isArray(r.data) ? r.data : []);
+        if (opts?.silent && !includeTraffic) {
+          setActive((prev) => {
+            const prevByName = new Map(prev.map((s: any) => [String(s.username), s]));
+            return next.map((s: any) => {
+              const old = prevByName.get(String(s.username));
+              if (old && (old.downloadBps || old.uploadBps)) {
+                return { ...s, downloadBps: old.downloadBps, uploadBps: old.uploadBps };
+              }
+              return s;
+            });
+          });
+        } else {
+          setActive(next);
+        }
         if (r.data.error) setTabError(r.data.error);
       })
       .catch((e) => {
@@ -340,18 +378,43 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, current?.id]);
 
-  // Live traffic polling on Users / Offline / Active tabs
+  // Live status polling on Users / Offline / Active tabs.
+  // Avoid hammering MikroTik: longer interval, no overlapping requests, pause during mutations,
+  // and skip expensive per-user monitor-traffic on silent polls.
+  const usersPollInFlight = useRef(false);
+  const usersPollTick = useRef(0);
   useEffect(() => {
     if (!current?.id) return;
     if (tab !== 'users' && tab !== 'offline' && tab !== 'active') return;
-    const tick = () => {
-      if (tab === 'active') loadActive({ silent: true });
-      else loadUsers({ silent: true });
+    const tick = async () => {
+      if (toggleBusy || bulkBusy || fetching || toggleFor) return;
+      if (tab === 'active') {
+        if (usersPollInFlight.current) return;
+        usersPollInFlight.current = true;
+        usersPollTick.current += 1;
+        const withTraffic = usersPollTick.current % 4 === 0;
+        try {
+          await loadActive({ silent: true, traffic: withTraffic });
+        } finally {
+          usersPollInFlight.current = false;
+        }
+        return;
+      }
+      if (usersPollInFlight.current) return;
+      usersPollInFlight.current = true;
+      usersPollTick.current += 1;
+      // Every 4th poll (~12s) also refreshes live traffic rates.
+      const withTraffic = usersPollTick.current % 4 === 0;
+      try {
+        await loadUsers({ silent: true, traffic: withTraffic });
+      } finally {
+        usersPollInFlight.current = false;
+      }
     };
-    const id = setInterval(tick, 1000);
+    const id = setInterval(tick, 3000);
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, current?.id, service]);
+  }, [tab, current?.id, service, toggleBusy, bulkBusy, fetching, toggleFor]);
 
   const filtered = users.filter(
     (u) =>
@@ -428,7 +491,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
       const failed = Array.isArray(r.data.failed) ? r.data.failed.length : 0;
       showToast(
         `Plan → ${r.data.plan}: ${r.data.updated} updated` +
-          (r.data.bounced ? `, ${r.data.bounced} session refresh (5s)` : '') +
+          (r.data.bounced ? `, ${r.data.bounced} session refresh (2s)` : '') +
           (failed ? `, ${failed} failed` : '')
       );
       setShowBulkPlan(false);
@@ -468,7 +531,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
       const failed = Array.isArray(r.data.failed) ? r.data.failed.length : 0;
       showToast(
         `MT profile → ${r.data.profile}: ${r.data.updated} updated` +
-          (r.data.bounced ? `, ${r.data.bounced} session refresh (5s)` : '') +
+          (r.data.bounced ? `, ${r.data.bounced} session refresh (2s)` : '') +
           (failed ? `, ${failed} failed` : '')
       );
       setShowBulkProfile(false);
@@ -1049,7 +1112,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
               </select>
             </FormField>
             <div className="text-xs text-amber-800 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2 leading-relaxed">
-              After confirm, each secret is updated then disabled for <b>5 seconds</b> and enabled again so active sessions pick up the new plan.
+              After confirm, each secret is updated then disabled for <b>2 seconds</b> and enabled again so active sessions pick up the new plan.
             </div>
           </div>
         </Modal>
@@ -1095,7 +1158,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
               </select>
             </FormField>
             <div className="text-xs text-amber-800 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2 leading-relaxed">
-              After confirm, each secret’s profile is set on MikroTik, then disabled for <b>5 seconds</b> and enabled again so active sessions pick it up.
+              After confirm, each secret’s profile is set on MikroTik, then disabled for <b>2 seconds</b> and enabled again so active sessions pick it up.
             </div>
           </div>
         </Modal>
@@ -1528,7 +1591,7 @@ function ProcessPaymentModal({ user, plans, onClose, onPaid }: { user: PUser; pl
       const bounced = r.data.sessionRefresh?.bounced;
       onPaid(
         `Payment of ${peso(r.data.total)} recorded for ${user.username}. Due ${r.data.previousDue} \u2192 ${r.data.subscriptionDue}` +
-          (bounced ? ' · MikroTik session refreshed (5s bounce)' : '') +
+          (bounced ? ' · MikroTik session refreshed (2s bounce)' : '') +
           (r.data.emailed ? ' · receipt emailed' : '')
       );
     } catch (e: any) {
@@ -1555,7 +1618,7 @@ function ProcessPaymentModal({ user, plans, onClose, onPaid }: { user: PUser; pl
       {error && <div className="text-sm text-rose-600 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2 mb-4">{error}</div>}
       {willRefreshSession && (
         <div className="text-xs text-amber-800 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2 mb-4">
-          Account is <b>{user.status}</b>. After payment, MikroTik will disable the secret for 5 seconds then enable it again to refresh the active session.
+          Account is <b>{user.status}</b>. After payment, MikroTik will disable the secret for 2 seconds then enable it again to refresh the active session.
         </div>
       )}
 
