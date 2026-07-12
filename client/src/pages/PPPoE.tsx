@@ -1338,7 +1338,7 @@ function PlanFormModal({
   return (
     <Modal
       title={isEdit ? 'Edit Billing Plan' : 'Add New Plan'}
-      subtitle="Plan is stored in the PPP secret comment. Profile is the existing MikroTik /ppp/profile applied to the secret."
+      subtitle="Plan name is panel billing only. Profile is a reference to an existing MikroTik /ppp/profile — nothing is created on the router."
       onClose={onClose}
       footer={<ModalFooter onCancel={onClose} onConfirm={save} confirmLabel={isEdit ? 'Save Changes' : 'Create Plan'} busy={busy} />}
     >
@@ -1352,7 +1352,7 @@ function PlanFormModal({
           required
           hint={
             profileOptions.length
-              ? 'Must already exist on MikroTik (Profiles tab). Changing a user’s plan applies this profile — it is not created.'
+              ? 'Reference only — must already exist on MikroTik (Profiles tab). Payment and plan changes apply this profile to /ppp/secret without creating it.'
               : 'No PPP profiles yet — fetch or add profiles on the Profiles tab first.'
           }
         >

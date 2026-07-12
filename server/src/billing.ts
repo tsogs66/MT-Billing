@@ -174,18 +174,18 @@ export function getBillingPlan(planName: string): {
     .prepare('SELECT name, price, rate_limit, ppp_profile FROM profiles WHERE name = ?')
     .get(plan) as { name: string; price: number; rate_limit?: string; ppp_profile?: string } | undefined;
   if (!row) return null;
-  const linked = String(row.ppp_profile || '').trim();
   return {
     name: row.name,
     price: Number(row.price) || 0,
     rateLimit: String(row.rate_limit || '').trim(),
-    pppProfile: linked || row.name,
+    // Linked MikroTik profile only — never fall back to the plan name (do not invent profiles).
+    pppProfile: String(row.ppp_profile || '').trim(),
   };
 }
 
 /** MikroTik /ppp/secret profile name for a billing plan (never creates profiles). */
 export function mikrotikProfileForPlan(planName: string): string {
-  return getBillingPlan(planName)?.pppProfile || String(planName || '').trim();
+  return getBillingPlan(planName)?.pppProfile || '';
 }
 
 /**
@@ -510,9 +510,16 @@ export async function syncUserToRouter(
       }
     } else if (action === 'enable' || action === 'restore') {
       const mtProfile = mikrotikProfileForPlan(user.profile);
+      if (!mtProfile) {
+        return {
+          ok: false,
+          error: `Billing plan "${user.profile}" has no linked MikroTik PPP profile — set it under Billing Plans`,
+        };
+      }
+      // Apply existing profile only — never create /ppp/profile on the router.
       await updatePppSecret(router, user.username, {
         password: user.password || '',
-        profile: mtProfile || undefined,
+        profile: mtProfile,
         comment: commentFromUser({ ...user, status: 'Active' }),
         disabled: false,
       });
@@ -546,8 +553,14 @@ export async function recordPppoePayment(
   const previousDue: string = (user.subscription_due || new Date().toISOString().slice(0, 10)).slice(0, 10);
   const newDue = addMonthsPreserveDay(previousDue, months);
   const plan = opts.plan || user.profile;
-  const prof = db.prepare('SELECT price FROM profiles WHERE name = ?').get(plan) as { price: number } | undefined;
-  const unit = prof?.price ?? (Number(user.price) || 0);
+  const planMeta = getBillingPlan(plan);
+  if (!planMeta) throw new Error(`Billing plan "${plan}" not found`);
+  if (!planMeta.pppProfile) {
+    throw new Error(
+      `Billing plan "${plan}" has no linked MikroTik PPP profile. Edit the plan and select an existing profile.`
+    );
+  }
+  const unit = planMeta.price || Number(user.price) || 0;
   const subtotal = unit * months;
   const discountDays = Math.max(0, Math.floor(Number(opts.discount_days) || 0));
   const discount = Math.round((unit / 30) * discountDays * 100) / 100;
@@ -569,7 +582,7 @@ export async function recordPppoePayment(
   db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
     'info',
     'billing',
-    `Payment for ${user.username}: ${plan} +${months}mo, due ${previousDue} → ${newDue}, total ${total}${opts.source ? ` (${opts.source})` : ''}${opts.external_ref ? ` ref=${opts.external_ref}` : ''}`
+    `Payment for ${user.username}: ${plan} (MT profile ${planMeta.pppProfile}) +${months}mo, due ${previousDue} → ${newDue}, total ${total}${opts.source ? ` (${opts.source})` : ''}${opts.external_ref ? ` ref=${opts.external_ref}` : ''}`
   );
 
   const updated = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(userId) as any;

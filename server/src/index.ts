@@ -782,10 +782,16 @@ app.post('/api/pppoe/users', async (req, res) => {
   try {
     const planMeta = getBillingPlan(row.profile);
     const mtProfile = planMeta?.pppProfile || mikrotikProfileForPlan(row.profile);
+    if (!mtProfile) {
+      db.prepare('DELETE FROM pppoe_users WHERE id = ?').run(insertedId);
+      return res.status(400).json({
+        error: `Billing plan "${row.profile}" has no linked MikroTik PPP profile. Edit the plan under Billing Plans and select an existing profile.`,
+      });
+    }
     await addPppSecret(router, {
       name: row.username,
       password: row.password || '',
-      profile: mtProfile || undefined,
+      profile: mtProfile,
       service: row.service === 'ipoe' ? 'pppoe' : row.service || 'pppoe',
       comment: commentFromPppoeUser(row),
       disabled: secretDisabledFromStatus(row.status),
@@ -854,16 +860,23 @@ app.put('/api/pppoe/users/:id', async (req, res) => {
     try {
       const planMeta = getBillingPlan(row.profile);
       const mtProfile = planMeta?.pppProfile || mikrotikProfileForPlan(row.profile);
-      // Non-payment / disabled: keep expire profile or disabled; Active → billing plan's MT profile
       const st = String(row.status || '').toLowerCase();
       const expireProf =
         row.expiration_profile && row.expiration_profile !== 'default'
           ? row.expiration_profile
           : 'non-payments';
+      if (st !== 'non-payment' && st !== 'nonpayment' && st !== 'disabled' && !mtProfile) {
+        return res.status(400).json({
+          error: `Billing plan "${row.profile}" has no linked MikroTik PPP profile. Edit the plan under Billing Plans and select an existing profile.`,
+          user: row,
+        });
+      }
       const secretProfile =
         st === 'non-payment' || st === 'nonpayment'
           ? expireProf
-          : mtProfile || undefined;
+          : st === 'disabled'
+            ? undefined
+            : mtProfile;
       await updatePppSecret(router, existing.username, {
         password: row.password || '',
         profile: secretProfile,
@@ -1354,8 +1367,15 @@ app.post('/api/pppoe/fetch-mikrotik', async (req, res) => {
 app.get('/api/pppoe/profiles', async (req, res) => {
   const routerId = req.query.routerId ? Number(req.query.routerId) : null;
   const includeSystem = String(req.query.includeSystem || '') === '1';
+  // Billing plans (type=plan) are references only — never list them as PPP profiles.
   const dbProfiles = (
-    db.prepare('SELECT id, name, rate_limit AS rateLimit, price, type FROM profiles ORDER BY name').all() as any[]
+    db
+      .prepare(
+        `SELECT id, name, rate_limit AS rateLimit, price, type FROM profiles
+         WHERE coalesce(type, 'pppoe') != 'plan'
+         ORDER BY name`
+      )
+      .all() as any[]
   ).filter((p) => includeSystem || !isSystemPppProfileName(p.name));
   const router = getRouterById(routerId);
   if (!router?.host || !router?.api_user) {
@@ -1380,7 +1400,7 @@ app.get('/api/pppoe/profiles', async (req, res) => {
           live: true,
         };
       });
-    // Include DB-only billing plans not present on the router.
+    // Include DB-only PPP profile rows not present on the router (not billing plans).
     for (const p of dbProfiles) {
       if (!merged.some((m) => m.name === p.name)) {
         merged.push({ ...p, mikrotikId: null, live: false });
@@ -1596,7 +1616,10 @@ app.get('/api/pppoe/servers', async (req, res) => {
 app.get('/api/billing-plans', (_req, res) => {
   const rows = db
     .prepare(
-      'SELECT id, name, rate_limit AS rateLimit, price, ppp_profile AS pppProfile FROM profiles ORDER BY name'
+      `SELECT id, name, rate_limit AS rateLimit, price, ppp_profile AS pppProfile, type
+       FROM profiles
+       WHERE coalesce(type, 'pppoe') = 'plan'
+       ORDER BY name`
     )
     .all() as any[];
   res.json(rows.filter((p) => !isSystemPppProfileName(p.name)));
@@ -1615,16 +1638,25 @@ app.post('/api/billing-plans', (req, res) => {
   if (isSystemPppProfileName(pppProfile)) {
     return res.status(400).json({ error: 'Link a customer PPP profile, not default / non-payments' });
   }
-  // Copy rate limit from the linked profile row when available (for fair-use display).
-  const linked = db.prepare('SELECT rate_limit FROM profiles WHERE name = ?').get(pppProfile) as
-    | { rate_limit?: string }
-    | undefined;
+  // Reference only — copy rate limit for fair-use display; never create a MikroTik profile.
+  const linked = db
+    .prepare(`SELECT rate_limit FROM profiles WHERE name = ? AND coalesce(type, 'pppoe') != 'plan'`)
+    .get(pppProfile) as { rate_limit?: string } | undefined;
   const rateLimit = String(b.rateLimit || b.rate_limit || linked?.rate_limit || '').trim();
-  const exists = db.prepare('SELECT id FROM profiles WHERE name = ?').get(name);
-  if (exists) return res.status(409).json({ error: 'A plan with that name already exists' });
+  const exists = db.prepare('SELECT id, type FROM profiles WHERE name = ?').get(name) as
+    | { id: number; type?: string }
+    | undefined;
+  if (exists) {
+    if (String(exists.type || '') === 'plan') {
+      return res.status(409).json({ error: 'A plan with that name already exists' });
+    }
+    return res.status(409).json({
+      error: `Name "${name}" is already used by a PPP profile. Use a different plan name.`,
+    });
+  }
   const info = db
     .prepare('INSERT INTO profiles (name, rate_limit, price, type, ppp_profile) VALUES (?, ?, ?, ?, ?)')
-    .run(name, rateLimit, price, 'pppoe', pppProfile);
+    .run(name, rateLimit, price, 'plan', pppProfile);
   res
     .status(201)
     .json(
@@ -1657,24 +1689,30 @@ app.put('/api/billing-plans/:id', (req, res) => {
   if (isSystemPppProfileName(pppProfile)) {
     return res.status(400).json({ error: 'Link a customer PPP profile, not default / non-payments' });
   }
-  const linked = db.prepare('SELECT rate_limit FROM profiles WHERE name = ?').get(pppProfile) as
-    | { rate_limit?: string }
-    | undefined;
+  const linked = db
+    .prepare(`SELECT rate_limit FROM profiles WHERE name = ? AND coalesce(type, 'pppoe') != 'plan'`)
+    .get(pppProfile) as { rate_limit?: string } | undefined;
   const rateLimit = String(
     b.rateLimit ?? b.rate_limit ?? linked?.rate_limit ?? existing.rate_limit ?? ''
   ).trim();
-  const conflict = db.prepare('SELECT id FROM profiles WHERE name = ? AND id != ?').get(name, id);
-  if (conflict) return res.status(409).json({ error: 'A plan with that name already exists' });
+  const conflict = db.prepare('SELECT id, type FROM profiles WHERE name = ? AND id != ?').get(name, id) as
+    | { id: number; type?: string }
+    | undefined;
+  if (conflict) {
+    return res.status(409).json({
+      error:
+        String(conflict.type || '') === 'plan'
+          ? 'A plan with that name already exists'
+          : `Name "${name}" is already used by a PPP profile. Use a different plan name.`,
+    });
+  }
   if (name !== existing.name) {
     db.prepare('UPDATE pppoe_users SET profile = ? WHERE profile = ?').run(name, existing.name);
   }
-  db.prepare('UPDATE profiles SET name = ?, rate_limit = ?, price = ?, ppp_profile = ? WHERE id = ?').run(
-    name,
-    rateLimit,
-    price,
-    pppProfile,
-    id
-  );
+  // type=plan: panel reference only — never pushes /ppp/profile to MikroTik.
+  db.prepare(
+    `UPDATE profiles SET name = ?, rate_limit = ?, price = ?, ppp_profile = ?, type = 'plan' WHERE id = ?`
+  ).run(name, rateLimit, price, pppProfile, id);
   res.json(
     db
       .prepare(

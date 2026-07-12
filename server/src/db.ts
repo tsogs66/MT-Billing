@@ -541,10 +541,24 @@ function ensureBillingPlans() {
     ['UNLI1000', '100M/100M', 1000],
   ];
   const has = db.prepare('SELECT 1 FROM profiles WHERE name = ?');
-  const ins = db.prepare('INSERT INTO profiles (name, rate_limit, price, type) VALUES (?, ?, ?, ?)');
+  const ins = db.prepare(
+    'INSERT INTO profiles (name, rate_limit, price, type, ppp_profile) VALUES (?, ?, ?, ?, ?)'
+  );
   for (const [name, rate, price] of plans) {
-    if (!has.get(name)) ins.run(name, rate, price, 'pppoe');
+    if (!has.get(name)) ins.run(name, rate, price, 'plan', null);
   }
+  // Legacy rows that were stored as type=pppoe but are billing plans.
+  db.prepare(
+    `UPDATE profiles SET type = 'plan'
+     WHERE name IN ('UNLI500', 'UNLI700', 'UNLI1000')
+       AND coalesce(type, 'pppoe') != 'plan'`
+  ).run();
+  db.prepare(
+    `UPDATE profiles SET type = 'plan'
+     WHERE coalesce(type, 'pppoe') = 'pppoe'
+       AND ppp_profile IS NOT NULL
+       AND trim(ppp_profile) != ''`
+  ).run();
 }
 
 /** Predefined IPoE speed profiles + billing plans (editable in the IPoE UI). */
