@@ -281,11 +281,11 @@ export default function Notifications() {
 
             <div className="border-t border-slate-100 pt-3" />
 
-            <Row icon={<PowerOff size={16} className="text-rose-500" />} label="Auto-disable on non-payment" desc="Disconnect overdue clients automatically">
+            <Row icon={<PowerOff size={16} className="text-rose-500" />} label="Auto-disable on non-payment" desc="Disable when overdue past the grace period (from due date)">
               <Toggle label="Auto-disable on non-payment" on={!!settings.autodisable_enabled} onChange={() => saveSettings({ autodisable_enabled: settings.autodisable_enabled ? 0 : 1 })} />
             </Row>
             <div className="flex items-center justify-between text-sm pl-7">
-              <span className="text-slate-500">Disable after this many hours of non-payment</span>
+              <span className="text-slate-500">Grace hours after due date (within grace → non-payment profile)</span>
               <input
                 type="number"
                 min={1}
