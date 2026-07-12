@@ -4,14 +4,17 @@ import Layout from '../components/Layout';
 import { SettingsSection, FormField, Flash, LoadingPage } from '../components/ui';
 import { api } from '../api';
 import { useCompany } from '../context/CompanyContext';
+import { cropMerchantQr } from '../lib/cropMerchantQr';
 
 export default function Company() {
   const { refresh } = useCompany();
   const [company, setCompany] = useState<any>(null);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState('');
+  const [info, setInfo] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
   const [fileName, setFileName] = useState('No file chosen');
+  const [qrBusy, setQrBusy] = useState<string | null>(null);
 
   useEffect(() => {
     api.get('/company').then((r) => setCompany(r.data));
@@ -31,6 +34,37 @@ export default function Company() {
     reader.readAsDataURL(file);
   };
 
+  const uploadMerchantQr = async (key: 'gcash_qr' | 'maya_qr', label: string) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/png,image/jpeg,image/webp';
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      if (file.size > 3 * 1024 * 1024) {
+        setError(`${label} must be 3MB or smaller.`);
+        return;
+      }
+      setError('');
+      setInfo('');
+      setQrBusy(key);
+      try {
+        const { dataUrl, cropped } = await cropMerchantQr(file);
+        setCompany((c: any) => ({ ...c, [key]: dataUrl }));
+        setInfo(
+          cropped
+            ? `${label}: cropped to the QR code only. Save Changes to apply.`
+            : `${label}: no QR detected in the image — uploaded as-is. Save Changes to apply.`,
+        );
+      } catch {
+        setError(`Could not process ${label} image.`);
+      } finally {
+        setQrBusy(null);
+      }
+    };
+    input.click();
+  };
+
   const save = async () => {
     const r = await api.put('/company', company);
     setCompany(r.data);
@@ -44,6 +78,7 @@ export default function Company() {
   return (
     <Layout title="Company">
       <Flash message={error} type="error" onDismiss={() => setError('')} />
+      <Flash message={info} type="info" onDismiss={() => setInfo('')} />
       {saved && <Flash message="Company profile saved successfully." type="success" onDismiss={() => setSaved(false)} />}
 
       <SettingsSection icon={Building2} title="Company Branding & Information">
@@ -95,18 +130,21 @@ export default function Company() {
           <div className="border-t border-slate-100 pt-5" />
           <div className="text-sm font-semibold text-slate-800">Subscriber payment (GCash / Maya)</div>
           <p className="text-xs text-slate-400 -mt-3">
-            Upload each merchant QR separately. The pay page shows the matching QR when the subscriber picks GCash or Maya.
+            Upload each merchant QR (or a full GCash/Maya screenshot). We auto-crop to the QR code when possible.
+            The pay page shows the matching QR when the subscriber picks GCash or Maya.
           </p>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
             {([
-              { key: 'gcash_qr', label: 'GCash QR', accent: 'bg-sky-50 border-sky-100' },
-              { key: 'maya_qr', label: 'Maya QR', accent: 'bg-emerald-50 border-emerald-100' },
-            ] as const).map(({ key, label, accent }) => (
+              { key: 'gcash_qr' as const, label: 'GCash QR', accent: 'bg-sky-50 border-sky-100' },
+              { key: 'maya_qr' as const, label: 'Maya QR', accent: 'bg-emerald-50 border-emerald-100' },
+            ]).map(({ key, label, accent }) => (
               <div key={key} className={`rounded-2xl border p-4 ${accent}`}>
                 <div className="text-sm font-medium text-slate-700 mb-2">{label}</div>
                 <div className="border border-white/80 rounded-xl h-44 flex items-center justify-center bg-white overflow-hidden mb-3">
-                  {company[key] ? (
+                  {qrBusy === key ? (
+                    <span className="text-slate-400 text-sm">Cropping QR…</span>
+                  ) : company[key] ? (
                     <img src={company[key]} alt={label} className="max-h-40 max-w-[95%] object-contain" />
                   ) : (
                     <span className="text-slate-300 text-sm">No QR uploaded</span>
@@ -116,23 +154,8 @@ export default function Company() {
                   <button
                     type="button"
                     className="btn-secondary text-xs py-1.5"
-                    onClick={() => {
-                      const input = document.createElement('input');
-                      input.type = 'file';
-                      input.accept = 'image/png,image/jpeg,image/webp';
-                      input.onchange = () => {
-                        const file = input.files?.[0];
-                        if (!file) return;
-                        if (file.size > 3 * 1024 * 1024) {
-                          setError(`${label} must be 3MB or smaller.`);
-                          return;
-                        }
-                        const reader = new FileReader();
-                        reader.onload = () => setCompany((c: any) => ({ ...c, [key]: reader.result }));
-                        reader.readAsDataURL(file);
-                      };
-                      input.click();
-                    }}
+                    disabled={qrBusy !== null}
+                    onClick={() => uploadMerchantQr(key, label)}
                   >
                     <UploadCloud size={14} /> Upload {label}
                   </button>
