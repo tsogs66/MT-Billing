@@ -322,7 +322,11 @@ export default function SubscriberPay() {
                         <button
                           type="button"
                           className="bg-white/95 text-xs px-2 py-1 rounded-lg border border-slate-200"
-                          onClick={() => { setScreenshot(null); setOcrHints([]); fileRef.current && (fileRef.current.value = ''); }}
+                          onClick={() => {
+                            setScreenshot(null);
+                            setOcrHints([]);
+                            if (fileRef.current) fileRef.current.value = '';
+                          }}
                         >
                           Remove
                         </button>
