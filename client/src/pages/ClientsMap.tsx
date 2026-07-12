@@ -27,7 +27,7 @@ interface Client {
   rxBps?: number; txBps?: number; rxGB?: number; txGB?: number; topology?: string;
 }
 
-type ClientState = 'online' | 'offline' | 'disabled';
+type ClientState = 'online' | 'offline' | 'expired' | 'non-payment' | 'disabled';
 type RouteKind = 'server-olt' | 'olt-nap' | 'nap-client';
 
 function fmtRate(bps?: number): string {
@@ -42,18 +42,28 @@ function fmtGB(gb?: number): string {
 }
 
 function clientState(c: Client): ClientState {
-  const s = (c.status || '').toLowerCase();
-  // Live session wins — connected users are online even if DB status lagged as disabled.
-  if (c.online && !['expired', 'non-payment'].includes(s)) return 'online';
-  if (['disabled', 'inactive', 'expired', 'non-payment'].includes(s)) return 'disabled';
+  const s = (c.status || '').toLowerCase().replace(/\s+/g, '-');
+  if (s === 'expired') return 'expired';
+  if (s === 'non-payment' || s === 'nonpayment') return 'non-payment';
+  if (s === 'disabled' || s === 'inactive') return 'disabled';
+  // Live session wins for otherwise-active accounts
+  if (c.online) return 'online';
   return 'offline';
 }
 
 const CLIENT_COLORS: Record<ClientState, { fill: string; glow: string }> = {
   online: { fill: '#22c55e', glow: 'rgba(34,197,94,0.55)' },
-  offline: { fill: '#ef4444', glow: 'rgba(239,68,68,0.45)' },
-  disabled: { fill: '#ef4444', glow: 'rgba(239,68,68,0.35)' },
+  offline: { fill: '#ef4444', glow: 'rgba(239,68,68,0.5)' },
+  expired: { fill: '#f43f5e', glow: 'rgba(244,63,94,0.45)' },
+  'non-payment': { fill: '#f59e0b', glow: 'rgba(245,158,11,0.5)' },
+  disabled: { fill: '#94a3b8', glow: 'rgba(148,163,184,0.4)' },
 };
+
+/** CSS class for animated client cables (dashes flow NAP → client). */
+function clientCableClass(state: ClientState, highlighted: boolean): string {
+  const base = `flow-line-client flow-line-client-${state}`;
+  return highlighted ? `${base} is-hot` : base;
+}
 
 function findConnector(connectors: Connector[], kind: string, fromId: number, toId: number) {
   return connectors.find((c) => c.kind === kind && c.fromId === fromId && c.toId === toId);
@@ -487,9 +497,6 @@ export default function ClientsMap() {
     load();
   };
 
-  const lineClass = (active: boolean, backbone = false) =>
-    active ? (backbone ? 'flow-line-backbone' : 'flow-line-active') : '';
-
   const savedRouteCount = connectors.length;
   const pickLat = pickFor === 'server' ? Number(editServer?.lat) || center[0] : Number(editNap?.lat) || center[0];
   const pickLng = pickFor === 'server' ? Number(editServer?.lng) || center[1] : Number(editNap?.lng) || center[1];
@@ -525,8 +532,8 @@ export default function ClientsMap() {
                 className="text-sm border border-slate-200 rounded-lg pl-8 pr-3 py-2 w-64 sm:w-80 focus:outline-none focus:ring-2 focus:ring-brand-500"
               />
             </div>
-            <span className="hidden lg:inline text-xs text-slate-400 max-w-xs">
-              Clients: Online green · Offline/Inactive red · Lines: Server → OLT → NAP → Client
+            <span className="hidden lg:inline text-xs text-slate-400 max-w-md">
+              Cables: Online green · Offline red · Expired rose · Non-payment amber · Disabled gray (animated toward client)
             </span>
           </div>
         </div>
@@ -752,8 +759,8 @@ export default function ClientsMap() {
                   pathOptions={{
                     color: '#0d9488',
                     weight: hi ? 4 : 2.5,
-                    opacity: 0.75 * lineDim(hi),
-                    className: lineClass(true, true),
+                    opacity: 0.85 * lineDim(hi),
+                    className: 'flow-line-backbone',
                   }}
                 />
               );
@@ -780,9 +787,8 @@ export default function ClientsMap() {
                   pathOptions={{
                     color: parent.kind === 'olt' ? '#2563eb' : '#7c3aed',
                     weight: hi ? 3.5 : 2,
-                    opacity: 0.8 * lineDim(!!hi),
-                    className: lineClass(true, true),
-                    dashArray: parent.kind === 'nap' ? '6 4' : undefined,
+                    opacity: 0.85 * lineDim(!!hi),
+                    className: 'flow-line-backbone',
                   }}
                 />
               );
@@ -792,9 +798,9 @@ export default function ClientsMap() {
               const nap = c.napId ? napsById[c.napId] : null;
               if (!nap) return null;
               const state = clientState(c);
-              const active = state === 'online';
               const hi = highlightChain?.clientId === c.id;
               const lineColor = CLIENT_COLORS[state].fill;
+              // Path NAP → client so CSS dash animation flows toward the subscriber connection
               const path = resolvePath(connectors, 'nap-client', nap.id, c.id, defaultPath([nap.lat, nap.lng], [c.lat, c.lng]));
               return (
                 <Polyline
@@ -802,10 +808,10 @@ export default function ClientsMap() {
                   positions={path}
                   pathOptions={{
                     color: lineColor,
-                    weight: hi ? 3 : 1.5,
-                    opacity: (active ? 0.9 : 0.35) * lineDim(hi),
-                    dashArray: active ? undefined : '4 6',
-                    className: active ? `${lineClass(true)} flow-line-pulse-${state}` : '',
+                    weight: hi ? 3.5 : state === 'online' ? 2.5 : 2,
+                    opacity: (state === 'online' ? 0.95 : 0.75) * lineDim(hi),
+                    // dashArray left to CSS (.flow-line-client-*) so animation is not overridden
+                    className: clientCableClass(state, hi),
                   }}
                 />
               );
