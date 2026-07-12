@@ -257,7 +257,16 @@ fi
 
 log_info "Starting services"
 run systemctl start mt-billing-api
-run systemctl reload nginx 2>/dev/null || true
+
+# Allow Company logo + GCash/Maya QR data-URLs (nginx defaults to 1m → HTTP 413)
+NGINX_SITE="/etc/nginx/sites-available/mt-billing"
+if [[ -f "$NGINX_SITE" ]] && ! grep -q 'client_max_body_size' "$NGINX_SITE"; then
+  log_info "Raising nginx client_max_body_size for image uploads"
+  sed -i 's/server {/server {\n    client_max_body_size 25m;/' "$NGINX_SITE" || true
+fi
+if nginx -t 2>/dev/null; then
+  run systemctl reload nginx 2>/dev/null || true
+fi
 log_ok "Services started"
 
 trap - ERR

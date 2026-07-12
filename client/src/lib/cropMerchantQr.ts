@@ -45,9 +45,28 @@ function boundsFromPoints(points: Point[], padRatio: number, w: number, h: numbe
   return { left, top, size };
 }
 
+/** Resize + re-encode so Company save stays under nginx/API body limits. */
+export function compressImageDataUrl(dataUrl: string, maxSide = 720, quality = 0.9): Promise<string> {
+  return loadImage(dataUrl).then((img) => {
+    const scale = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
+    const w = Math.max(1, Math.round(img.naturalWidth * scale));
+    const h = Math.max(1, Math.round(img.naturalHeight * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return dataUrl;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, w, h);
+    ctx.drawImage(img, 0, 0, w, h);
+    // JPEG keeps payloads small; QR remains scannable at ~720px
+    return canvas.toDataURL('image/jpeg', quality);
+  });
+}
+
 /**
  * Crop a merchant wallet screenshot down to the QR code (InstaPay / QR Ph).
- * Falls back to the original image if no QR is detected.
+ * Always compresses the result so Save Changes does not hit HTTP 413.
  */
 export async function cropMerchantQr(fileOrDataUrl: File | string): Promise<{
   dataUrl: string;
@@ -66,14 +85,16 @@ export async function cropMerchantQr(fileOrDataUrl: File | string): Promise<{
   const img = await loadImage(dataUrl);
   const canvas = canvasFromImage(img);
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  if (!ctx) return { dataUrl, cropped: false };
+  if (!ctx) {
+    return { dataUrl: await compressImageDataUrl(dataUrl), cropped: false };
+  }
 
   const { width, height } = canvas;
   const imageData = ctx.getImageData(0, 0, width, height);
   const code = jsQR(imageData.data, width, height, { inversionAttempts: 'attemptBoth' });
 
   if (!code?.location) {
-    return { dataUrl, cropped: false };
+    return { dataUrl: await compressImageDataUrl(dataUrl), cropped: false };
   }
 
   const { topLeftCorner, topRightCorner, bottomLeftCorner, bottomRightCorner } = code.location;
@@ -84,16 +105,22 @@ export async function cropMerchantQr(fileOrDataUrl: File | string): Promise<{
     height,
   );
 
-  if (size < 40) return { dataUrl, cropped: false };
+  if (size < 40) {
+    return { dataUrl: await compressImageDataUrl(dataUrl), cropped: false };
+  }
 
   const out = document.createElement('canvas');
-  out.width = size;
-  out.height = size;
+  const outSize = Math.min(size, 720);
+  out.width = outSize;
+  out.height = outSize;
   const octx = out.getContext('2d');
-  if (!octx) return { dataUrl, cropped: false };
+  if (!octx) {
+    return { dataUrl: await compressImageDataUrl(dataUrl), cropped: false };
+  }
   octx.fillStyle = '#ffffff';
-  octx.fillRect(0, 0, size, size);
-  octx.drawImage(canvas, left, top, size, size, 0, 0, size, size);
+  octx.fillRect(0, 0, outSize, outSize);
+  octx.imageSmoothingEnabled = false;
+  octx.drawImage(canvas, left, top, size, size, 0, 0, outSize, outSize);
 
-  return { dataUrl: out.toDataURL('image/png'), cropped: true };
+  return { dataUrl: out.toDataURL('image/jpeg', 0.92), cropped: true };
 }

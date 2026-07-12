@@ -4,7 +4,7 @@ import Layout from '../components/Layout';
 import { SettingsSection, FormField, Flash, LoadingPage, Toast } from '../components/ui';
 import { api } from '../api';
 import { useCompany } from '../context/CompanyContext';
-import { cropMerchantQr } from '../lib/cropMerchantQr';
+import { cropMerchantQr, compressImageDataUrl } from '../lib/cropMerchantQr';
 
 export default function Company() {
   const { refresh } = useCompany();
@@ -37,7 +37,14 @@ export default function Company() {
     setError('');
     setFileName(file.name);
     const reader = new FileReader();
-    reader.onload = () => setCompany((c: any) => ({ ...c, logo: reader.result }));
+    reader.onload = async () => {
+      try {
+        const compressed = await compressImageDataUrl(String(reader.result), 512, 0.88);
+        setCompany((c: any) => ({ ...c, logo: compressed }));
+      } catch {
+        setCompany((c: any) => ({ ...c, logo: reader.result }));
+      }
+    };
     reader.readAsDataURL(file);
   };
 
@@ -82,7 +89,11 @@ export default function Company() {
       await refresh();
       showToast('Company details saved successfully.');
     } catch (e: any) {
-      const msg = e?.response?.data?.error || e?.message || 'Could not save company details.';
+      const status = e?.response?.status;
+      const msg =
+        status === 413
+          ? 'Upload too large (HTTP 413). Re-upload QRs (they will be compressed) or raise nginx client_max_body_size, then try Save again.'
+          : e?.response?.data?.error || e?.message || 'Could not save company details.';
       setError(msg);
       topRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     } finally {
