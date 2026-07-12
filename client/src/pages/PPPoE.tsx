@@ -1538,7 +1538,7 @@ function escapeReceiptHtml(s: unknown): string {
     .replace(/"/g, '&quot;');
 }
 
-/** POS-58 thermal receipt (58mm paper). Opens a print window sized for 58mm rolls. */
+/** POS-54 thermal receipt (54mm paper). Opens a print window sized for 54mm rolls. */
 function printReceipt(receipt: any) {
   const money = (n: number) => `\u20b1${Number(n || 0).toFixed(2)}`;
   const company = escapeReceiptHtml(receipt.company || 'ISP Billing');
@@ -1571,7 +1571,7 @@ function printReceipt(receipt: any) {
       : String(txRaw)
   );
 
-  // Label on its own line (left); value on the next line (right) — fits POS-58
+  // Label on its own line (left); value on the next line (right) — fits POS-54
   const field = (label: string, value: string) =>
     value
       ? `<div class="field"><div class="lab">${label}</div><div class="val">${value}</div></div>`
@@ -1596,7 +1596,7 @@ function printReceipt(receipt: any) {
   <meta charset="utf-8" />
   <title>Receipt ${account}</title>
   <style>
-    @page { size: 58mm auto; margin: 1.5mm; }
+    @page { size: 54mm auto; margin: 1.5mm; }
     * { box-sizing: border-box; }
     html, body {
       margin: 0;
@@ -1604,21 +1604,21 @@ function printReceipt(receipt: any) {
       background: #fff;
       color: #000 !important;
       font-family: Arial, Helvetica, sans-serif;
-      font-size: 13px;
+      font-size: 11px;
       line-height: 1.3;
       -webkit-print-color-adjust: exact;
       print-color-adjust: exact;
     }
     .ticket {
       width: 100%;
-      max-width: 58mm;
+      max-width: 54mm;
       margin: 0;
       padding: 2mm 0.25in 5mm 1.5mm;
       color: #000;
     }
     .center { text-align: center; }
     .brand {
-      font-size: 15px;
+      font-size: 13px;
       font-weight: 800;
       text-transform: uppercase;
       letter-spacing: 0.01em;
@@ -1627,7 +1627,7 @@ function printReceipt(receipt: any) {
     }
     .when {
       margin-top: 4px;
-      font-size: 12px;
+      font-size: 10px;
       font-weight: 700;
       color: #000;
     }
@@ -1639,7 +1639,7 @@ function printReceipt(receipt: any) {
     .field { margin: 5px 0; color: #000; }
     .field .lab {
       text-align: left;
-      font-size: 11px;
+      font-size: 9px;
       font-weight: 700;
       color: #000;
       text-transform: uppercase;
@@ -1647,18 +1647,18 @@ function printReceipt(receipt: any) {
     }
     .field .val {
       text-align: right;
-      font-size: 13px;
+      font-size: 11px;
       font-weight: 700;
       color: #000;
       word-break: break-word;
       margin-top: 1px;
     }
     .tot { margin-top: 6px; color: #000; }
-    .tot .lab { font-size: 12px; font-weight: 800; text-align: left; }
-    .tot .val { font-size: 16px; font-weight: 800; text-align: right; margin-top: 2px; }
+    .tot .lab { font-size: 10px; font-weight: 800; text-align: left; }
+    .tot .val { font-size: 14px; font-weight: 800; text-align: right; margin-top: 2px; }
     .biz {
       text-align: center;
-      font-size: 11px;
+      font-size: 9px;
       font-weight: 600;
       color: #000;
       line-height: 1.35;
@@ -1666,7 +1666,7 @@ function printReceipt(receipt: any) {
     }
     .disclaimer {
       text-align: center;
-      font-size: 11px;
+      font-size: 9px;
       font-weight: 800;
       color: #000;
       text-transform: uppercase;
@@ -1675,14 +1675,14 @@ function printReceipt(receipt: any) {
     }
     .thanks {
       text-align: center;
-      font-size: 12px;
+      font-size: 10px;
       font-weight: 700;
       color: #000;
     }
     .cut {
       text-align: center;
       margin-top: 8px;
-      font-size: 11px;
+      font-size: 9px;
       font-weight: 700;
       color: #000;
       letter-spacing: 0.12em;
@@ -1692,7 +1692,7 @@ function printReceipt(receipt: any) {
       .ticket { background: #fff; box-shadow: 0 4px 16px rgba(0,0,0,0.12); }
     }
     @media print {
-      html, body { width: 58mm; color: #000 !important; }
+      html, body { width: 54mm; color: #000 !important; }
       .ticket {
         width: 100%;
         max-width: none;
@@ -1727,7 +1727,7 @@ function printReceipt(receipt: any) {
     <div class="thanks">Thank you for your payment.</div>
     ${
       businessBits
-        ? `<hr/><div class="biz"><div class="brand" style="font-size:12px;margin-bottom:3px">${company}</div>${businessBits}</div>`
+        ? `<hr/><div class="biz"><div class="brand" style="font-size:10px;margin-bottom:3px">${company}</div>${businessBits}</div>`
         : ''
     }
     <hr/>
