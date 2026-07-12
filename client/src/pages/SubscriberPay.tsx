@@ -14,16 +14,31 @@ function parseMoneyToken(raw: string): number | null {
   return Math.round(n * 100) / 100;
 }
 
-/** Upscale + contrast so Tesseract reads phone screenshots more reliably. */
-async function preprocessForOcr(dataUrl: string): Promise<string> {
+type PrepOpts = {
+  contrast?: number;
+  threshold?: number | null;
+  scale?: number;
+  /** Prefer lower portion of screenshot (where Ref No. often sits). */
+  focusBottom?: boolean;
+};
+
+/** Upscale + contrast / threshold variants so Tesseract reads receipts more reliably. */
+async function preprocessForOcr(dataUrl: string, opts: PrepOpts = {}): Promise<string> {
+  const contrast = opts.contrast ?? 1.45;
+  const threshold = opts.threshold ?? null;
   return new Promise((resolve) => {
     const img = new Image();
     img.onload = () => {
       try {
-        const maxSide = Math.max(img.width, img.height);
-        const scale = maxSide < 900 ? 2.4 : maxSide < 1400 ? 1.6 : 1.2;
-        const w = Math.max(1, Math.round(img.width * scale));
-        const h = Math.max(1, Math.round(img.height * scale));
+        const srcW = img.width;
+        const srcH = img.height;
+        const cropY = opts.focusBottom ? Math.floor(srcH * 0.28) : 0;
+        const cropH = srcH - cropY;
+        const maxSide = Math.max(srcW, cropH);
+        const autoScale = maxSide < 900 ? 2.6 : maxSide < 1400 ? 1.8 : 1.35;
+        const scale = opts.scale ?? autoScale;
+        const w = Math.max(1, Math.round(srcW * scale));
+        const h = Math.max(1, Math.round(cropH * scale));
         const canvas = document.createElement('canvas');
         canvas.width = w;
         canvas.height = h;
@@ -36,13 +51,14 @@ async function preprocessForOcr(dataUrl: string): Promise<string> {
         ctx.fillRect(0, 0, w, h);
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = 'high';
-        ctx.drawImage(img, 0, 0, w, h);
+        ctx.drawImage(img, 0, cropY, srcW, cropH, 0, 0, w, h);
         const imageData = ctx.getImageData(0, 0, w, h);
         const d = imageData.data;
         for (let i = 0; i < d.length; i += 4) {
           const g = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-          const boosted = Math.max(0, Math.min(255, (g - 128) * 1.45 + 128));
-          d[i] = d[i + 1] = d[i + 2] = boosted;
+          let v = Math.max(0, Math.min(255, (g - 128) * contrast + 128));
+          if (threshold != null) v = v >= threshold ? 255 : 0;
+          d[i] = d[i + 1] = d[i + 2] = v;
         }
         ctx.putImageData(imageData, 0, 0);
         resolve(canvas.toDataURL('image/png'));
@@ -55,41 +71,78 @@ async function preprocessForOcr(dataUrl: string): Promise<string> {
   });
 }
 
+/** Fix common OCR letter→digit mistakes inside reference-like tokens. */
+function normalizeOcrRefToken(raw: string): string {
+  return String(raw || '')
+    .replace(/[Oo]/g, '0')
+    .replace(/[Il|]/g, '1')
+    .replace(/[Ss]/g, '5')
+    .replace(/[Bb]/g, '8')
+    .replace(/[Zz]/g, '2')
+    .replace(/[Gg]/g, '6')
+    .replace(/[^A-Za-z0-9]/g, '');
+}
+
 /** Extract likely GCash/Maya/bank reference numbers from OCR text. */
 function extractReferenceCandidates(text: string): string[] {
-  const cleaned = text.replace(/[\u00A0\t]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const normalized = text
+    .replace(/[\u00A0\t]+/g, ' ')
+    .replace(/[Oo]/g, '0')
+    .replace(/[Il|]/g, '1');
+  const cleaned = normalized.replace(/[ \t]+/g, ' ').trim();
   const scored = new Map<string, number>();
   const add = (raw: string, score: number) => {
-    const v = String(raw || '').replace(/[^A-Za-z0-9]/g, '');
-    if (v.length < 6 || v.length > 28) return;
-    if (/^09\d{9}$/.test(v)) return; // mobile number
+    const v = normalizeOcrRefToken(raw);
+    if (v.length < 8 || v.length > 28) return;
+    if (/^09\d{9}$/.test(v)) return; // mobile
     if (/^63\d{10}$/.test(v)) return;
-    if (/^\d{1,5}$/.test(v)) return;
-    // Prefer mostly-digit refs (GCash/Maya) but allow alphanumeric txn ids
-    const digitRatio = (v.replace(/\D/g, '').length) / v.length;
-    const bonus = digitRatio >= 0.7 ? 2 : 0;
-    scored.set(v, Math.max(scored.get(v) || 0, score + bonus));
+    if (/^\d{1,7}$/.test(v)) return;
+    // Prefer digit-heavy refs (GCash/Maya)
+    const digits = v.replace(/\D/g, '');
+    const digitRatio = digits.length / v.length;
+    if (digitRatio < 0.6) return;
+    let bonus = digitRatio >= 0.85 ? 4 : 1;
+    // Typical GCash/Maya lengths
+    if (digits.length >= 12 && digits.length <= 16) bonus += 4;
+    if (digits.length === 13 || digits.length === 14) bonus += 2;
+    scored.set(digits.length >= 10 ? digits : v, Math.max(scored.get(digits.length >= 10 ? digits : v) || 0, score + bonus));
   };
 
+  // Line-oriented: anything on a Ref/Txn line — join all digits on that line + next line
+  const lines = normalized.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (/(ref(?:erence)?|txn|trans(?:action)?|confirm(?:ation)?|trace|control\s*no)/i.test(line)) {
+      const chunk = `${line} ${lines[i + 1] || ''}`;
+      const digitsOnly = chunk.replace(/\D/g, '');
+      if (digitsOnly.length >= 10) add(digitsOnly, 18);
+      // Grouped digits on the line
+      const groups = chunk.match(/\d{3,5}(?:[\s-]\d{3,5}){2,5}/g);
+      if (groups) for (const g of groups) add(g, 16);
+    }
+  }
+
   const labeled = [
-    /(?:Ref(?:erence)?|Txn|Trans(?:action)?|Confirmation|Trace|Control)\s*(?:No\.?|Number|#|ID|Num)?\s*[:.-]?\s*((?:[A-Z0-9]{3,5}[\s-]){2,5}[A-Z0-9]{3,5}|[A-Z0-9]{8,24})/gi,
-    /(?:Ref(?:erence)?\s*No\.?)\s*((?:\d{3,4}[\s-]){2,4}\d{3,4}|\d{10,16})/gi,
+    /(?:Ref(?:erence)?|Txn|Trans(?:action)?|Confirmation|Trace|Control)\s*(?:No\.?|Number|#|ID|Num)?\s*[:.-]?\s*((?:\d[\d\s-]{8,28}\d))/gi,
+    /(?:Ref(?:erence)?\s*No\.?)\s*((?:\d{3,5}[\s-]){2,5}\d{3,5}|\d{10,16})/gi,
   ];
   for (const re of labeled) {
     let m: RegExpExecArray | null;
-    while ((m = re.exec(cleaned))) add(m[1], 12);
+    while ((m = re.exec(cleaned))) add(m[1], 14);
   }
 
-  // GCash-style grouped digits: 1234 5678 9012 or 1234-5678-9012
+  // GCash-style grouped digits (3–5 groups)
   let m: RegExpExecArray | null;
-  const grouped = /\b(\d{3,4}[\s-]\d{3,4}[\s-]\d{3,4}(?:[\s-]\d{3,4})?)\b/g;
-  while ((m = grouped.exec(cleaned))) add(m[1], 10);
+  const grouped = /\b(\d{3,5}(?:[\s-]\d{3,5}){2,5})\b/g;
+  while ((m = grouped.exec(cleaned))) add(m[1], 12);
 
+  // Continuous digit runs (OCR sometimes drops spaces)
   const longDigits = /\b(\d{10,16})\b/g;
-  while ((m = longDigits.exec(cleaned))) add(m[1], 6);
+  while ((m = longDigits.exec(cleaned))) add(m[1], 8);
 
-  const alnum = /\b([A-Z0-9]{8,20})\b/g;
-  while ((m = alnum.exec(cleaned))) add(m[1], 3);
+  // Join adjacent short digit tokens: "1234 567 89012" → missing space variants
+  const loose = cleaned.match(/(?:\d{2,5}[\s-]+){3,6}\d{2,5}/g);
+  if (loose) for (const g of loose) add(g, 11);
 
   return Array.from(scored.entries())
     .sort((a, b) => b[1] - a[1] || b[0].length - a[0].length)
@@ -149,6 +202,41 @@ function extractReceiptAmount(text: string, due: number): { amount: number | nul
     amount: pick?.value ?? null,
     candidates: unique.map((u) => u.value).slice(0, 6),
   };
+}
+
+async function recognizeReceiptText(dataUrl: string): Promise<string> {
+  const Tesseract = await import('tesseract.js');
+  const variants = await Promise.all([
+    preprocessForOcr(dataUrl, { contrast: 1.5 }),
+    preprocessForOcr(dataUrl, { contrast: 1.85, threshold: 145 }),
+    preprocessForOcr(dataUrl, { contrast: 1.6, focusBottom: true }),
+    preprocessForOcr(dataUrl, { contrast: 1.9, threshold: 150, focusBottom: true }),
+  ]);
+
+  const texts: string[] = [];
+  // Full-page general pass on first two variants
+  for (const img of variants.slice(0, 2)) {
+    const result = await Tesseract.recognize(img, 'eng', { logger: () => undefined });
+    if (result.data.text) texts.push(result.data.text);
+  }
+
+  // Digit-focused pass (helps Ref No. when letters confuse OCR)
+  const { createWorker } = Tesseract;
+  const worker = await createWorker('eng');
+  try {
+    await worker.setParameters({
+      tessedit_char_whitelist: '0123456789- ',
+      preserve_interword_spaces: '1',
+    } as any);
+    for (const img of [variants[2], variants[3], variants[0]]) {
+      const r = await worker.recognize(img);
+      if (r.data.text) texts.push(r.data.text);
+    }
+  } finally {
+    await worker.terminate().catch(() => undefined);
+  }
+
+  return texts.join('\n');
 }
 
 /** Public subscriber payment page — no panel login required. */
@@ -246,16 +334,19 @@ export default function SubscriberPay() {
     setOcrAmount(null);
     setOcrAmountCandidates([]);
     try {
-      const prepared = await preprocessForOcr(dataUrl);
-      const Tesseract = await import('tesseract.js');
-      const result = await Tesseract.recognize(prepared, 'eng', {
-        logger: () => undefined,
-      });
-      const text = result.data.text || '';
+      const text = await recognizeReceiptText(dataUrl);
       const candidates = extractReferenceCandidates(text);
       setOcrHints(candidates);
       if (candidates[0]) {
-        setRef((prev) => (prev.trim().length >= 6 ? prev : candidates[0]));
+        setRef((prev) => {
+          const p = prev.trim().replace(/[^A-Za-z0-9]/g, '');
+          if (!p || p.length < 8) return candidates[0];
+          // Upgrade if OCR found a longer/better ref that contains the typed prefix
+          const better = candidates.find(
+            (c) => c.length > p.length && (c.startsWith(p) || p.startsWith(c.slice(0, Math.min(8, c.length)))),
+          );
+          return better || prev;
+        });
       }
       const due = dueAmountRef.current || 0;
       const { amount, candidates: amts } = extractReceiptAmount(text, due);

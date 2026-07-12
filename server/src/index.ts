@@ -1420,6 +1420,28 @@ app.delete('/api/payment-links/:id', (req, res) => {
   res.json({ ok: true });
 });
 
+app.post('/api/payment-links/bulk-delete', (req, res) => {
+  const ids = (Array.isArray(req.body?.ids) ? req.body.ids : [])
+    .map((id: unknown) => Number(id))
+    .filter((id: number) => Number.isFinite(id) && id > 0);
+  if (!ids.length) return res.status(400).json({ error: 'No payment link IDs provided.' });
+  const stmt = db.prepare('DELETE FROM payment_links WHERE id = ?');
+  let count = 0;
+  const wipe = db.transaction((list: number[]) => {
+    for (const id of list) {
+      const info = stmt.run(id);
+      if (info.changes) count++;
+    }
+  });
+  wipe(ids);
+  db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+    'info',
+    'payment-links',
+    `Bulk deleted ${count} payment link(s)`,
+  );
+  res.json({ ok: true, count });
+});
+
 app.get('/api/payment-links/:id/proof', (req, res) => {
   const link = db.prepare('SELECT id, proof_image FROM payment_links WHERE id = ?').get(Number(req.params.id)) as
     | { id: number; proof_image?: string }

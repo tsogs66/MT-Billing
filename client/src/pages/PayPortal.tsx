@@ -11,6 +11,8 @@ export default function PayPortal() {
   const [userId, setUserId] = useState('');
   const [months, setMonths] = useState(1);
   const [busy, setBusy] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
   const [toast, setToast] = useState('');
   const [publicBaseUrl, setPublicBaseUrl] = useState('');
   const [effective, setEffective] = useState<string | null>(null);
@@ -39,6 +41,7 @@ export default function PayPortal() {
   const load = () => {
     api.get('/payment-links').then((r) => {
       setLinks(r.data.links || []);
+      setSelected(new Set());
       if (r.data.effective !== undefined) setEffective(r.data.effective);
       if (r.data.warning !== undefined) setWarning(r.data.warning);
       if (r.data.source) setSource(r.data.source);
@@ -50,6 +53,23 @@ export default function PayPortal() {
   useEffect(() => {
     load();
   }, []);
+
+  const allSelected = links.length > 0 && selected.size === links.length;
+  const someSelected = selected.size > 0;
+
+  const toggleOne = (id: number) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleAll = () => {
+    if (allSelected) setSelected(new Set());
+    else setSelected(new Set(links.map((l) => Number(l.id))));
+  };
 
   const savePublicUrl = async () => {
     setSavingUrl(true);
@@ -131,6 +151,23 @@ export default function PayPortal() {
     if (!confirm('Delete this payment link?')) return;
     await api.delete(`/payment-links/${id}`);
     load();
+  };
+
+  const bulkDelete = async () => {
+    const ids = [...selected];
+    if (!ids.length) return;
+    if (!confirm(`Delete ${ids.length} selected payment link(s)? This cannot be undone.`)) return;
+    setBulkBusy(true);
+    try {
+      const r = await api.post('/payment-links/bulk-delete', { ids });
+      show(`Deleted ${r.data.count} payment link(s).`);
+      setSelected(new Set());
+      load();
+    } catch (e: any) {
+      show(e?.response?.data?.error || 'Bulk delete failed');
+    } finally {
+      setBulkBusy(false);
+    }
   };
 
   const approve = async (id: number) => {
@@ -266,11 +303,41 @@ export default function PayPortal() {
           </button>
         </div>
 
-        <Toolbar left={<span>Links <span className="font-semibold">{links.length}</span></span>} />
+        <Toolbar
+          left={
+            <span>
+              Links <span className="font-semibold">{links.length}</span>
+              {someSelected ? <span className="text-slate-400"> · {selected.size} selected</span> : null}
+            </span>
+          }
+          right={
+            someSelected ? (
+              <button
+                type="button"
+                className="btn-secondary text-rose-700 border-rose-200 hover:bg-rose-50"
+                disabled={bulkBusy}
+                onClick={bulkDelete}
+              >
+                <Trash2 size={16} />
+                {bulkBusy ? 'Deleting…' : `Delete selected (${selected.size})`}
+              </button>
+            ) : null
+          }
+        />
         <div className="overflow-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-xs text-slate-400 border-b border-slate-100">
+                <th className="py-2 pr-2 w-10">
+                  <input
+                    type="checkbox"
+                    className="rounded border-slate-300"
+                    checked={allSelected}
+                    disabled={!links.length}
+                    onChange={toggleAll}
+                    aria-label="Select all payment links"
+                  />
+                </th>
                 <th className="py-2">Subscriber</th>
                 <th className="py-2">Amount</th>
                 <th className="py-2">Status</th>
@@ -281,7 +348,16 @@ export default function PayPortal() {
             </thead>
             <tbody>
               {links.map((l) => (
-                <tr key={l.id} className="border-b border-slate-50 align-top">
+                <tr key={l.id} className={`border-b border-slate-50 align-top ${selected.has(l.id) ? 'bg-sky-50/40' : ''}`}>
+                  <td className="py-2.5 pr-2">
+                    <input
+                      type="checkbox"
+                      className="rounded border-slate-300"
+                      checked={selected.has(l.id)}
+                      onChange={() => toggleOne(l.id)}
+                      aria-label={`Select ${l.username}`}
+                    />
+                  </td>
                   <td className="py-2.5">
                     <div className="font-semibold">{l.username}</div>
                     <div className="text-xs text-slate-400">{l.customer} · {l.account}</div>
@@ -327,7 +403,7 @@ export default function PayPortal() {
               ))}
               {links.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="py-8 text-center text-slate-400">No payment links yet.</td>
+                  <td colSpan={7} className="py-8 text-center text-slate-400">No payment links yet.</td>
                 </tr>
               )}
             </tbody>
