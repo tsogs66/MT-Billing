@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Activity, Globe2, RefreshCw, Users } from 'lucide-react';
+import { Activity, Globe2, RefreshCw, Users, X } from 'lucide-react';
+import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import Layout from '../components/Layout';
 import { Card, TabBar, Toolbar, DataTable } from '../components/ui';
 import { api } from '../api';
@@ -14,10 +15,25 @@ function formatBytes(n: number): string {
   return `${Math.round(v)} B`;
 }
 
+function fmtAxis(bps: number): string {
+  if (bps >= 1_000_000) return `${(bps / 1_000_000).toFixed(0)}M`;
+  if (bps >= 1_000) return `${(bps / 1_000).toFixed(0)}k`;
+  return `${Math.round(bps)}`;
+}
+
 const TABS = [
   { key: 'users', label: 'Per User', icon: Users },
   { key: 'services', label: 'Websites & Platforms', icon: Globe2 },
 ];
+
+type TrafficPoint = { t: string; label: string; downloadBps: number; uploadBps: number };
+type LiveService = {
+  id: string;
+  name: string;
+  category: string;
+  hits: number;
+  destinations: string[];
+};
 
 export default function UsageStats() {
   const [tab, setTab] = useState('users');
@@ -29,6 +45,17 @@ export default function UsageStats() {
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState<any | null>(null);
   const [history, setHistory] = useState<any[]>([]);
+  const [trafficSeries, setTrafficSeries] = useState<TrafficPoint[]>([]);
+  const [liveServices, setLiveServices] = useState<LiveService[]>([]);
+  const [live, setLive] = useState<{
+    downloadBps: number;
+    uploadBps: number;
+    online: boolean;
+    address: string | null;
+    uptime: string | null;
+  } | null>(null);
+  const [servicesNote, setServicesNote] = useState('');
+  const [detailBusy, setDetailBusy] = useState(false);
   const [toast, setToast] = useState('');
 
   const load = () => {
@@ -55,23 +82,68 @@ export default function UsageStats() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [days]);
 
-  const openUser = async (u: any) => {
-    setSelected(u);
-    if (!u.username) {
-      setHistory([]);
-      return;
+  const applyDetail = (d: any) => {
+    setHistory(d.history || []);
+    const samples: TrafficPoint[] = (d.samples || []).map((s: any) => ({
+      t: s.t,
+      label: s.label || String(s.t || '').slice(11, 16),
+      downloadBps: Number(s.downloadBps) || 0,
+      uploadBps: Number(s.uploadBps) || 0,
+    }));
+    // Append a live point so the graph moves even between poll samples.
+    if (d.live && (d.live.downloadBps || d.live.uploadBps || d.live.online)) {
+      const nowLabel = new Date().toISOString().slice(11, 19);
+      samples.push({
+        t: new Date().toISOString(),
+        label: nowLabel,
+        downloadBps: Number(d.live.downloadBps) || 0,
+        uploadBps: Number(d.live.uploadBps) || 0,
+      });
     }
+    setTrafficSeries(samples.slice(-120));
+    setLiveServices(d.services || []);
+    setLive(d.live || null);
+    setServicesNote(d.servicesNote || '');
+  };
+
+  const loadDetail = async (username: string, opts?: { silent?: boolean }) => {
+    if (!opts?.silent) setDetailBusy(true);
     try {
-      if (!u.userId) {
-        setHistory([]);
-        return;
-      }
-      const r = await api.get(`/usage/users/${u.userId}/history`, { params: { days: 30 } });
-      setHistory(r.data.history || []);
+      const r = await api.get('/usage/detail', { params: { username, days: 30, hours: 6 } });
+      applyDetail(r.data);
     } catch {
-      setHistory([]);
+      if (!opts?.silent) {
+        setHistory([]);
+        setTrafficSeries([]);
+        setLiveServices([]);
+        setLive(null);
+        setServicesNote('Could not load user detail.');
+      }
+    } finally {
+      if (!opts?.silent) setDetailBusy(false);
     }
   };
+
+  const openUser = async (u: any) => {
+    setSelected(u);
+    setHistory([]);
+    setTrafficSeries([]);
+    setLiveServices([]);
+    setLive(null);
+    setServicesNote('');
+    if (!u?.username) return;
+    await loadDetail(u.username);
+  };
+
+  // Refresh live traffic + services while a user is selected
+  useEffect(() => {
+    if (!selected?.username || tab !== 'users') return;
+    const id = window.setInterval(() => {
+      loadDetail(selected.username, { silent: true });
+    }, 8_000);
+    return () => window.clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected?.username, tab]);
 
   const poll = async () => {
     setBusy(true);
@@ -84,6 +156,7 @@ export default function UsageStats() {
           (d.bytesDelta != null ? ` · +${formatBytes(d.bytesDelta)} since last poll` : '')
       );
       load();
+      if (selected?.username) await loadDetail(selected.username, { silent: true });
     } catch (e: any) {
       setToast(e?.response?.data?.error || 'Sample failed — check router API credentials');
     } finally {
@@ -92,6 +165,7 @@ export default function UsageStats() {
   };
 
   const maxServiceHits = Math.max(1, ...services.map((s) => Number(s.hits) || 0));
+  const maxLiveHits = Math.max(1, ...liveServices.map((s) => Number(s.hits) || 0));
 
   const userColumns = useMemo(
     () => [
@@ -109,6 +183,7 @@ export default function UsageStats() {
     () =>
       users.map((u) => {
         const liveTotal = (Number(u.downloadBps) || 0) + (Number(u.uploadBps) || 0);
+        const active = selected?.username === u.username;
         return {
           key: u.username,
           sortValues: {
@@ -123,7 +198,7 @@ export default function UsageStats() {
             <button
               type="button"
               key="sub"
-              className="text-left w-full"
+              className={`text-left w-full rounded-lg px-1 -mx-1 py-0.5 ${active ? 'bg-brand-50 ring-1 ring-brand-200' : 'hover:bg-slate-50'}`}
               onClick={() => openUser(u)}
             >
               <div className="font-semibold text-slate-800">{u.username}</div>
@@ -146,7 +221,7 @@ export default function UsageStats() {
         };
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [users]
+    [users, selected?.username]
   );
 
   const serviceColumns = useMemo(
@@ -227,7 +302,7 @@ export default function UsageStats() {
             <p className="text-xs text-slate-400 mb-3">
               {note ||
                 'Download/Upload totals are real traffic measured from each subscriber’s <pppoe-*> interface since sampling started. First sample sets a baseline; usage accumulates after that.'}{' '}
-              Click a column header to sort.
+              Click a subscriber for traffic graph and live services.
             </p>
             <div className="grid lg:grid-cols-5 gap-4">
               <div className="lg:col-span-3 min-w-0">
@@ -237,26 +312,208 @@ export default function UsageStats() {
                   emptyMessage="No usage yet. Online PPPoE sessions are sampled every minute — click Sample now while clients are connected."
                 />
               </div>
-              <div className="lg:col-span-2 rounded-xl border border-slate-100 bg-slate-50/50 p-4">
+              <div className="lg:col-span-2 rounded-xl border border-slate-100 bg-slate-50/50 p-4 min-w-0">
                 <div className="flex items-center gap-2 font-semibold text-slate-800 mb-3">
-                  <Activity size={16} /> {selected ? selected.username : 'Select a user'}
+                  <Activity size={16} />
+                  <span className="truncate flex-1">{selected ? selected.username : 'Select a user'}</span>
+                  {selected && (
+                    <button
+                      type="button"
+                      className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-white"
+                      title="Close"
+                      onClick={() => {
+                        setSelected(null);
+                        setHistory([]);
+                        setTrafficSeries([]);
+                        setLiveServices([]);
+                        setLive(null);
+                      }}
+                    >
+                      <X size={14} />
+                    </button>
+                  )}
                 </div>
-                {!selected && <div className="text-sm text-slate-400">Click a subscriber to view daily history.</div>}
+
+                {!selected && (
+                  <div className="text-sm text-slate-400">
+                    Click a subscriber to view download/upload traffic and internet services in use.
+                  </div>
+                )}
+
                 {selected && (
-                  <div className="space-y-2 max-h-80 overflow-auto">
-                    {history.map((h) => (
-                      <div
-                        key={h.day}
-                        className="flex justify-between text-xs bg-white rounded-lg px-3 py-2 border border-slate-100 gap-2"
-                      >
-                        <span className="font-medium text-slate-700">{h.day}</span>
-                        <span className="text-emerald-700">{formatBytes(h.rxBytes)} ↓</span>
-                        <span className="text-sky-700">{formatBytes(h.txBytes)} ↑</span>
-                      </div>
-                    ))}
-                    {history.length === 0 && (
-                      <div className="text-sm text-slate-400">No daily history yet — keep sampling while online.</div>
+                  <div className="space-y-4">
+                    {selected.customer && (
+                      <div className="text-xs text-slate-500 -mt-2">{selected.customer}</div>
                     )}
+
+                    <div className="flex flex-wrap items-center gap-3 text-xs">
+                      <span
+                        className={`px-2 py-0.5 rounded-full font-medium ${
+                          live?.online
+                            ? 'bg-emerald-100 text-emerald-700'
+                            : 'bg-slate-200 text-slate-600'
+                        }`}
+                      >
+                        {live?.online ? 'Online' : 'Offline'}
+                      </span>
+                      {live?.address && (
+                        <span className="font-mono text-slate-600">{live.address}</span>
+                      )}
+                      {live?.uptime && <span className="text-slate-400">up {live.uptime}</span>}
+                      {detailBusy && <RefreshCw size={12} className="animate-spin text-slate-400" />}
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="rounded-lg bg-white border border-slate-100 px-3 py-2">
+                        <div className="text-[10px] uppercase tracking-wide text-slate-400">Download</div>
+                        <div className="text-sm font-bold text-emerald-700">
+                          {formatBps(live?.downloadBps ?? selected.downloadBps ?? 0)}
+                        </div>
+                      </div>
+                      <div className="rounded-lg bg-white border border-slate-100 px-3 py-2">
+                        <div className="text-[10px] uppercase tracking-wide text-slate-400">Upload</div>
+                        <div className="text-sm font-bold text-sky-700">
+                          {formatBps(live?.uploadBps ?? selected.uploadBps ?? 0)}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="text-xs font-semibold text-slate-700 mb-2 flex items-center gap-2">
+                        Traffic
+                        <span className="font-normal text-slate-400">download / upload · last samples</span>
+                      </div>
+                      <div className="h-40 rounded-lg bg-white border border-slate-100 px-1 pt-2">
+                        {trafficSeries.length > 1 ? (
+                          <ResponsiveContainer width="100%" height="100%">
+                            <AreaChart data={trafficSeries} margin={{ top: 4, right: 6, left: 0, bottom: 0 }}>
+                              <defs>
+                                <linearGradient id="usageDl" x1="0" y1="0" x2="0" y2="1">
+                                  <stop offset="0%" stopColor="#059669" stopOpacity={0.35} />
+                                  <stop offset="100%" stopColor="#059669" stopOpacity={0} />
+                                </linearGradient>
+                                <linearGradient id="usageUl" x1="0" y1="0" x2="0" y2="1">
+                                  <stop offset="0%" stopColor="#0284c7" stopOpacity={0.3} />
+                                  <stop offset="100%" stopColor="#0284c7" stopOpacity={0} />
+                                </linearGradient>
+                              </defs>
+                              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
+                              <XAxis
+                                dataKey="label"
+                                tick={{ fontSize: 9, fill: '#94a3b8' }}
+                                interval="preserveStartEnd"
+                                minTickGap={24}
+                              />
+                              <YAxis
+                                tickFormatter={fmtAxis}
+                                tick={{ fontSize: 9, fill: '#94a3b8' }}
+                                width={36}
+                              />
+                              <Tooltip
+                                formatter={(v: number, name: string) => [
+                                  formatBps(Number(v) || 0),
+                                  name === 'downloadBps' ? 'Download' : 'Upload',
+                                ]}
+                                labelFormatter={(l) => String(l)}
+                                contentStyle={{
+                                  fontSize: 12,
+                                  borderRadius: 8,
+                                  border: '1px solid #e2e8f0',
+                                }}
+                              />
+                              <Area
+                                type="monotone"
+                                dataKey="downloadBps"
+                                stroke="#059669"
+                                fill="url(#usageDl)"
+                                strokeWidth={1.5}
+                                isAnimationActive={false}
+                              />
+                              <Area
+                                type="monotone"
+                                dataKey="uploadBps"
+                                stroke="#0284c7"
+                                fill="url(#usageUl)"
+                                strokeWidth={1.5}
+                                isAnimationActive={false}
+                              />
+                            </AreaChart>
+                          </ResponsiveContainer>
+                        ) : (
+                          <div className="h-full flex items-center justify-center text-xs text-slate-400 px-3 text-center">
+                            {detailBusy
+                              ? 'Loading traffic…'
+                              : 'No traffic samples yet. Keep the user online and click Sample now.'}
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex gap-3 mt-1.5 text-[10px] text-slate-500">
+                        <span className="inline-flex items-center gap-1">
+                          <span className="w-2 h-2 rounded-full bg-emerald-600" /> Download
+                        </span>
+                        <span className="inline-flex items-center gap-1">
+                          <span className="w-2 h-2 rounded-full bg-sky-600" /> Upload
+                        </span>
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="text-xs font-semibold text-slate-700 mb-2 flex items-center gap-2">
+                        <Globe2 size={13} /> Internet services in use
+                      </div>
+                      {servicesNote && (
+                        <div className="text-[11px] text-slate-400 mb-2">{servicesNote}</div>
+                      )}
+                      <div className="space-y-1.5 max-h-48 overflow-auto">
+                        {liveServices.map((s) => {
+                          const pct = Math.max(6, (Number(s.hits) / maxLiveHits) * 100);
+                          return (
+                            <div
+                              key={s.id}
+                              className="rounded-lg bg-white border border-slate-100 px-3 py-2"
+                              title={s.destinations?.join(', ') || undefined}
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="min-w-0">
+                                  <div className="text-sm font-semibold text-slate-800 truncate">{s.name}</div>
+                                  <div className="text-[10px] text-slate-400">{s.category}</div>
+                                </div>
+                                <div className="text-xs font-medium text-slate-600 shrink-0">{s.hits}</div>
+                              </div>
+                              <div className="mt-1.5 h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                                <div className="h-full rounded-full bg-amber-500" style={{ width: `${pct}%` }} />
+                              </div>
+                            </div>
+                          );
+                        })}
+                        {!detailBusy && liveServices.length === 0 && (
+                          <div className="text-sm text-slate-400 py-2">
+                            {live?.online
+                              ? 'No classified destinations in connection tracking right now.'
+                              : 'User is offline — services appear when the session is active.'}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="text-xs font-semibold text-slate-700 mb-2">Daily totals</div>
+                      <div className="space-y-1.5 max-h-36 overflow-auto">
+                        {history.map((h) => (
+                          <div
+                            key={h.day}
+                            className="flex justify-between text-xs bg-white rounded-lg px-3 py-2 border border-slate-100 gap-2"
+                          >
+                            <span className="font-medium text-slate-700">{h.day}</span>
+                            <span className="text-emerald-700">{formatBytes(h.rxBytes)} ↓</span>
+                            <span className="text-sky-700">{formatBytes(h.txBytes)} ↑</span>
+                          </div>
+                        ))}
+                        {history.length === 0 && (
+                          <div className="text-sm text-slate-400">No daily history yet — keep sampling while online.</div>
+                        )}
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>
@@ -268,7 +525,7 @@ export default function UsageStats() {
           <div className="p-4 pt-0 space-y-3">
             <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
               This tab is a <b>DNS cache / connection popularity snapshot</b> from MikroTik — not exact bytes per website.
-              Click <b>Sample now</b> to refresh. Click a column header to sort.
+              Click <b>Sample now</b> to refresh. For per-subscriber live services, open a user under <b>Per User</b>.
             </div>
             <DataTable
               columns={serviceColumns}

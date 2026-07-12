@@ -67,6 +67,7 @@ import {
   ackUsageAlert,
   getUsageSummary,
   getUserUsageHistory,
+  getSubscriberUsageDetail,
   pollUsageAndFairUse,
 } from './usage.js';
 import { getInterfaceNames, getTrafficSnapshot } from './interfaces.js';
@@ -1198,6 +1199,19 @@ app.get('/api/usage/users/:id/history', (req, res) => {
   if (!user) return res.status(404).json({ error: 'not found' });
   const days = Math.max(1, Math.min(90, Number(req.query.days) || 30));
   res.json({ username: user.username, history: getUserUsageHistory(user.username, days) });
+});
+
+app.get('/api/usage/detail', async (req, res) => {
+  const username = String(req.query.username || '').trim();
+  if (!username) return res.status(400).json({ error: 'username is required' });
+  const days = Math.max(1, Math.min(90, Number(req.query.days) || 30));
+  const hours = Math.max(1, Math.min(48, Number(req.query.hours) || 6));
+  try {
+    const detail = await getSubscriberUsageDetail(username, { days, hours });
+    res.json(detail);
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Failed to load usage detail' });
+  }
 });
 
 app.get('/api/usage/alerts', (_req, res) => {

@@ -4,8 +4,11 @@ import {
   fetchPppActiveTraffic,
   fetchPppInterfaceBytes,
   fetchDnsCacheNames,
+  fetchDnsCacheEntries,
   fetchConnectionDestinations,
+  fetchConnectionsForSrcAddress,
   parseRosRate,
+  pppNameKey,
 } from './mikrotik.js';
 import { notifyClientChannels } from './notify.js';
 import { getBillingPlan } from './billing.js';
@@ -408,6 +411,200 @@ export function getUserUsageHistory(username: string, days = 30) {
        AND day >= date('now', ?) ORDER BY day`
     )
     .all(username, `-${Math.max(1, days)} days`);
+}
+
+/** Recent live traffic samples (bps) for the download/upload graph. */
+export function getUserTrafficSamples(username: string, hours = 6) {
+  const h = Math.max(1, Math.min(48, Number(hours) || 6));
+  return db
+    .prepare(
+      `SELECT sampled_at AS t, rx_bps AS downloadBps, tx_bps AS uploadBps,
+              delta_rx AS deltaRx, delta_tx AS deltaTx
+       FROM usage_samples
+       WHERE subject_type = 'pppoe' AND subject_key = ? COLLATE NOCASE
+         AND datetime(sampled_at) >= datetime('now', ?)
+       ORDER BY id ASC`
+    )
+    .all(username, `-${h} hours`) as {
+    t: string;
+    downloadBps: number;
+    uploadBps: number;
+    deltaRx: number;
+    deltaTx: number;
+  }[];
+}
+
+/**
+ * Live traffic + classified internet services for one PPPoE subscriber
+ * (connection tracking filtered by their PPP address).
+ */
+export async function getSubscriberUsageDetail(
+  username: string,
+  opts?: { days?: number; hours?: number }
+) {
+  const user = String(username || '').trim();
+  if (!user) throw new Error('username required');
+
+  const days = Math.max(1, Math.min(90, Number(opts?.days) || 30));
+  const hours = Math.max(1, Math.min(48, Number(opts?.hours) || 6));
+
+  const client = db
+    .prepare(
+      `SELECT id, username, customer_name AS customer, profile, account_number AS account,
+              router_id AS routerId, status
+       FROM pppoe_users WHERE username = ? COLLATE NOCASE`
+    )
+    .get(user) as any;
+
+  const history = getUserUsageHistory(user, days);
+  const samples = getUserTrafficSamples(user, hours);
+
+  let live = {
+    downloadBps: 0,
+    uploadBps: 0,
+    online: false,
+    address: null as string | null,
+    uptime: null as string | null,
+  };
+  let services: {
+    id: string;
+    name: string;
+    category: string;
+    hits: number;
+    destinations: string[];
+  }[] = [];
+  let servicesNote = '';
+  let liveOk = false;
+
+  const routerId = client?.routerId;
+  const router = routerId
+    ? (db.prepare('SELECT * FROM routers WHERE id = ?').get(routerId) as any)
+    : (db
+        .prepare('SELECT * FROM routers WHERE host IS NOT NULL AND api_user IS NOT NULL ORDER BY id LIMIT 1')
+        .get() as any);
+
+  if (router?.host && router?.api_user) {
+    try {
+      const sessions = await fetchPppActive(router);
+      const session = sessions.find((s) => pppNameKey(s.name) === pppNameKey(user));
+      if (session) {
+        live.online = true;
+        live.address = session.address && session.address !== '-' ? session.address : null;
+        live.uptime = session.uptime || null;
+        try {
+          const traffic = await fetchPppActiveTraffic(router, [session.name]);
+          const t = traffic[session.name] || traffic[Object.keys(traffic)[0]];
+          if (t) {
+            live.downloadBps = t.download || 0;
+            live.uploadBps = t.upload || 0;
+          }
+        } catch {
+          /* optional */
+        }
+
+        if (live.address) {
+          const conns = await fetchConnectionsForSrcAddress(router, live.address, 400);
+          // Reverse map IP → hostname from DNS cache when available
+          const ipToHost = new Map<string, string>();
+          try {
+            const entries = await fetchDnsCacheEntries(router);
+            for (const e of entries) {
+              const ip = String(e.address || '').trim();
+              if (/^\d{1,3}(\.\d{1,3}){3}$/.test(ip) && e.name) {
+                if (!ipToHost.has(ip)) ipToHost.set(ip, e.name);
+              }
+            }
+          } catch {
+            /* optional */
+          }
+
+          const counts = new Map<
+            string,
+            { name: string; category: string; hits: number; destinations: Set<string> }
+          >();
+          for (const c of conns) {
+            if (!c.dst || /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[0-1])\.|127\.|0\.|255\.)/.test(c.dst)) {
+              continue;
+            }
+            const hostHint =
+              ipToHost.get(c.dst) ||
+              (c.replySrc && !/^\d{1,3}(\.\d{1,3}){3}$/.test(c.replySrc) ? c.replySrc : '') ||
+              c.dst;
+            const classified = classifyHost(hostHint);
+            const prev =
+              counts.get(classified.id) || {
+                name: classified.name,
+                category: classified.category,
+                hits: 0,
+                destinations: new Set<string>(),
+              };
+            prev.hits++;
+            prev.destinations.add(hostHint);
+            counts.set(classified.id, prev);
+          }
+          services = [...counts.entries()]
+            .map(([id, v]) => ({
+              id,
+              name: v.name,
+              category: v.category,
+              hits: v.hits,
+              destinations: [...v.destinations].slice(0, 8),
+            }))
+            .sort((a, b) => b.hits - a.hits)
+            .slice(0, 30);
+          servicesNote = services.length
+            ? `Active connections from ${live.address} (MikroTik connection tracking).`
+            : `No tracked connections for ${live.address} right now.`;
+        } else {
+          servicesNote = 'Session is online but has no PPP address yet.';
+        }
+      } else {
+        servicesNote = 'Subscriber is not online on the router — no live services.';
+        // Fall back to last sampled bps from DB
+        const last = samples.length ? samples[samples.length - 1] : null;
+        if (last) {
+          live.downloadBps = Number(last.downloadBps) || 0;
+          live.uploadBps = Number(last.uploadBps) || 0;
+        }
+      }
+      liveOk = true;
+    } catch (e: any) {
+      servicesNote = e?.message || 'Could not reach MikroTik for live services.';
+      const last = samples.length ? samples[samples.length - 1] : null;
+      if (last) {
+        live.downloadBps = Number(last.downloadBps) || 0;
+        live.uploadBps = Number(last.uploadBps) || 0;
+      }
+    }
+  } else {
+    servicesNote = 'Router API is not configured — showing stored samples only.';
+    const last = samples.length ? samples[samples.length - 1] : null;
+    if (last) {
+      live.downloadBps = Number(last.downloadBps) || 0;
+      live.uploadBps = Number(last.uploadBps) || 0;
+    }
+  }
+
+  return {
+    username: client?.username || user,
+    customer: client?.customer || user,
+    profile: client?.profile || null,
+    account: client?.account || null,
+    userId: client?.id || null,
+    history,
+    samples: samples.map((s) => ({
+      t: s.t,
+      downloadBps: Number(s.downloadBps) || 0,
+      uploadBps: Number(s.uploadBps) || 0,
+      label: String(s.t || '').slice(11, 16) || s.t,
+    })),
+    live,
+    services,
+    servicesNote,
+    liveOk,
+    hours,
+    days,
+  };
 }
 
 export function getUsageSummary(days = 7) {

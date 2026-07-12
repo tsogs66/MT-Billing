@@ -1291,22 +1291,31 @@ export async function fetchPppInterfaceBytes(
 
 /** DNS cache names — used to estimate popular platforms/services. */
 export async function fetchDnsCacheNames(conn: RouterConn): Promise<string[]> {
+  const entries = await fetchDnsCacheEntries(conn);
+  return [...new Set(entries.map((e) => e.name).filter(Boolean))];
+}
+
+/** DNS cache name ↔ address pairs (for per-user service labeling). */
+export async function fetchDnsCacheEntries(
+  conn: RouterConn
+): Promise<{ name: string; address: string }[]> {
   return withRouter(conn, async (api) => {
-    const names: string[] = [];
+    const out: { name: string; address: string }[] = [];
     const paths = ['/ip/dns/cache/print', '/ip/dns/cache/all/print'];
     for (const path of paths) {
       try {
         const rows = (await api.write(path)) as Record<string, string>[];
         for (const r of rows || []) {
-          const n = String(r.name || '').trim();
-          if (n) names.push(n);
+          const name = String(r.name || '').trim();
+          const address = String(r.data || r.address || '').trim();
+          if (name) out.push({ name, address });
         }
-        if (names.length) break;
+        if (out.length) break;
       } catch {
         /* try next path (ROS version differences) */
       }
     }
-    return [...new Set(names)];
+    return out;
   }, { timeoutSec: 20 });
 }
 
@@ -1328,4 +1337,50 @@ export async function fetchConnectionDestinations(
       return [];
     }
   }, { timeoutSec: 20 });
+}
+
+/**
+ * Active firewall connections whose source matches a subscriber PPP address.
+ * Used for "services currently accessed" on the Usage per-user panel.
+ */
+export async function fetchConnectionsForSrcAddress(
+  conn: RouterConn,
+  srcAddress: string,
+  limit = 300
+): Promise<{ dst: string; dstPort: string; protocol: string; replySrc: string }[]> {
+  const src = String(srcAddress || '').trim();
+  if (!src || src === '-') return [];
+  return withRouter(conn, async (api) => {
+    try {
+      // Prefer server-side filter when RouterOS supports it; fall back to full print.
+      let rows: Record<string, string>[] = [];
+      try {
+        rows = (await api.write('/ip/firewall/connection/print', [
+          `?src-address=${src}`,
+          '=.proplist=src-address,dst-address,protocol,reply-src-address',
+        ])) as Record<string, string>[];
+      } catch {
+        rows = (await api.write('/ip/firewall/connection/print', [
+          '=.proplist=src-address,dst-address,protocol,reply-src-address',
+        ])) as Record<string, string>[];
+      }
+      const out: { dst: string; dstPort: string; protocol: string; replySrc: string }[] = [];
+      for (const r of rows || []) {
+        const rowSrc = String(r['src-address'] || '').split('/')[0].split(':')[0];
+        if (rowSrc !== src) continue;
+        const dstRaw = String(r['dst-address'] || '');
+        const [dstHost, dstPort = ''] = dstRaw.split(':');
+        out.push({
+          dst: dstHost || dstRaw,
+          dstPort,
+          protocol: String(r.protocol || ''),
+          replySrc: String(r['reply-src-address'] || '').split(':')[0],
+        });
+        if (out.length >= limit) break;
+      }
+      return out;
+    } catch {
+      return [];
+    }
+  }, { timeoutSec: 25 });
 }
