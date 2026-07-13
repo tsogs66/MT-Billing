@@ -4,8 +4,9 @@ import { MapContainer, TileLayer, Marker, useMap, useMapEvents } from 'react-lea
 import L from 'leaflet';
 import { Search, LocateFixed, X, MapPin } from 'lucide-react';
 import { api } from '../api';
+import { FALLBACK_MAP_CENTER, normalizeMapCenter } from '../lib/mapDefaults';
 
-export const DEFAULT_PIN: [number, number] = [13.918665341879885, 120.93887161534413];
+export const DEFAULT_PIN: [number, number] = FALLBACK_MAP_CENTER;
 
 /**
  * Tip-accurate teardrop pin.
@@ -69,6 +70,24 @@ export default function LocationEditor({
   const [results, setResults] = useState<{ displayName: string; lat: number; lon: number }[]>([]);
   const [searching, setSearching] = useState(false);
   const [msg, setMsg] = useState('');
+
+  useEffect(() => {
+    if (initial?.lat != null && initial?.lng != null) return;
+    let cancelled = false;
+    api
+      .get('/map/default-center')
+      .then((r) => {
+        if (cancelled) return;
+        const c = normalizeMapCenter(r.data?.lat, r.data?.lng);
+        setPos([c.lat, c.lng]);
+      })
+      .catch(() => {
+        /* keep FALLBACK_MAP_CENTER */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [initial?.lat, initial?.lng]);
 
   const setLat = (v: string) => setPos(([, lng]) => [v === '' ? 0 : Number(v), lng]);
   const setLng = (v: string) => setPos(([lat]) => [lat, v === '' ? 0 : Number(v)]);

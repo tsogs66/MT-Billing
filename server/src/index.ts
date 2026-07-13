@@ -2720,6 +2720,21 @@ app.delete('/api/ipoe/plans/:id', (req, res) => {
 });
 
 // ---- Clients Map ----
+const FALLBACK_MAP_LAT = 13.918665341879885;
+const FALLBACK_MAP_LNG = 120.93887161534413;
+
+function getMapDefaultCenter(): { lat: number; lng: number } {
+  const row = db
+    .prepare('SELECT map_default_lat AS lat, map_default_lng AS lng FROM app_settings WHERE id = 1')
+    .get() as { lat: number | null; lng: number | null } | undefined;
+  const lat = Number(row?.lat);
+  const lng = Number(row?.lng);
+  return {
+    lat: Number.isFinite(lat) ? lat : FALLBACK_MAP_LAT,
+    lng: Number.isFinite(lng) ? lng : FALLBACK_MAP_LNG,
+  };
+}
+
 // Derive a stable pseudo-value from a client id (so traffic/usage/ports look
 // consistent between refreshes rather than jumping randomly).
 function seeded(id: number, salt: number, mod: number) {
@@ -2780,11 +2795,12 @@ app.get('/api/map', async (req, res) => {
     await Promise.all([...byRouter.entries()].map(([rid, subset]) => enrichForRouter(rid, subset)));
   }
 
+  const mapDefault = getMapDefaultCenter();
   const oltPos = db.prepare("SELECT lat, lng FROM naps WHERE kind = 'olt' ORDER BY id LIMIT 1").get() as
     | { lat: number; lng: number }
     | undefined;
-  const baseLat = oltPos?.lat ?? 15.1785;
-  const baseLng = oltPos?.lng ?? 120.5945;
+  const baseLat = oltPos?.lat ?? mapDefault.lat;
+  const baseLng = oltPos?.lng ?? mapDefault.lng;
   const servers = (db.prepare('SELECT id, name, host, status, lat, lng, address FROM routers ORDER BY id').all() as any[]).map(
     (s, i) => ({
       id: s.id,
@@ -2832,8 +2848,26 @@ app.get('/api/map', async (req, res) => {
     clients,
     servers,
     connectors,
+    defaultCenter: mapDefault,
     stats: { servers: servers.length, olts, naps: napCount, totalClients, withoutLocation, onlineOnu, offlineOnu },
   });
+});
+
+app.get('/api/map/default-center', (_req, res) => {
+  res.json(getMapDefaultCenter());
+});
+
+app.put('/api/map/default-center', (req, res) => {
+  const lat = Number(req.body?.lat);
+  const lng = Number(req.body?.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return res.status(400).json({ error: 'Valid latitude and longitude are required.' });
+  }
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+    return res.status(400).json({ error: 'Latitude must be −90…90 and longitude −180…180.' });
+  }
+  db.prepare('UPDATE app_settings SET map_default_lat = ?, map_default_lng = ? WHERE id = 1').run(lat, lng);
+  res.json(getMapDefaultCenter());
 });
 
 // ---- OLTs (Network tab: device by IP + probe) ----
@@ -2919,8 +2953,9 @@ app.post('/api/olts', async (req, res) => {
   const snmpPort = b.snmpPort != null ? Number(b.snmpPort) : 161;
   const snmpCommunity = b.snmpCommunity ? String(b.snmpCommunity).trim() : 'public';
   const ports = Number(b.ports) || 8;
-  const lat = b.lat != null ? Number(b.lat) : 15.1785;
-  const lng = b.lng != null ? Number(b.lng) : 120.5945;
+  const mapDefault = getMapDefaultCenter();
+  const lat = b.lat != null ? Number(b.lat) : mapDefault.lat;
+  const lng = b.lng != null ? Number(b.lng) : mapDefault.lng;
 
   const probe = await probeOlt({ host, snmpPort, snmpCommunity });
   const status = probe.online ? 'online' : 'offline';

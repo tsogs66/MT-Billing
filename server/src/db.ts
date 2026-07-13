@@ -312,10 +312,20 @@ export function migrate() {
     ['cf_tunnel_status', "TEXT DEFAULT 'stopped'"],
     ['cf_tunnel_url', 'TEXT'],
     ['cf_tunnel_enabled', 'INTEGER DEFAULT 0'],
+    // Default map picker / topology center (Batangas area)
+    ['map_default_lat', 'REAL DEFAULT 13.918665341879885'],
+    ['map_default_lng', 'REAL DEFAULT 120.93887161534413'],
   ];
   for (const [col, type] of appCols) {
     if (!columnExists('app_settings', col)) db.exec(`ALTER TABLE app_settings ADD COLUMN ${col} ${type}`);
   }
+  // Ensure existing installs that already had nulls get the new default center once.
+  db.prepare(
+    `UPDATE app_settings SET
+       map_default_lat = COALESCE(map_default_lat, 13.918665341879885),
+       map_default_lng = COALESCE(map_default_lng, 120.93887161534413)
+     WHERE id = 1`
+  ).run();
   if (!columnExists('routers', 'ssh_port')) {
     db.exec('ALTER TABLE routers ADD COLUMN ssh_port INTEGER DEFAULT 22');
   }

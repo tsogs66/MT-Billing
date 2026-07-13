@@ -6,6 +6,7 @@ import Layout from '../components/Layout';
 import { Modal, ModalFooter, FormField } from '../components/ui';
 import { api } from '../api';
 import { useRouterDevice } from '../context/RouterContext';
+import { FALLBACK_MAP_LAT, FALLBACK_MAP_LNG, normalizeMapCenter } from '../lib/mapDefaults';
 
 interface ServerNode {
   id: number; name: string; host?: string; status: string;
@@ -372,22 +373,28 @@ function MapLocationPicker({
   open,
   lat,
   lng,
+  fallback,
   onClose,
   onConfirm,
 }: {
   open: boolean;
   lat: number;
   lng: number;
+  fallback?: { lat: number; lng: number };
   onClose: () => void;
   onConfirm: (lat: number, lng: number) => void;
 }) {
-  const [draft, setDraft] = useState<LocDraft>({ lat, lng });
+  const fb = normalizeMapCenter(fallback?.lat, fallback?.lng);
+  const [draft, setDraft] = useState<LocDraft>({ lat: fb.lat, lng: fb.lng });
   useEffect(() => {
-    if (open) setDraft({ lat: Number(lat) || 15.1785, lng: Number(lng) || 120.5945 });
-  }, [open, lat, lng]);
+    if (open) {
+      const next = normalizeMapCenter(Number(lat) || fb.lat, Number(lng) || fb.lng);
+      setDraft(next);
+    }
+  }, [open, lat, lng, fb.lat, fb.lng]);
 
   if (!open) return null;
-  const center: [number, number] = [draft.lat || 15.1785, draft.lng || 120.5945];
+  const center: [number, number] = [draft.lat || fb.lat, draft.lng || fb.lng];
 
   return (
     <Modal
@@ -406,7 +413,7 @@ function MapLocationPicker({
       <div className="space-y-3">
         <div className="h-72 rounded-xl overflow-hidden border border-slate-200 relative">
           <MapContainer
-            key={`location-picker-${open}`}
+            key={`location-picker-${open}-${center[0]}-${center[1]}`}
             center={center}
             zoom={17}
             minZoom={3}
@@ -458,19 +465,26 @@ function MapLocationPicker({
   );
 }
 
-const emptyNap = (kind: 'nap' | 'olt' = 'nap', parentId: number | null = null): Partial<Nap> => ({
-  name: '',
-  code: kind === 'nap' ? '' : '',
-  kind,
-  lat: 15.1785,
-  lng: 120.5945,
-  ports: kind === 'olt' ? 8 : 8,
-  parentId,
-  status: 'active',
-  address: '',
-  splitterRatio: kind === 'nap' ? '1:8' : '',
-  ponPort: kind === 'nap' ? 1 : null,
-});
+const emptyNap = (
+  kind: 'nap' | 'olt' = 'nap',
+  parentId: number | null = null,
+  center?: { lat: number; lng: number }
+): Partial<Nap> => {
+  const c = normalizeMapCenter(center?.lat, center?.lng);
+  return {
+    name: '',
+    code: kind === 'nap' ? '' : '',
+    kind,
+    lat: c.lat,
+    lng: c.lng,
+    ports: kind === 'olt' ? 8 : 8,
+    parentId,
+    status: 'active',
+    address: '',
+    splitterRatio: kind === 'nap' ? '1:8' : '',
+    ponPort: kind === 'nap' ? 1 : null,
+  };
+};
 
 export default function ClientsMap() {
   const { current } = useRouterDevice();
@@ -495,6 +509,10 @@ export default function ClientsMap() {
   const [routeTo, setRouteTo] = useState<number | ''>('');
   const [drawMode, setDrawMode] = useState(false);
   const [drawPoints, setDrawPoints] = useState<[number, number][]>([]);
+  const [defaultCenter, setDefaultCenter] = useState({ lat: FALLBACK_MAP_LAT, lng: FALLBACK_MAP_LNG });
+  const [draftDefault, setDraftDefault] = useState({ lat: String(FALLBACK_MAP_LAT), lng: String(FALLBACK_MAP_LNG) });
+  const [defaultBusy, setDefaultBusy] = useState(false);
+  const [defaultMsg, setDefaultMsg] = useState('');
 
   const load = useCallback(() => {
     const q = current?.id ? `?routerId=${current.id}` : '';
@@ -504,6 +522,9 @@ export default function ClientsMap() {
       setClients(r.data.clients);
       setConnectors(r.data.connectors || []);
       setStats(r.data.stats);
+      const dc = normalizeMapCenter(r.data.defaultCenter?.lat, r.data.defaultCenter?.lng);
+      setDefaultCenter(dc);
+      setDraftDefault({ lat: String(dc.lat), lng: String(dc.lng) });
     });
   }, [current?.id]);
 
@@ -545,7 +566,7 @@ export default function ClientsMap() {
 
   const openNewNap = () => {
     setNapUpstream('olt');
-    setEditNap(emptyNap('nap', olt?.id || olts[0]?.id || null));
+    setEditNap(emptyNap('nap', olt?.id || olts[0]?.id || null, defaultCenter));
   };
 
   const openEditNap = (n: Nap) => {
@@ -554,7 +575,32 @@ export default function ClientsMap() {
     setEditNap({ ...n });
   };
 
-  const center: [number, number] = olt ? [olt.lat, olt.lng] : servers[0] ? [servers[0].lat, servers[0].lng] : [15.1785, 120.5945];
+  const saveDefaultCenter = async () => {
+    const next = normalizeMapCenter(draftDefault.lat, draftDefault.lng);
+    if (Number(draftDefault.lat) < -90 || Number(draftDefault.lat) > 90 || Number(draftDefault.lng) < -180 || Number(draftDefault.lng) > 180) {
+      setDefaultMsg('Latitude must be −90…90 and longitude −180…180.');
+      return;
+    }
+    setDefaultBusy(true);
+    setDefaultMsg('');
+    try {
+      const r = await api.put('/map/default-center', next);
+      const saved = normalizeMapCenter(r.data?.lat, r.data?.lng);
+      setDefaultCenter(saved);
+      setDraftDefault({ lat: String(saved.lat), lng: String(saved.lng) });
+      setDefaultMsg('Default map coordinates saved.');
+    } catch (e: any) {
+      setDefaultMsg(e?.response?.data?.error || 'Could not save default coordinates.');
+    } finally {
+      setDefaultBusy(false);
+    }
+  };
+
+  const center: [number, number] = olt
+    ? [olt.lat, olt.lng]
+    : servers[0]
+      ? [servers[0].lat, servers[0].lng]
+      : [defaultCenter.lat, defaultCenter.lng];
   const highlightId = selected?.id ?? hoveredId;
 
   const chainFor = useCallback((clientId: number) => {
@@ -709,6 +755,51 @@ export default function ClientsMap() {
 
         {topoOpen && (
           <div className="map-toolbar bg-slate-50/90 border-b border-slate-200 px-3 py-3 max-h-[46vh] overflow-y-auto shrink-0">
+            <div className="card p-3 mb-3">
+              <div className="flex items-center gap-2 mb-2">
+                <MapPin size={15} className="text-brand-500" />
+                <h3 className="text-sm font-semibold text-slate-700">Default map coordinates</h3>
+                <span className="text-xs text-slate-400 ml-auto">Used by map picker when a device has no location yet</span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 items-end">
+                <FormField label="Default latitude">
+                  <input
+                    className="input font-mono text-sm"
+                    type="number"
+                    step="any"
+                    value={draftDefault.lat}
+                    onChange={(e) => setDraftDefault((d) => ({ ...d, lat: e.target.value }))}
+                  />
+                </FormField>
+                <FormField label="Default longitude">
+                  <input
+                    className="input font-mono text-sm"
+                    type="number"
+                    step="any"
+                    value={draftDefault.lng}
+                    onChange={(e) => setDraftDefault((d) => ({ ...d, lng: e.target.value }))}
+                  />
+                </FormField>
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" className="btn-primary text-sm" onClick={saveDefaultCenter} disabled={defaultBusy}>
+                    {defaultBusy ? 'Saving…' : 'Save defaults'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary text-sm"
+                    onClick={() =>
+                      setDraftDefault({
+                        lat: String(FALLBACK_MAP_LAT),
+                        lng: String(FALLBACK_MAP_LNG),
+                      })
+                    }
+                  >
+                    Reset built-in
+                  </button>
+                </div>
+              </div>
+              {defaultMsg && <p className="text-xs text-slate-500 mt-2">{defaultMsg}</p>}
+            </div>
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-3">
               <TopoPanel
                 title="Server Configuration"
@@ -735,7 +826,7 @@ export default function ClientsMap() {
               <TopoPanel
                 title="OLT Configuration"
                 action={
-                  <button type="button" className="text-xs text-brand-600 hover:underline" onClick={() => setEditNap(emptyNap('olt'))}>
+                  <button type="button" className="text-xs text-brand-600 hover:underline" onClick={() => setEditNap(emptyNap('olt', null, defaultCenter))}>
                     <Plus size={12} className="inline" /> New OLT
                   </button>
                 }
@@ -1230,6 +1321,7 @@ export default function ClientsMap() {
         open={!!pickFor || !!mapPickServer}
         lat={mapPickServer ? mapPickServer.lat : pickLat}
         lng={mapPickServer ? mapPickServer.lng : pickLng}
+        fallback={defaultCenter}
         onClose={() => { setPickFor(null); setMapPickServer(null); }}
         onConfirm={(lat, lng) => {
           if (mapPickServer) {
