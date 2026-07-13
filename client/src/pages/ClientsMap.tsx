@@ -66,17 +66,19 @@ function clientCableClass(state: ClientState, highlighted: boolean): string {
 }
 
 /**
- * Leaflet map panes use CSS transforms, which often break CSS stroke-dashoffset
- * animations. Drive dashOffset from rAF so cables visibly run OLT → NAP → ONU.
+ * Imperative animated cable — Leaflet pane transforms break CSS dash animations,
+ * and react-leaflet refs are unreliable for per-frame dashOffset updates.
+ * Creates the polyline on the map directly and animates stroke-dashoffset every frame
+ * so dashes visibly run parent → child (OLT → NAP → ONU).
  */
 function FlowPolyline({
   positions,
   color,
   weight,
-  opacity = 0.85,
+  opacity = 0.95,
   className = '',
-  dashArray = '10 8',
-  speed = 0.55,
+  dashArray = '16 14',
+  speed = 1.1,
 }: {
   positions: [number, number][];
   color: string;
@@ -84,78 +86,107 @@ function FlowPolyline({
   opacity?: number;
   className?: string;
   dashArray?: string;
-  /** Negative direction = along path toward child (downstream). */
+  /** Higher = faster. Negative dashoffset moves dashes along the path toward the child. */
   speed?: number;
 }) {
-  const ref = useRef<L.Polyline | null>(null);
-  const offsetRef = useRef(0);
+  const map = useMap();
+  const posKey = JSON.stringify(positions);
 
   useEffect(() => {
-    let raf = 0;
-    let last = performance.now();
-    const cycle = 48;
+    if (!map || !positions?.length) return;
 
-    const apply = (offset: number) => {
-      const layer = ref.current;
-      if (!layer) return;
+    // One shared SVG renderer per map (canvas cannot animate dashOffset in Leaflet 1.9).
+    const anyMap = map as L.Map & { __flowSvg?: L.SVG };
+    if (!anyMap.__flowSvg) {
+      anyMap.__flowSvg = L.svg({ padding: 0.5 });
+      anyMap.__flowSvg.addTo(map);
+    }
+    const renderer = anyMap.__flowSvg;
+
+    // Faint solid underlay so the route stays visible while dashes run on top.
+    const underlay = L.polyline(positions, {
+      color,
+      weight: Math.max(1.5, weight - 0.5),
+      opacity: Math.min(0.4, opacity * 0.45),
+      interactive: false,
+      className: 'flow-line-underlay',
+      lineCap: 'round',
+      lineJoin: 'round',
+      renderer,
+    }).addTo(map);
+
+    const layer = L.polyline(positions, {
+      color,
+      weight,
+      opacity,
+      dashArray,
+      className,
+      lineCap: 'round',
+      lineJoin: 'round',
+      renderer,
+    }).addTo(map);
+
+    let raf = 0;
+    let offset = 0;
+    let last = performance.now();
+    const parts = dashArray.split(/[\s,]+/).map((n) => Number(n) || 0);
+    const cycle = Math.max(24, parts.reduce((a, b) => a + b, 0));
+
+    const pathEl = (): SVGPathElement | null => {
       const el =
-        (typeof layer.getElement === 'function' ? layer.getElement() : null) ||
+        (typeof (layer as any).getElement === 'function' ? (layer as any).getElement() : null) ||
         (layer as any)._path ||
         null;
-      if (el) {
-        el.style.strokeDasharray = dashArray;
-        el.style.strokeDashoffset = String(offset);
-        el.setAttribute('stroke-dasharray', dashArray);
-        el.setAttribute('stroke-dashoffset', String(offset));
-        for (const c of className.split(/\s+/)) {
-          if (c) el.classList.add(c);
-        }
-      } else {
+      return el as SVGPathElement | null;
+    };
+
+    const apply = (value: number) => {
+      const el = pathEl();
+      if (!el) {
         try {
           layer.setStyle({
             dashArray,
-            // Leaflet 1.x SVG supports dashOffset as a path option in practice
-            ...( { dashOffset: String(Math.round(offset)) } as any ),
-          });
+            dashOffset: String(Math.round(value)),
+          } as L.PathOptions & { dashOffset?: string });
         } catch {
           /* ignore */
         }
+        return;
+      }
+      el.setAttribute('stroke-dasharray', dashArray);
+      el.setAttribute('stroke-dashoffset', String(value));
+      el.style.setProperty('stroke-dasharray', dashArray, 'important');
+      el.style.setProperty('stroke-dashoffset', String(value), 'important');
+      for (const c of className.split(/\s+/)) {
+        if (c) el.classList.add(c);
       }
     };
 
+    apply(0);
+
     const tick = (now: number) => {
       if (document.visibilityState === 'visible') {
-        const dt = Math.min(48, now - last);
+        const dt = Math.min(50, now - last);
         last = now;
-        // Negative offset → dashes travel along the path (parent → child)
-        offsetRef.current -= speed * (dt / 16);
-        if (offsetRef.current <= -cycle) offsetRef.current += cycle;
-        apply(offsetRef.current);
+        offset -= speed * (dt / 16);
+        while (offset <= -cycle) offset += cycle;
+        apply(offset);
       } else {
         last = now;
       }
       raf = requestAnimationFrame(tick);
     };
-
     raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [dashArray, className, speed, positions, color, weight]);
 
-  return (
-    <Polyline
-      ref={ref as any}
-      positions={positions}
-      pathOptions={{
-        color,
-        weight,
-        opacity,
-        dashArray,
-        className,
-        lineCap: 'round',
-        lineJoin: 'round',
-      }}
-    />
-  );
+    return () => {
+      cancelAnimationFrame(raf);
+      map.removeLayer(layer);
+      map.removeLayer(underlay);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [map, posKey, color, weight, opacity, className, dashArray, speed]);
+
+  return null;
 }
 
 function findConnector(connectors: Connector[], kind: string, fromId: number, toId: number) {
@@ -867,11 +898,11 @@ export default function ClientsMap() {
                   key={`s-olt-${srv.id}`}
                   positions={path}
                   color="#0d9488"
-                  weight={hi ? 4 : 2.5}
-                  opacity={0.85 * lineDim(hi)}
+                  weight={hi ? 4 : 3}
+                  opacity={0.95 * lineDim(hi)}
                   className="flow-line-backbone"
-                  dashArray="10 8"
-                  speed={0.45}
+                  dashArray="18 14"
+                  speed={1.0}
                 />
               );
             })}
@@ -895,11 +926,11 @@ export default function ClientsMap() {
                   key={`parent-nap-${n.id}`}
                   positions={path}
                   color={parent.kind === 'olt' ? '#2563eb' : '#7c3aed'}
-                  weight={hi ? 3.5 : 2}
-                  opacity={0.85 * lineDim(!!hi)}
+                  weight={hi ? 3.5 : 2.75}
+                  opacity={0.95 * lineDim(!!hi)}
                   className="flow-line-backbone"
-                  dashArray="10 8"
-                  speed={0.5}
+                  dashArray="16 14"
+                  speed={1.15}
                 />
               );
             })}
@@ -917,11 +948,11 @@ export default function ClientsMap() {
                   key={`cl-${c.id}`}
                   positions={path}
                   color={lineColor}
-                  weight={hi ? 3.5 : state === 'online' ? 2.5 : 2}
-                  opacity={(state === 'online' ? 0.95 : 0.75) * lineDim(hi)}
+                  weight={hi ? 3.5 : state === 'online' ? 3 : 2.5}
+                  opacity={(state === 'online' ? 0.98 : 0.85) * lineDim(hi)}
                   className={clientCableClass(state, hi)}
-                  dashArray={state === 'online' ? '12 10' : state === 'disabled' ? '4 12' : '8 10'}
-                  speed={state === 'online' ? 0.7 : state === 'disabled' ? 0.25 : 0.45}
+                  dashArray={state === 'online' ? '16 12' : state === 'disabled' ? '6 14' : '14 12'}
+                  speed={state === 'online' ? 1.35 : state === 'disabled' ? 0.45 : 0.9}
                 />
               );
             })}
