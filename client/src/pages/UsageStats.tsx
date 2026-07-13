@@ -5,7 +5,7 @@ import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YA
 import Layout from '../components/Layout';
 import { Card, TabBar, Toolbar, DataTable } from '../components/ui';
 import { api } from '../api';
-import { formatBps, TrafficPair } from '../lib/traffic';
+import { formatBps } from '../lib/traffic';
 import { useRouterDevice } from '../context/RouterContext';
 
 function formatBytes(n: number): string {
@@ -92,28 +92,59 @@ export default function UsageStats() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [days, current?.id]);
 
-  const applyDetail = (d: any) => {
-    setHistory(d.history || []);
-    const samples: TrafficPoint[] = (d.samples || []).map((s: any) => ({
-      t: s.t,
-      label: s.label || String(s.t || '').slice(11, 16),
-      downloadBps: Number(s.downloadBps) || 0,
-      uploadBps: Number(s.uploadBps) || 0,
-    }));
-    // Append a live point so the graph moves even between poll samples.
-    if (d.live && (d.live.downloadBps || d.live.uploadBps || d.live.online)) {
-      const nowLabel = new Date().toISOString().slice(11, 19);
-      samples.push({
-        t: new Date().toISOString(),
-        label: nowLabel,
-        downloadBps: Number(d.live.downloadBps) || 0,
-        uploadBps: Number(d.live.uploadBps) || 0,
-      });
+  const applyDetail = (d: any, opts?: { silent?: boolean }) => {
+    if (!opts?.silent) {
+      setHistory(d.history || []);
+      const samples: TrafficPoint[] = (d.samples || []).map((s: any) => ({
+        t: s.t,
+        label: s.label || String(s.t || '').slice(11, 16),
+        downloadBps: Number(s.downloadBps) || 0,
+        uploadBps: Number(s.uploadBps) || 0,
+      }));
+      if (d.live && (d.live.downloadBps || d.live.uploadBps || d.live.online)) {
+        const nowLabel = new Date().toISOString().slice(11, 19);
+        samples.push({
+          t: new Date().toISOString(),
+          label: nowLabel,
+          downloadBps: Number(d.live.downloadBps) || 0,
+          uploadBps: Number(d.live.uploadBps) || 0,
+        });
+      }
+      setTrafficSeries(samples.slice(-120));
+      setLiveServices(d.services || []);
+      setServicesNote(d.servicesNote || '');
+    } else {
+      // 1s silent polls: update live rates + append graph point; refresh services occasionally via full samples.
+      if (Array.isArray(d.samples) && d.samples.length) {
+        /* keep stored history samples as baseline on first silent after open — handled by initial load */
+      }
+      if (d.live) {
+        const nowIso = new Date().toISOString();
+        const nowLabel = nowIso.slice(11, 19);
+        setTrafficSeries((prev) => {
+          const point: TrafficPoint = {
+            t: nowIso,
+            label: nowLabel,
+            downloadBps: Number(d.live.downloadBps) || 0,
+            uploadBps: Number(d.live.uploadBps) || 0,
+          };
+          const next = prev.length ? [...prev, point] : [
+            ...(d.samples || []).map((s: any) => ({
+              t: s.t,
+              label: s.label || String(s.t || '').slice(11, 16),
+              downloadBps: Number(s.downloadBps) || 0,
+              uploadBps: Number(s.uploadBps) || 0,
+            })),
+            point,
+          ];
+          return next.slice(-120);
+        });
+      }
+      if (Array.isArray(d.services)) setLiveServices(d.services);
+      if (d.servicesNote != null) setServicesNote(d.servicesNote);
+      if (Array.isArray(d.history) && d.history.length) setHistory(d.history);
     }
-    setTrafficSeries(samples.slice(-120));
-    setLiveServices(d.services || []);
     setLive(d.live || null);
-    setServicesNote(d.servicesNote || '');
   };
 
   const loadDetail = async (username: string, opts?: { silent?: boolean }) => {
@@ -122,7 +153,7 @@ export default function UsageStats() {
       const r = await api.get('/usage/detail', {
         params: { username, days: 30, hours: 6, ...(current?.id ? { routerId: current.id } : {}) },
       });
-      applyDetail(r.data);
+      applyDetail(r.data, opts);
     } catch {
       if (!opts?.silent) {
         setHistory([]);
@@ -147,11 +178,12 @@ export default function UsageStats() {
     await loadDetail(u.username);
   };
 
-  // Refresh live traffic + services while a user is selected (pause when tab hidden)
+  // Live traffic + graph refresh every 1s while a user is selected (pause when tab hidden)
   useEffect(() => {
     if (!selected?.username || tab !== 'users') return;
     let cancelled = false;
     let timer: number | null = null;
+    let inFlight = false;
 
     const clearTimer = () => {
       if (timer != null) {
@@ -163,13 +195,21 @@ export default function UsageStats() {
     const schedule = () => {
       clearTimer();
       if (cancelled || document.visibilityState !== 'visible') return;
-      timer = window.setTimeout(tick, 8_000);
+      timer = window.setTimeout(tick, 1000);
     };
 
     const tick = async () => {
-      if (cancelled || document.visibilityState !== 'visible') return;
-      await loadDetail(selected.username, { silent: true });
-      schedule();
+      if (cancelled || document.visibilityState !== 'visible' || inFlight) {
+        if (!cancelled && document.visibilityState === 'visible' && inFlight) schedule();
+        return;
+      }
+      inFlight = true;
+      try {
+        await loadDetail(selected.username, { silent: true });
+      } finally {
+        inFlight = false;
+        if (!cancelled && document.visibilityState === 'visible') schedule();
+      }
     };
 
     const onVisibility = () => {
@@ -178,7 +218,7 @@ export default function UsageStats() {
     };
 
     document.addEventListener('visibilitychange', onVisibility);
-    schedule();
+    void tick();
     return () => {
       cancelled = true;
       clearTimer();
@@ -213,7 +253,6 @@ export default function UsageStats() {
     () => [
       { key: 'subscriber', label: 'Subscriber' },
       { key: 'plan', label: 'Plan' },
-      { key: 'live', label: 'Live', align: 'right' as const },
       { key: 'download', label: 'Download', align: 'right' as const },
       { key: 'upload', label: 'Upload', align: 'right' as const },
       { key: 'peak', label: 'Peak ↓', align: 'right' as const },
@@ -224,14 +263,12 @@ export default function UsageStats() {
   const userRows = useMemo(
     () =>
       users.map((u) => {
-        const liveTotal = (Number(u.downloadBps) || 0) + (Number(u.uploadBps) || 0);
         const active = selected?.username === u.username;
         return {
           key: u.username,
           sortValues: {
             subscriber: `${u.username} ${u.customer || ''}`,
             plan: u.profile || '',
-            live: liveTotal,
             download: Number(u.rxBytes) || 0,
             upload: Number(u.txBytes) || 0,
             peak: Number(u.peakRxBps) || 0,
@@ -240,15 +277,14 @@ export default function UsageStats() {
             <button
               type="button"
               key="sub"
-              className={`text-left w-full rounded-lg px-1 -mx-1 py-0.5 ${active ? 'bg-brand-50 ring-1 ring-brand-200' : 'hover:bg-slate-50'}`}
+              className={`usage-user-btn ${active ? 'is-selected' : ''}`}
               onClick={() => openUser(u)}
             >
-              <div className="font-semibold text-slate-800">{u.username}</div>
+              <div className="usage-user-name font-semibold text-slate-800">{u.username}</div>
               <div className="text-xs text-slate-400">{u.customer}</div>
             </button>,
-            <span key="plan" className="text-slate-600">{u.profile || '—'}</span>,
-            <span key="live" className="inline-block text-right w-full">
-              <TrafficPair downloadBps={u.downloadBps} uploadBps={u.uploadBps} />
+            <span key="plan" className="text-slate-600">
+              {u.profile || '—'}
             </span>,
             <span key="dl" className="font-medium text-emerald-700">
               {formatBytes(u.rxBytes)}
@@ -346,20 +382,24 @@ export default function UsageStats() {
             <p className="text-xs text-slate-400 mb-3">
               {note ||
                 'Download/Upload totals are real traffic measured from each subscriber’s <pppoe-*> interface since sampling started. First sample sets a baseline; usage accumulates after that.'}{' '}
-              Click a subscriber for traffic graph and live services.
+              Click a subscriber for live traffic graph and services.
             </p>
-            <div className="min-w-0">
-                <DataTable
-                  columns={userColumns}
-                  rows={userRows}
-                  emptyMessage="No usage yet. Online PPPoE sessions are sampled every minute — click Sample now while clients are connected."
-                />
-              </div>
+            <div
+              className={`min-w-0 transition-all duration-300 ease-out ${
+                selected ? 'w-full max-w-[min(100%,calc(100%-26rem))] lg:max-w-[58%]' : 'w-full'
+              }`}
+            >
+              <DataTable
+                columns={userColumns}
+                rows={userRows}
+                emptyMessage="No usage yet. Online PPPoE sessions are sampled every minute — click Sample now while clients are connected."
+              />
+            </div>
 
               {selected &&
                 createPortal(
                   <div
-                    className="fixed z-[80] right-4 sm:right-6 top-1/2 -translate-y-1/2 w-[min(380px,calc(100vw-1.5rem))] max-h-[85vh] overflow-y-auto rounded-2xl border border-slate-200 bg-white/95 backdrop-blur-sm shadow-2xl p-4"
+                    className="usage-detail-panel fixed z-[80] right-3 sm:right-5 top-1/2 -translate-y-1/2 w-[min(460px,calc(100vw-1.25rem))] max-h-[88vh] overflow-y-auto rounded-2xl border border-slate-200 bg-white/95 backdrop-blur-sm shadow-2xl p-5"
                     role="dialog"
                     aria-label={`Usage for ${selected.username}`}
                   >
@@ -424,7 +464,7 @@ export default function UsageStats() {
                           Traffic
                           <span className="font-normal text-slate-400">download / upload · last samples</span>
                         </div>
-                        <div className="h-40 rounded-lg bg-slate-50 border border-slate-100 px-1 pt-2">
+                        <div className="h-52 rounded-lg bg-slate-50 border border-slate-100 px-1 pt-2">
                           {trafficSeries.length > 1 ? (
                             <ResponsiveContainer width="100%" height="100%">
                               <AreaChart data={trafficSeries} margin={{ top: 4, right: 6, left: 0, bottom: 0 }}>

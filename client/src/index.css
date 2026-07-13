@@ -492,13 +492,57 @@ body {
 }
 [data-theme='onepiece'] .bg-white,
 [data-theme='onepiece'] .bg-white\/90,
+[data-theme='onepiece'] .bg-white\/95,
 [data-theme='onepiece'] .bg-slate-50 {
-  background-color: rgba(12, 35, 64, 0.9) !important;
+  background-color: rgba(12, 35, 64, 0.92) !important;
 }
 [data-theme='onepiece'] .text-brand-600,
 [data-theme='onepiece'] .text-brand-500,
 [data-theme='onepiece'] .text-brand-400 {
   color: #e8b923 !important;
+}
+
+/* Usage stats: selected subscriber — never use solid light fills on dark themes */
+.usage-user-btn {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border-radius: 0.5rem;
+  padding: 0.25rem 0.4rem;
+  margin-left: -0.25rem;
+  margin-right: -0.25rem;
+  transition: background-color 0.15s ease, box-shadow 0.15s ease, color 0.15s ease;
+  background: transparent;
+  color: inherit;
+}
+.usage-user-btn:hover {
+  background: color-mix(in srgb, var(--brand, #f97316) 10%, transparent);
+}
+.usage-user-btn.is-selected {
+  background: color-mix(in srgb, var(--brand, #f97316) 18%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brand, #f97316) 55%, transparent);
+}
+.usage-user-btn.is-selected .usage-user-name {
+  color: var(--brand, #ea580c);
+  font-weight: 700;
+}
+[data-theme='dark'] .usage-user-btn.is-selected .usage-user-name,
+[data-theme='onepiece'] .usage-user-btn.is-selected .usage-user-name {
+  color: var(--sidebar-active-fg, #fdba74) !important;
+}
+[data-theme='dark'] .data-table tbody tr:hover,
+[data-theme='onepiece'] .data-table tbody tr:hover {
+  background-color: color-mix(in srgb, var(--brand, #fb923c) 10%, transparent) !important;
+}
+[data-theme='dark'] .bg-brand-50,
+[data-theme='onepiece'] .bg-brand-50,
+[data-theme='dark'] .bg-brand-50\/30,
+[data-theme='onepiece'] .bg-brand-50\/30 {
+  background-color: color-mix(in srgb, var(--brand, #fb923c) 16%, transparent) !important;
+}
+[data-theme='dark'] .ring-brand-200,
+[data-theme='onepiece'] .ring-brand-200 {
+  --tw-ring-color: color-mix(in srgb, var(--brand, #fb923c) 45%, transparent) !important;
 }
 
 /* Light theme modal alignment */
