@@ -8,7 +8,7 @@ import {
 import { api, peso } from '../api';
 import LocationEditor, { DEFAULT_PIN } from '../components/LocationEditor';
 import { useRouterDevice } from '../context/RouterContext';
-import { TrafficPair } from '../lib/traffic';
+import { TrafficPair, UsagePair } from '../lib/traffic';
 import { copyTextOrPrompt } from '../lib/clipboard';
 
 interface PUser {
@@ -31,6 +31,9 @@ interface PUser {
   expirationProfile?: string | null;
   downloadBps?: number;
   uploadBps?: number;
+  /** Rolling last-24h byte usage (download / upload). */
+  usage24hRx?: number;
+  usage24hTx?: number;
 }
 
 const TABS = [
@@ -145,8 +148,8 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
   const routerParams = current?.id ? { routerId: current.id } : {};
 
   const loadUsers = (opts?: { silent?: boolean; traffic?: boolean }) => {
-    // Full loads include live traffic; silent polls skip it unless traffic:true.
-    const includeTraffic = opts?.traffic ?? !opts?.silent;
+    // Users tab shows 24h usage (from DB), not live traffic. traffic=true is opt-in only.
+    const includeTraffic = opts?.traffic === true;
     const q = `/pppoe/users?service=${service}${routerQ}&traffic=${includeTraffic ? 1 : 0}`;
     return api
       .get(q)
@@ -165,14 +168,11 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
               const u = nextById.get(old.id);
               if (!u) return old;
               nextById.delete(old.id);
-              if (!includeTraffic) {
-                return {
-                  ...u,
-                  downloadBps: old.downloadBps,
-                  uploadBps: old.uploadBps,
-                };
-              }
-              return u;
+              return {
+                ...u,
+                downloadBps: includeTraffic ? u.downloadBps : old.downloadBps,
+                uploadBps: includeTraffic ? u.uploadBps : old.uploadBps,
+              };
             });
             for (const u of nextById.values()) merged.push(u);
             return merged;
@@ -406,7 +406,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, current?.id]);
 
-  // Live status + traffic polling on Users / Offline / Active tabs.
+  // Live status on Users / Offline; live traffic only on Active Connections.
   // 2s refresh while the browser tab is visible; stop completely when hidden / in background.
   const usersPollInFlight = useRef(false);
   useEffect(() => {
@@ -444,7 +444,8 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
         if (tab === 'active') {
           await loadActive({ silent: true, traffic: true });
         } else {
-          await loadUsers({ silent: true, traffic: true });
+          // Status + 24h usage only — no live monitor-traffic on the Users list.
+          await loadUsers({ silent: true, traffic: false });
         }
       } finally {
         usersPollInFlight.current = false;
@@ -744,9 +745,9 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                   { key: 'plan', label: 'Plan' },
                   { key: 'mtProfile', label: 'Profile' },
                   { key: 'status', label: 'Status' },
-                  { key: 'traffic', label: (
-                    <span>
-                      Traffic <span className="text-emerald-600">↓</span>/<span className="text-sky-600">↑</span>
+                  { key: 'usage', label: (
+                    <span title="Rolling usage over the last 24 hours">
+                      Usage 24h <span className="text-emerald-600">↓</span>/<span className="text-sky-600">↑</span>
                     </span>
                   ) },
                   { key: 'due', label: 'Subscription Due' },
@@ -762,7 +763,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                     status: isDisabledForNonPayment(u)
                       ? `${userStatusLabel(u)} non-payment`
                       : userStatusLabel(u),
-                    traffic: (Number(u.downloadBps) || 0) + (Number(u.uploadBps) || 0),
+                    usage: (Number(u.usage24hRx) || 0) + (Number(u.usage24hTx) || 0),
                     due: u.subscriptionDue,
                   },
                   cells: [
@@ -786,11 +787,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                       {u.mikrotikProfile || '—'}
                     </span>,
                     <UserStatusCell u={u} />,
-                    <span className="text-xs font-medium text-slate-700 whitespace-nowrap">
-                      {u.sessionOnline || u.online === 1 || u.online === true
-                        ? <TrafficPair downloadBps={u.downloadBps} uploadBps={u.uploadBps} />
-                        : '—'}
-                    </span>,
+                    <UsagePair rxBytes={u.usage24hRx} txBytes={u.usage24hTx} />,
                     <span className="text-slate-500">{u.subscriptionDue}</span>,
                     <div key="a" className="flex items-center justify-end gap-1">
                       <IconAction icon={Link2} title="Copy pay link" tone="sky" onClick={() => copyPayLink(u)} />

@@ -75,6 +75,7 @@ import {
   ackUsageAlert,
   getUsageSummary,
   getUserUsageHistory,
+  getUsageLast24hByUser,
   getSubscriberUsageDetail,
   pollUsageAndFairUse,
 } from './usage.js';
@@ -828,8 +829,9 @@ function secretDisabledFromStatus(status: unknown): boolean {
 app.get('/api/pppoe/users', async (req, res) => {
   const service = String(req.query.service || 'pppoe');
   const routerId = req.query.routerId ? Number(req.query.routerId) : null;
-  // traffic=0 skips expensive per-session monitor-traffic (used by silent UI polls).
-  const wantTraffic = String(req.query.traffic ?? '1') !== '0';
+  // Live traffic is for Active Connections; Users tab uses 24h usage instead.
+  // traffic=1 still supported for callers that need live rates on the user list.
+  const wantTraffic = String(req.query.traffic ?? '0') === '1';
   let rows = (
     routerId
       ? db
@@ -867,7 +869,11 @@ app.get('/api/pppoe/users', async (req, res) => {
         const onlineNames = rows.filter((u) => u.sessionOnline).map((u) => String(u.username));
         if (onlineNames.length) {
           try {
-            const traffic = await fetchPppActiveTraffic(router, onlineNames);
+            const addresses: Record<string, string> = {};
+            for (const s of sessions) {
+              if (s.name && s.address && s.address !== '-') addresses[s.name] = s.address;
+            }
+            const traffic = await fetchPppActiveTraffic(router, onlineNames, { addresses });
             const byKey = new Map<string, { download: number; upload: number }>();
             for (const [name, t] of Object.entries(traffic)) byKey.set(pppNameKey(name), t);
             rows = rows.map((u) => {
@@ -888,16 +894,26 @@ app.get('/api/pppoe/users', async (req, res) => {
     }
   }
 
+  const usage24h = getUsageLast24hByUser({
+    routerId,
+    usernames: rows.map((u) => String(u.username)),
+  });
+
   res.json(
-    rows.map((u) => ({
-      ...u,
-      live,
-      panelStatus: u.panelStatus ?? u.status,
-      nonpaymentSince: u.nonpaymentSince ?? null,
-      expirationProfile: u.expirationProfile ?? null,
-      downloadBps: u.downloadBps ?? 0,
-      uploadBps: u.uploadBps ?? 0,
-    }))
+    rows.map((u) => {
+      const usage = usage24h.get(pppNameKey(u.username));
+      return {
+        ...u,
+        live,
+        panelStatus: u.panelStatus ?? u.status,
+        nonpaymentSince: u.nonpaymentSince ?? null,
+        expirationProfile: u.expirationProfile ?? null,
+        downloadBps: u.downloadBps ?? 0,
+        uploadBps: u.uploadBps ?? 0,
+        usage24hRx: usage?.rxBytes ?? 0,
+        usage24hTx: usage?.txBytes ?? 0,
+      };
+    })
   );
 });
 
@@ -1956,19 +1972,26 @@ app.get('/api/pppoe/active', async (req, res) => {
     let traffic: Record<string, { download: number; upload: number }> = {};
     if (wantTraffic) {
       try {
+        const addresses: Record<string, string> = {};
+        for (const s of filtered) {
+          if (s.name && s.address && s.address !== '-') addresses[s.name] = s.address;
+        }
         traffic = await fetchPppActiveTraffic(
           router,
-          filtered.map((s) => s.name)
+          filtered.map((s) => s.name),
+          { addresses }
         );
       } catch {
         /* traffic optional */
       }
     }
+    const trafficByKey = new Map<string, { download: number; upload: number }>();
+    for (const [name, t] of Object.entries(traffic)) trafficByKey.set(pppNameKey(name), t);
     const out = filtered.map((s) => {
       const key = pppNameKey(s.name);
       const u = byUser.get(key);
       const sec = secretByName.get(key);
-      const t = traffic[s.name] || traffic[Object.keys(traffic).find((k) => pppNameKey(k) === key) || ''];
+      const t = trafficByKey.get(key);
       // Profile column: always from /ppp/secret, not the active-session row / billing plan.
       const secretProfile = String(sec?.profile || '').trim();
       return {

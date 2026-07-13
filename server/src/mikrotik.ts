@@ -1206,53 +1206,164 @@ export async function removeDhcpServer(conn: RouterConn, id: string): Promise<vo
  * Those interfaces face the subscriber (LAN side of the PPP session), not the WAN:
  *   - TX (to client)  = subscriber download
  *   - RX (from client) = subscriber upload
+ *
+ * Strategy (covers all sessions, not a small probe cap):
+ *  1) Simple-queue live `rate` matched by queue name or session IP (one API call)
+ *  2) Dual-sample `/interface/print` byte counters for anyone still missing
+ *  3) monitor-traffic only as a last resort for leftovers (batched)
  */
 export async function fetchPppActiveTraffic(
   conn: RouterConn,
-  usernames: string[]
+  usernames: string[],
+  opts?: { addresses?: Record<string, string> }
 ): Promise<Record<string, { download: number; upload: number }>> {
   if (!usernames.length) return {};
   return withRouter(conn, async (api) => {
-    const ifaces = (await api.write('/interface/print')) as Record<string, string>[];
-    const byUser = new Map<string, string>();
-    for (const iface of ifaces || []) {
-      const name = iface.name || '';
-      // <pppoe-username> or pppoe-username (case-insensitive key)
-      const m = name.match(/^<pppoe-(.+)>$/i) || name.match(/^pppoe-(.+)$/i);
-      if (m) byUser.set(pppNameKey(m[1]), name);
-    }
     const out: Record<string, { download: number; upload: number }> = {};
-    // Probe a few at a time — each monitor-traffic is a round trip.
-    // Cap concurrency and total probes so list polls cannot melt the router/host.
-    const CONC = 4;
-    const MAX_PROBE = 20;
-    const wanted = usernames.filter((u) => byUser.has(pppNameKey(u))).slice(0, MAX_PROBE);
-    for (let i = 0; i < wanted.length; i += CONC) {
-      const chunk = wanted.slice(i, i + CONC);
-      await Promise.all(
-        chunk.map(async (user) => {
-          const iface = byUser.get(pppNameKey(user));
-          if (!iface) return;
-          try {
-            const rows = (await api.write('/interface/monitor-traffic', [
-              `=interface=${iface}`,
-              '=once=',
-            ])) as Record<string, string>[];
-            const r = rows?.[0] || {};
-            const rx = Number(r['rx-bits-per-second']) || 0;
-            const tx = Number(r['tx-bits-per-second']) || 0;
-            out[user] = {
-              download: tx, // to subscriber
-              upload: rx, // from subscriber
-            };
-          } catch {
-            /* skip */
+    const nameByKey = new Map<string, string>();
+    for (const u of usernames) nameByKey.set(pppNameKey(u), u);
+    const wantKeys = new Set(nameByKey.keys());
+    const addrToUser = new Map<string, string>();
+    for (const [user, addr] of Object.entries(opts?.addresses || {})) {
+      const ip = String(addr || '')
+        .trim()
+        .split('/')[0]
+        .split(':')[0];
+      if (ip && wantKeys.has(pppNameKey(user))) addrToUser.set(ip, pppNameKey(user));
+    }
+
+    const setRate = (key: string, download: number, upload: number) => {
+      const user = nameByKey.get(key);
+      if (!user) return;
+      const prev = out[user];
+      // Keep the larger reading if we hit the same user from multiple sources.
+      out[user] = {
+        download: Math.max(prev?.download || 0, download),
+        upload: Math.max(prev?.upload || 0, upload),
+      };
+    };
+
+    // ---- 1) Simple queues (dynamic PPPoE queues usually named <pppoe-user>) ----
+    try {
+      const simple = (await api.write('/queue/simple/print')) as Record<string, string>[];
+      for (const q of simple || []) {
+        const qName = String(q.name || '');
+        const m = qName.match(/^<pppoe-(.+)>$/i) || qName.match(/^pppoe-(.+)$/i);
+        let key = m ? pppNameKey(m[1]) : '';
+        if (!key && wantKeys.has(pppNameKey(qName))) key = pppNameKey(qName);
+        if (!key) {
+          const target = String(q.target || q['dst-address'] || '');
+          const ipMatch = target.match(/(\d{1,3}(?:\.\d{1,3}){3})/);
+          if (ipMatch?.[1] && addrToUser.has(ipMatch[1])) key = addrToUser.get(ipMatch[1])!;
+        }
+        if (!key || !wantKeys.has(key)) continue;
+        const raw = String(q.rate || '');
+        const parts = raw.split('/');
+        // Client-targeted simple queue: rate = upload/download
+        const upload = parseRosRate(parts[0]);
+        const download = parseRosRate(parts[1] || parts[0]);
+        // Record even when idle (0/0) so we don't re-probe this user.
+        setRate(key, download, upload);
+      }
+    } catch {
+      /* optional */
+    }
+
+    const missingAfterQueues = [...wantKeys].filter((k) => {
+      const u = nameByKey.get(k)!;
+      return out[u] == null;
+    });
+
+    // ---- 2) Dual-sample interface counters for remaining users (2 prints, all ifaces) ----
+    if (missingAfterQueues.length) {
+      try {
+        const readBytes = async () => {
+          const ifaces = (await api.write('/interface/print')) as Record<string, string>[];
+          const map = new Map<string, { down: number; up: number; iface: string }>();
+          for (const iface of ifaces || []) {
+            const name = iface.name || '';
+            const m = name.match(/^<pppoe-(.+)>$/i) || name.match(/^pppoe-(.+)$/i);
+            if (!m) continue;
+            const key = pppNameKey(m[1]);
+            if (!wantKeys.has(key)) continue;
+            const ifaceRx = Number(iface['rx-byte'] || iface['rx-bytes'] || 0) || 0;
+            const ifaceTx = Number(iface['tx-byte'] || iface['tx-bytes'] || 0) || 0;
+            map.set(key, {
+              down: ifaceTx, // to subscriber
+              up: ifaceRx, // from subscriber
+              iface: name,
+            });
           }
-        })
-      );
+          return map;
+        };
+
+        const t0 = Date.now();
+        const a = await readBytes();
+        await new Promise((r) => setTimeout(r, 900));
+        const b = await readBytes();
+        const dt = Math.max(0.5, (Date.now() - t0) / 1000);
+
+        for (const key of missingAfterQueues) {
+          const s0 = a.get(key);
+          const s1 = b.get(key);
+          if (!s0 || !s1) continue;
+          const downBytes = Math.max(0, s1.down - s0.down);
+          const upBytes = Math.max(0, s1.up - s0.up);
+          setRate(key, Math.round((downBytes * 8) / dt), Math.round((upBytes * 8) / dt));
+        }
+      } catch {
+        /* optional */
+      }
+    }
+
+    // ---- 3) monitor-traffic for any still missing (batched; no hard 20-user cap) ----
+    const stillMissing = [...wantKeys].filter((k) => {
+      const u = nameByKey.get(k)!;
+      return out[u] == null;
+    });
+    if (stillMissing.length) {
+      try {
+        const ifaces = (await api.write('/interface/print')) as Record<string, string>[];
+        const byUser = new Map<string, string>();
+        for (const iface of ifaces || []) {
+          const name = iface.name || '';
+          const m = name.match(/^<pppoe-(.+)>$/i) || name.match(/^pppoe-(.+)$/i);
+          if (m) byUser.set(pppNameKey(m[1]), name);
+        }
+        const CONC = 6;
+        const wanted = stillMissing.filter((k) => byUser.has(k));
+        for (let i = 0; i < wanted.length; i += CONC) {
+          const chunk = wanted.slice(i, i + CONC);
+          await Promise.all(
+            chunk.map(async (key) => {
+              const iface = byUser.get(key);
+              if (!iface) return;
+              try {
+                const rows = (await api.write('/interface/monitor-traffic', [
+                  `=interface=${iface}`,
+                  '=once=',
+                ])) as Record<string, string>[];
+                const r = rows?.[0] || {};
+                const rx = Number(r['rx-bits-per-second']) || 0;
+                const tx = Number(r['tx-bits-per-second']) || 0;
+                setRate(key, tx, rx);
+              } catch {
+                /* skip */
+              }
+            })
+          );
+        }
+      } catch {
+        /* optional */
+      }
+    }
+
+    // Ensure every requested username has a numeric entry (0/0) so UI never looks "blank"
+    for (const u of usernames) {
+      if (out[u] == null) out[u] = { download: 0, upload: 0 };
     }
     return out;
-  }, { timeoutSec: 30 });
+  }, { timeoutSec: 45 });
 }
 
 /**

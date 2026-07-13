@@ -420,6 +420,84 @@ export function getUserUsageHistory(username: string, days = 30) {
     .all(username, `-${Math.max(1, days)} days`);
 }
 
+/** Rolling last-24h byte usage (download/upload) keyed by lowercase username. */
+export function getUsageLast24hByUser(opts?: {
+  routerId?: number | null;
+  usernames?: string[];
+}): Map<string, { rxBytes: number; txBytes: number }> {
+  ensureUsageTables();
+  const rid = opts?.routerId != null && Number(opts.routerId) > 0 ? Number(opts.routerId) : null;
+  const want =
+    opts?.usernames && opts.usernames.length
+      ? new Set(opts.usernames.map((u) => String(u || '').trim().toLowerCase()).filter(Boolean))
+      : null;
+
+  const rows = (
+    rid
+      ? db
+          .prepare(
+            `SELECT subject_key AS username,
+                    COALESCE(SUM(delta_rx), 0) AS rxBytes,
+                    COALESCE(SUM(delta_tx), 0) AS txBytes
+             FROM usage_samples
+             WHERE subject_type = 'pppoe'
+               AND router_id = ?
+               AND datetime(sampled_at) >= datetime('now', '-1 day')
+             GROUP BY subject_key`
+          )
+          .all(rid)
+      : db
+          .prepare(
+            `SELECT subject_key AS username,
+                    COALESCE(SUM(delta_rx), 0) AS rxBytes,
+                    COALESCE(SUM(delta_tx), 0) AS txBytes
+             FROM usage_samples
+             WHERE subject_type = 'pppoe'
+               AND datetime(sampled_at) >= datetime('now', '-1 day')
+             GROUP BY subject_key`
+          )
+          .all()
+  ) as { username: string; rxBytes: number; txBytes: number }[];
+
+  const map = new Map<string, { rxBytes: number; txBytes: number }>();
+  for (const r of rows) {
+    const key = String(r.username || '').trim().toLowerCase();
+    if (!key) continue;
+    if (want && !want.has(key)) continue;
+    map.set(key, { rxBytes: Number(r.rxBytes) || 0, txBytes: Number(r.txBytes) || 0 });
+  }
+
+  // Fallback to today's usage_daily for anyone with no sample deltas yet
+  const dayRows = (
+    rid
+      ? db
+          .prepare(
+            `SELECT d.subject_key AS username, d.rx_bytes AS rxBytes, d.tx_bytes AS txBytes
+             FROM usage_daily d
+             INNER JOIN pppoe_users u ON u.username = d.subject_key COLLATE NOCASE AND u.router_id = ?
+             WHERE d.subject_type = 'pppoe' AND d.day = date('now', 'localtime')`
+          )
+          .all(rid)
+      : db
+          .prepare(
+            `SELECT subject_key AS username, rx_bytes AS rxBytes, tx_bytes AS txBytes
+             FROM usage_daily
+             WHERE subject_type = 'pppoe' AND day = date('now', 'localtime')`
+          )
+          .all()
+  ) as { username: string; rxBytes: number; txBytes: number }[];
+
+  for (const r of dayRows) {
+    const key = String(r.username || '').trim().toLowerCase();
+    if (!key) continue;
+    if (want && !want.has(key)) continue;
+    if (map.has(key)) continue;
+    map.set(key, { rxBytes: Number(r.rxBytes) || 0, txBytes: Number(r.txBytes) || 0 });
+  }
+
+  return map;
+}
+
 /** Recent live traffic samples (bps) for the download/upload graph. */
 export function getUserTrafficSamples(username: string, hours = 6) {
   const h = Math.max(1, Math.min(48, Number(hours) || 6));
