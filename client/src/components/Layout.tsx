@@ -45,7 +45,7 @@ export default function Layout({
         toggleSidebar: () => setSidebarOpen((v) => !v),
       }}
     >
-      <div className="flex h-[100dvh] max-h-[100dvh] bg-slate-100 bg-mesh-light theme-main overflow-hidden">
+      <div className="flex h-[100dvh] max-h-[100dvh] bg-slate-100 bg-mesh-light theme-main overflow-hidden mobile-app-shell">
         {sidebarOpen && (
           <button
             type="button"
@@ -81,7 +81,7 @@ export default function Layout({
             className={
               fullBleed
                 ? `flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden p-0 page-enter ${readOnly ? 'panel-readonly' : ''}`
-                : `flex-1 min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-y-contain p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:p-6 lg:p-8 page-enter ${readOnly ? 'panel-readonly' : ''}`
+                : `flex-1 min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-y-contain p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] scroll-pb-[calc(var(--keyboard-offset,0px)+1rem)] sm:p-6 lg:p-8 page-enter ${readOnly ? 'panel-readonly' : ''}`
             }
             aria-readonly={readOnly || undefined}
           >

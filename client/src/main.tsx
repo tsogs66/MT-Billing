@@ -16,6 +16,33 @@ async function initNativeShell() {
   try {
     const { StatusBar, Style } = await import('@capacitor/status-bar');
     await StatusBar.setStyle({ style: Style.Dark });
+    await StatusBar.setBackgroundColor({ color: '#0f172a' });
+  } catch {
+    /* optional plugin */
+  }
+  try {
+    const { App } = await import('@capacitor/app');
+    await App.addListener('backButton', ({ canGoBack }) => {
+      if (canGoBack || window.history.length > 1) {
+        window.history.back();
+        return;
+      }
+      void App.exitApp();
+    });
+  } catch {
+    /* optional plugin */
+  }
+  try {
+    const { Keyboard } = await import('@capacitor/keyboard');
+    await Keyboard.setResizeMode({ mode: 'body' });
+    await Keyboard.addListener('keyboardWillShow', (info) => {
+      document.documentElement.classList.add('keyboard-open');
+      document.documentElement.style.setProperty('--keyboard-offset', `${info.keyboardHeight || 0}px`);
+    });
+    await Keyboard.addListener('keyboardWillHide', () => {
+      document.documentElement.classList.remove('keyboard-open');
+      document.documentElement.style.setProperty('--keyboard-offset', '0px');
+    });
   } catch {
     /* optional plugin */
   }

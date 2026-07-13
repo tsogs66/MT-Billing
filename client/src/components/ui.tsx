@@ -30,13 +30,13 @@ export function Card({
       {(title || right) && (
         <div className="card-header">
           {title && (
-            <h3 className="card-title flex items-center gap-2">
+            <h3 className="card-title flex min-w-0 items-center gap-2">
               {Icon && (
-                <span className="flex items-center justify-center w-8 h-8 rounded-lg bg-brand-50 text-brand-500">
+                <span className="flex items-center justify-center w-8 h-8 rounded-lg bg-brand-50 text-brand-500 shrink-0">
                   <Icon size={16} />
                 </span>
               )}
-              {title}
+              <span className="min-w-0 truncate">{title}</span>
             </h3>
           )}
           {right}
@@ -301,7 +301,7 @@ export function Flash({ message, type = 'success', onDismiss }: { message: strin
 export function Toast({ message }: { message: string }) {
   if (!message) return null;
   return (
-    <div className="fixed bottom-6 right-6 z-[2000] max-w-sm animate-fade-in-up">
+    <div className="fixed inset-x-3 bottom-[calc(env(safe-area-inset-bottom)+var(--keyboard-offset,0px)+0.75rem)] z-[2000] max-w-sm sm:left-auto sm:right-6 animate-fade-in-up">
       <div className="flex items-center gap-2.5 bg-slate-900 text-white text-sm font-medium px-4 py-3 rounded-xl shadow-card-hover border border-slate-700/50">
         <CheckCircle2 size={18} className="text-emerald-400 shrink-0" />
         {message}
@@ -341,18 +341,18 @@ export function Modal({
 
   return createPortal(
     <div
-      className="theme-modal-backdrop fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-[2000] p-4 animate-fade-in"
+      className="theme-modal-backdrop fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-end sm:items-center justify-center z-[2000] p-2 sm:p-4 pt-[max(0.5rem,env(safe-area-inset-top))] pb-[calc(env(safe-area-inset-bottom)+var(--keyboard-offset,0px)+0.5rem)] animate-fade-in"
       style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0 }}
       role="presentation"
     >
       <div
-        className={`theme-modal bg-white rounded-2xl shadow-2xl w-full ${wide ? 'max-w-2xl' : widths[maxWidth]} max-h-[90vh] flex flex-col animate-scale-in border border-slate-200/80`}
+        className={`theme-modal bg-white rounded-2xl shadow-2xl w-full ${wide ? 'max-w-2xl' : widths[maxWidth]} max-h-[min(92dvh,calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom)-var(--keyboard-offset,0px)-1rem))] flex flex-col animate-scale-in border border-slate-200/80`}
         role="dialog"
         aria-modal="true"
         aria-labelledby="modal-title"
       >
-        <div className="theme-modal-header flex items-start justify-between px-5 py-4 border-b border-slate-100 shrink-0">
-          <div>
+        <div className="theme-modal-header flex items-start justify-between gap-3 px-4 sm:px-5 py-4 border-b border-slate-100 shrink-0">
+          <div className="min-w-0">
             <h3 id="modal-title" className="font-bold text-slate-900 text-lg tracking-tight">{title}</h3>
             {subtitle && <p className="text-sm text-slate-400 mt-0.5">{subtitle}</p>}
           </div>
@@ -360,8 +360,8 @@ export function Modal({
             <X size={18} />
           </button>
         </div>
-        <div className="p-5 overflow-y-auto flex-1 min-h-0">{children}</div>
-        {footer && <div className="theme-modal-footer flex justify-end gap-2 px-5 py-3 border-t border-slate-100 bg-slate-50/80 rounded-b-2xl shrink-0">{footer}</div>}
+        <div className="p-4 sm:p-5 overflow-y-auto flex-1 min-h-0">{children}</div>
+        {footer && <div className="theme-modal-footer flex flex-col-reverse sm:flex-row sm:justify-end gap-2 px-4 sm:px-5 py-3 border-t border-slate-100 bg-slate-50/80 rounded-b-2xl shrink-0">{footer}</div>}
       </div>
     </div>,
     document.body
@@ -447,7 +447,28 @@ export function DataTable({
   };
 
   return (
-    <div className="overflow-x-auto rounded-xl border border-slate-100/80">
+    <div className="rounded-xl border border-slate-100/80 overflow-hidden">
+      <div className="md:hidden divide-y divide-slate-100/80">
+        {sortedRows.length === 0 ? (
+          <div className="text-center text-slate-400 py-10 px-4">{emptyMessage}</div>
+        ) : (
+          sortedRows.map((r) => (
+            <div key={r.key} className="bg-[var(--card-bg)] p-4 space-y-3">
+              {r.cells.map((cell, j) => (
+                <div key={j} className="grid grid-cols-[minmax(6.5rem,42%)_minmax(0,1fr)] gap-3 text-sm">
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                    {columns[j]?.label}
+                  </div>
+                  <div className={`data-table-mobile-cell min-w-0 text-slate-700 ${columns[j]?.align === 'right' ? 'text-right' : columns[j]?.align === 'center' ? 'text-center' : ''}`}>
+                    {cell}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ))
+        )}
+      </div>
+      <div className="hidden md:block overflow-x-auto">
       <table className="data-table w-full text-sm">
         <thead className={stickyHeader ? 'sticky top-0 z-10' : ''}>
           <tr>
@@ -503,6 +524,7 @@ export function DataTable({
           )}
         </tbody>
       </table>
+      </div>
     </div>
   );
 }
@@ -600,9 +622,9 @@ export function IconAction({
 
 export function Toolbar({ left, right }: { left?: ReactNode; right?: ReactNode }) {
   return (
-    <div className="flex items-center justify-between px-5 py-3 gap-3 flex-wrap border-b border-slate-100/80 bg-slate-50/40">
-      <div className="text-sm text-slate-500">{left}</div>
-      <div className="flex items-center gap-2 flex-wrap">{right}</div>
+    <div className="flex items-start sm:items-center justify-between px-4 sm:px-5 py-3 gap-3 flex-col sm:flex-row border-b border-slate-100/80 bg-slate-50/40">
+      <div className="text-sm text-slate-500 min-w-0">{left}</div>
+      <div className="flex items-center gap-2 flex-wrap w-full sm:w-auto">{right}</div>
     </div>
   );
 }
