@@ -73,6 +73,12 @@ function defaultPath(a: [number, number], b: [number, number]): [number, number]
   return [a, b];
 }
 
+function latLngDist2(a: [number, number], b: [number, number]) {
+  const dy = a[0] - b[0];
+  const dx = a[1] - b[1];
+  return dy * dy + dx * dx;
+}
+
 function resolvePath(
   connectors: Connector[],
   kind: string,
@@ -81,7 +87,17 @@ function resolvePath(
   fallback: [number, number][]
 ): [number, number][] {
   const c = findConnector(connectors, kind, fromId, toId);
-  if (c && c.points && c.points.length >= 2) return c.points;
+  if (c && c.points && c.points.length >= 2) {
+    const pts = c.points;
+    // Normalize so path always runs from → to (parent → child) for downstream dash animation.
+    if (fallback.length >= 2) {
+      const from = fallback[0];
+      const to = fallback[fallback.length - 1];
+      const start = pts[0];
+      if (latLngDist2(start, to) < latLngDist2(start, from)) return [...pts].reverse();
+    }
+    return pts;
+  }
   return fallback;
 }
 
@@ -533,7 +549,7 @@ export default function ClientsMap() {
               />
             </div>
             <span className="hidden lg:inline text-xs text-slate-400 max-w-md">
-              Cables: Online green · Offline red · Expired rose · Non-payment amber · Disabled gray (dashes flow toward parent)
+              Cables: Online green · Offline red · Expired rose · Non-payment amber · Disabled gray (dashes run OLT → NAP → ONU)
             </span>
           </div>
         </div>
@@ -800,7 +816,7 @@ export default function ClientsMap() {
               const state = clientState(c);
               const hi = highlightChain?.clientId === c.id;
               const lineColor = CLIENT_COLORS[state].fill;
-              // Path parent → child; CSS dash animation flows toward the parent connection
+              // Path parent → child so CSS dash animation runs OLT/NAP → ONU (downstream)
               const path = resolvePath(connectors, 'nap-client', nap.id, c.id, defaultPath([nap.lat, nap.lng], [c.lat, c.lng]));
               return (
                 <Polyline
