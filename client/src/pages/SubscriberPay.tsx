@@ -589,9 +589,11 @@ export default function SubscriberPay() {
               <ol className="text-sm text-slate-600 space-y-1.5 list-decimal pl-5">
                 <li>Choose <b>GCash</b> or <b>Maya</b> below (or scan with any bank app).</li>
                 <li>Tap the QR to enlarge, or download it, then scan and pay the exact amount.</li>
-                <li>Copy the <b>Reference / Transaction No.</b> from your receipt.</li>
+                <li>
+                  Upload a screenshot or take a photo of your transaction — we will{' '}
+                  <b>automatically read the Reference / Transaction No.</b> from it.
+                </li>
                 <li>Or enter the <b>Reference / Transaction No.</b> manually and submit without a photo.</li>
-                <li>If you attach a receipt, submit is allowed when the amount is equal to or higher than the amount due.</li>
               </ol>
               <p className="text-xs text-slate-600 mt-3 rounded-xl bg-white border border-slate-200 px-3 py-2.5 leading-relaxed">
                 <span className="font-semibold text-slate-800">QR Ph / InstaPay:</span> All payment QR codes on this page can be scanned and paid using{' '}

@@ -59,10 +59,103 @@ const CLIENT_COLORS: Record<ClientState, { fill: string; glow: string }> = {
   disabled: { fill: '#94a3b8', glow: 'rgba(148,163,184,0.4)' },
 };
 
-/** CSS class for animated client cables (dashes flow NAP → client). */
+/** CSS class for animated client cables (dashes run NAP → ONU via JS dashOffset). */
 function clientCableClass(state: ClientState, highlighted: boolean): string {
   const base = `flow-line-client flow-line-client-${state}`;
   return highlighted ? `${base} is-hot` : base;
+}
+
+/**
+ * Leaflet map panes use CSS transforms, which often break CSS stroke-dashoffset
+ * animations. Drive dashOffset from rAF so cables visibly run OLT → NAP → ONU.
+ */
+function FlowPolyline({
+  positions,
+  color,
+  weight,
+  opacity = 0.85,
+  className = '',
+  dashArray = '10 8',
+  speed = 0.55,
+}: {
+  positions: [number, number][];
+  color: string;
+  weight: number;
+  opacity?: number;
+  className?: string;
+  dashArray?: string;
+  /** Negative direction = along path toward child (downstream). */
+  speed?: number;
+}) {
+  const ref = useRef<L.Polyline | null>(null);
+  const offsetRef = useRef(0);
+
+  useEffect(() => {
+    let raf = 0;
+    let last = performance.now();
+    const cycle = 48;
+
+    const apply = (offset: number) => {
+      const layer = ref.current;
+      if (!layer) return;
+      const el =
+        (typeof layer.getElement === 'function' ? layer.getElement() : null) ||
+        (layer as any)._path ||
+        null;
+      if (el) {
+        el.style.strokeDasharray = dashArray;
+        el.style.strokeDashoffset = String(offset);
+        el.setAttribute('stroke-dasharray', dashArray);
+        el.setAttribute('stroke-dashoffset', String(offset));
+        for (const c of className.split(/\s+/)) {
+          if (c) el.classList.add(c);
+        }
+      } else {
+        try {
+          layer.setStyle({
+            dashArray,
+            // Leaflet 1.x SVG supports dashOffset as a path option in practice
+            ...( { dashOffset: String(Math.round(offset)) } as any ),
+          });
+        } catch {
+          /* ignore */
+        }
+      }
+    };
+
+    const tick = (now: number) => {
+      if (document.visibilityState === 'visible') {
+        const dt = Math.min(48, now - last);
+        last = now;
+        // Negative offset → dashes travel along the path (parent → child)
+        offsetRef.current -= speed * (dt / 16);
+        if (offsetRef.current <= -cycle) offsetRef.current += cycle;
+        apply(offsetRef.current);
+      } else {
+        last = now;
+      }
+      raf = requestAnimationFrame(tick);
+    };
+
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [dashArray, className, speed, positions, color, weight]);
+
+  return (
+    <Polyline
+      ref={ref as any}
+      positions={positions}
+      pathOptions={{
+        color,
+        weight,
+        opacity,
+        dashArray,
+        className,
+        lineCap: 'round',
+        lineJoin: 'round',
+      }}
+    />
+  );
 }
 
 function findConnector(connectors: Connector[], kind: string, fromId: number, toId: number) {
@@ -549,7 +642,7 @@ export default function ClientsMap() {
               />
             </div>
             <span className="hidden lg:inline text-xs text-slate-400 max-w-md">
-              Cables: Online green · Offline red · Expired rose · Non-payment amber · Disabled gray (dashes run OLT → NAP → ONU)
+              Cables: Online green · Offline red · Expired rose · Non-payment amber · Disabled gray (animated OLT → NAP → ONU)
             </span>
           </div>
         </div>
@@ -754,6 +847,7 @@ export default function ClientsMap() {
             style={{ height: '100%', width: '100%' }}
             scrollWheelZoom
             zoomControl
+            preferCanvas={false}
           >
             <TileLayer
               attribution="&copy; OpenStreetMap contributors"
@@ -769,15 +863,15 @@ export default function ClientsMap() {
               const hi = highlightChain?.serverId === srv.id && highlightChain?.oltId === olt.id;
               const path = resolvePath(connectors, 'server-olt', srv.id, olt.id, defaultPath([srv.lat, srv.lng], [olt.lat, olt.lng]));
               return (
-                <Polyline
+                <FlowPolyline
                   key={`s-olt-${srv.id}`}
                   positions={path}
-                  pathOptions={{
-                    color: '#0d9488',
-                    weight: hi ? 4 : 2.5,
-                    opacity: 0.85 * lineDim(hi),
-                    className: 'flow-line-backbone',
-                  }}
+                  color="#0d9488"
+                  weight={hi ? 4 : 2.5}
+                  opacity={0.85 * lineDim(hi)}
+                  className="flow-line-backbone"
+                  dashArray="10 8"
+                  speed={0.45}
                 />
               );
             })}
@@ -797,15 +891,15 @@ export default function ClientsMap() {
                 defaultPath([parent.lat, parent.lng], [n.lat, n.lng])
               );
               return (
-                <Polyline
+                <FlowPolyline
                   key={`parent-nap-${n.id}`}
                   positions={path}
-                  pathOptions={{
-                    color: parent.kind === 'olt' ? '#2563eb' : '#7c3aed',
-                    weight: hi ? 3.5 : 2,
-                    opacity: 0.85 * lineDim(!!hi),
-                    className: 'flow-line-backbone',
-                  }}
+                  color={parent.kind === 'olt' ? '#2563eb' : '#7c3aed'}
+                  weight={hi ? 3.5 : 2}
+                  opacity={0.85 * lineDim(!!hi)}
+                  className="flow-line-backbone"
+                  dashArray="10 8"
+                  speed={0.5}
                 />
               );
             })}
@@ -819,16 +913,15 @@ export default function ClientsMap() {
               // Path parent → child so CSS dash animation runs OLT/NAP → ONU (downstream)
               const path = resolvePath(connectors, 'nap-client', nap.id, c.id, defaultPath([nap.lat, nap.lng], [c.lat, c.lng]));
               return (
-                <Polyline
+                <FlowPolyline
                   key={`cl-${c.id}`}
                   positions={path}
-                  pathOptions={{
-                    color: lineColor,
-                    weight: hi ? 3.5 : state === 'online' ? 2.5 : 2,
-                    opacity: (state === 'online' ? 0.95 : 0.75) * lineDim(hi),
-                    // dashArray left to CSS (.flow-line-client-*) so animation is not overridden
-                    className: clientCableClass(state, hi),
-                  }}
+                  color={lineColor}
+                  weight={hi ? 3.5 : state === 'online' ? 2.5 : 2}
+                  opacity={(state === 'online' ? 0.95 : 0.75) * lineDim(hi)}
+                  className={clientCableClass(state, hi)}
+                  dashArray={state === 'online' ? '12 10' : state === 'disabled' ? '4 12' : '8 10'}
+                  speed={state === 'online' ? 0.7 : state === 'disabled' ? 0.25 : 0.45}
                 />
               );
             })}
