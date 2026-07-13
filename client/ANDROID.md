@@ -58,6 +58,17 @@ VITE_API_BASE=https://billing.yourdomain.com npm run cap:sync
 
 Then the connect screen is skipped.
 
+## Native behaviour
+
+- **Back button:** the Android hardware/gesture back button navigates back in the
+  app and minimises at the home route (`client/src/lib/useAndroidBackButton.ts`).
+- **Camera:** `android.permission.CAMERA` is declared so the QR / receipt scanner
+  works; the WebView is granted `getUserMedia` once the runtime permission is allowed.
+- **Keyboard:** configured to resize the WebView so inputs stay above the keyboard.
+
+The same React bundle is also an installable **PWA** in the browser (web build only —
+see the README). The service worker is disabled inside the native shell.
+
 ## Notes
 
 - The app does **not** run the Node API on the phone — it is a remote client.

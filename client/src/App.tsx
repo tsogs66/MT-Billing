@@ -4,42 +4,58 @@ import Layout from './components/Layout';
 import { PageStub } from './components/ui';
 import { permissionForPath } from './components/Sidebar';
 import Login from './pages/Login';
-import Dashboard from './pages/Dashboard';
-import PPPoE from './pages/PPPoE';
-import IPoE from './pages/IPoE';
-import ClientsMap from './pages/ClientsMap';
-import SalesReport from './pages/SalesReport';
-import Inventory from './pages/Inventory';
-import Hotspot from './pages/Hotspot';
-import Logs from './pages/Logs';
-import Company from './pages/Company';
-import Uptime from './pages/Uptime';
-import StatusHub from './pages/StatusHub';
-import Notifications from './pages/Notifications';
-import SystemSettings from './pages/SystemSettings';
-import CloudflareAccess from './pages/CloudflareAccess';
-import Network from './pages/Network';
-import ZeroTier from './pages/ZeroTier';
-import MikrotikFiles from './pages/MikrotikFiles';
-import Updater from './pages/Updater';
-import PanelRoles from './pages/PanelRoles';
-import License from './pages/License';
-import AiScripting from './pages/AiScripting';
-import TerminalPage from './pages/Terminal';
-import SubscriberPay from './pages/SubscriberPay';
-import PayPortal from './pages/PayPortal';
-import UsageStats from './pages/UsageStats';
-import FairUseAlerts from './pages/FairUseAlerts';
 import { Loader2 } from 'lucide-react';
 import Logo from './components/Logo';
-import { useEffect } from 'react';
+import { Suspense, lazy, useEffect } from 'react';
 import { PRODUCT_TITLE } from './branding';
+import { useAndroidBackButton } from './lib/useAndroidBackButton';
+import ChunkErrorBoundary from './components/ChunkErrorBoundary';
+
+// Route-level code splitting keeps the initial mobile bundle small — each page
+// (and its heavy deps: Leaflet, Recharts, xterm, tesseract) loads on demand.
+const Dashboard = lazy(() => import('./pages/Dashboard'));
+const PPPoE = lazy(() => import('./pages/PPPoE'));
+const IPoE = lazy(() => import('./pages/IPoE'));
+const ClientsMap = lazy(() => import('./pages/ClientsMap'));
+const SalesReport = lazy(() => import('./pages/SalesReport'));
+const Inventory = lazy(() => import('./pages/Inventory'));
+const Hotspot = lazy(() => import('./pages/Hotspot'));
+const Logs = lazy(() => import('./pages/Logs'));
+const Company = lazy(() => import('./pages/Company'));
+const Uptime = lazy(() => import('./pages/Uptime'));
+const StatusHub = lazy(() => import('./pages/StatusHub'));
+const Notifications = lazy(() => import('./pages/Notifications'));
+const SystemSettings = lazy(() => import('./pages/SystemSettings'));
+const CloudflareAccess = lazy(() => import('./pages/CloudflareAccess'));
+const Network = lazy(() => import('./pages/Network'));
+const ZeroTier = lazy(() => import('./pages/ZeroTier'));
+const MikrotikFiles = lazy(() => import('./pages/MikrotikFiles'));
+const Updater = lazy(() => import('./pages/Updater'));
+const PanelRoles = lazy(() => import('./pages/PanelRoles'));
+const License = lazy(() => import('./pages/License'));
+const AiScripting = lazy(() => import('./pages/AiScripting'));
+const TerminalPage = lazy(() => import('./pages/Terminal'));
+const SubscriberPay = lazy(() => import('./pages/SubscriberPay'));
+const PayPortal = lazy(() => import('./pages/PayPortal'));
+const UsageStats = lazy(() => import('./pages/UsageStats'));
+const FairUseAlerts = lazy(() => import('./pages/FairUseAlerts'));
 
 function DocumentTitle() {
   useEffect(() => {
     document.title = PRODUCT_TITLE;
   }, []);
   return null;
+}
+
+function RouteFallback() {
+  return (
+    <div className="min-h-[60vh] flex items-center justify-center">
+      <div className="flex items-center gap-3 text-slate-400">
+        <Loader2 className="animate-spin text-brand-400" size={20} />
+        <span className="text-sm font-medium">Loading…</span>
+      </div>
+    </div>
+  );
 }
 
 function Protected({ children }: { children: React.ReactNode }) {
@@ -79,9 +95,12 @@ const stub = (title: string, description: string) => (
 
 export default function App() {
   const { user } = useAuth();
+  useAndroidBackButton();
   return (
     <>
       <DocumentTitle />
+      <ChunkErrorBoundary>
+      <Suspense fallback={<RouteFallback />}>
       <Routes>
       <Route path="/login" element={user ? <Navigate to="/" replace /> : <Login />} />
       <Route path="/pay/:token" element={<SubscriberPay />} />
@@ -125,6 +144,8 @@ export default function App() {
         }
       />
     </Routes>
+    </Suspense>
+    </ChunkErrorBoundary>
     </>
   );
 }
