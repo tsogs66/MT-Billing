@@ -80,6 +80,22 @@ npm run android:open   # open Android Studio → Build APK
 
 On first launch, enter your public panel URL (e.g. `https://billing.example.com`), then sign in as usual.
 
+The Android shell adds native-friendly behaviour on top of the web UI:
+
+- **Hardware/gesture back button** navigates back through the app (and minimises
+  at the home screen) instead of dropping to a blank WebView.
+- **Camera permission** so the in-app QR / receipt scanner (`getUserMedia`) works.
+- **Keyboard resize** keeps inputs visible above the on-screen keyboard.
+
+### Install as a web app (PWA)
+
+The browser build is an installable **Progressive Web App**. Open the panel in
+Chrome (Android or desktop) and choose **Install app** / **Add to Home screen**
+to get a standalone, full-screen launcher icon. A service worker caches the app
+shell for fast repeat loads and a graceful offline screen (live `/api` data is
+never cached). PWA install requires the panel be served over HTTPS (or
+`localhost`).
+
 ### Configuration
 
 Server settings are read from `server/.env` (see `server/.env.example`):

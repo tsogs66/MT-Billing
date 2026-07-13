@@ -11,6 +11,20 @@ import { isNativeApp, needsServerSetup } from './config';
 import 'leaflet/dist/leaflet.css';
 import './index.css';
 
+function registerServiceWorker() {
+  // PWA install/offline shell is for the browser build only — the native
+  // Capacitor app already ships its assets locally. Skip in dev to avoid
+  // stale caches while iterating.
+  if (isNativeApp() || !import.meta.env.PROD) return;
+  if (!('serviceWorker' in navigator)) return;
+  const register = () => navigator.serviceWorker.register('/sw.js').catch(() => undefined);
+  // React effects usually run after `load` has already fired, so register
+  // immediately when the document is ready instead of waiting for an event
+  // that may never come.
+  if (document.readyState === 'complete') register();
+  else window.addEventListener('load', register, { once: true });
+}
+
 async function initNativeShell() {
   if (!isNativeApp()) return;
   try {
@@ -32,6 +46,7 @@ function Root() {
 
   useEffect(() => {
     void initNativeShell();
+    registerServiceWorker();
   }, []);
 
   if (!ready) {
