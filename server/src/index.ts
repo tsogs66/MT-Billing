@@ -3365,19 +3365,32 @@ app.get('/api/status-hub/uplink', (_req, res) => {
   res.json(listUplinkOverview());
 });
 
-app.get('/api/status-hub/check', async (_req, res) => {
+app.get('/api/status-hub/check', async (req, res) => {
   try {
-    await runStatusChecks();
-    res.json(listStatusOverview());
+    const wait = String(req.query.wait || '') === '1';
+    if (wait) {
+      await runStatusChecks();
+      return res.json(listStatusOverview());
+    }
+    // Non-blocking: kick a scan and return cached snapshot immediately (avoids proxy timeouts).
+    void runStatusChecks().catch(() => undefined);
+    const overview = listStatusOverview();
+    res.json({ ...overview, summary: { ...overview.summary, scanning: true } });
   } catch (e: any) {
     res.status(500).json({ error: e?.message || 'Check failed' });
   }
 });
 
-app.get('/api/status-hub/uplink/check', async (_req, res) => {
+app.get('/api/status-hub/uplink/check', async (req, res) => {
   try {
-    await runUplinkChecks();
-    res.json(listUplinkOverview());
+    const wait = String(req.query.wait || '') === '1';
+    if (wait) {
+      await runUplinkChecks();
+      return res.json(listUplinkOverview());
+    }
+    void runUplinkChecks().catch(() => undefined);
+    const overview = listUplinkOverview();
+    res.json({ ...overview, summary: { ...overview.summary, scanning: true } });
   } catch (e: any) {
     res.status(500).json({ error: e?.message || 'Uplink check failed' });
   }

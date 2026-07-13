@@ -146,23 +146,33 @@ export default function StatusHub() {
     setUplink(r.data);
   };
 
-  const refreshAll = async (force = false) => {
+  const triggerScan = async () => {
     setBusy(true);
     try {
-      if (force) {
-        await Promise.all([
-          api.get('/status-hub/check').then((r) => {
-            setGroups(r.data.groups || []);
-            setMonitors(r.data.monitors || []);
-            setSummary(r.data.summary || null);
-          }),
-          api.get('/status-hub/uplink/check').then((r) => setUplink(r.data)),
-        ]);
-      } else {
-        await Promise.all([loadServices(), loadUplink()]);
+      await Promise.all([
+        api.get('/status-hub/check').then((r) => {
+          setGroups(r.data.groups || []);
+          setMonitors(r.data.monitors || []);
+          setSummary({ ...(r.data.summary || {}), scanning: true });
+        }),
+        api.get('/status-hub/uplink/check').then((r) => setUplink(r.data)),
+      ]);
+      // Poll while background scan finishes
+      for (let i = 0; i < 12; i++) {
+        await new Promise((r) => setTimeout(r, 1500));
+        const [svc, up] = await Promise.all([api.get('/status-hub'), api.get('/status-hub/uplink')]);
+        setGroups(svc.data.groups || []);
+        setMonitors(svc.data.monitors || []);
+        setSummary(svc.data.summary || null);
+        setUplink(up.data);
+        if (!svc.data.summary?.scanning) break;
       }
     } catch {
-      /* ignore */
+      try {
+        await Promise.all([loadServices(), loadUplink()]);
+      } catch {
+        /* ignore */
+      }
     } finally {
       setBusy(false);
     }
@@ -181,9 +191,23 @@ export default function StatusHub() {
   }, []);
 
   useEffect(() => {
-    refreshAll(true);
-    const id = setInterval(() => refreshAll(false), 30_000);
-    return () => clearInterval(id);
+    let cancelled = false;
+    (async () => {
+      try {
+        await Promise.all([loadServices(), loadUplink()]);
+      } catch {
+        /* ignore */
+      }
+      if (!cancelled) void triggerScan();
+    })();
+    const id = setInterval(() => {
+      loadServices().catch(() => undefined);
+      loadUplink().catch(() => undefined);
+    }, 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
   }, []);
 
   const grouped = useMemo(() => {
@@ -248,7 +272,7 @@ export default function StatusHub() {
             <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
-                onClick={() => refreshAll(true)}
+                onClick={() => triggerScan()}
                 disabled={busy}
                 className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold text-cyan-950 bg-gradient-to-r from-cyan-300 to-sky-400 hover:from-cyan-200 hover:to-sky-300 shadow-[0_0_24px_rgba(34,211,238,0.35)] transition disabled:opacity-60"
               >
@@ -268,6 +292,11 @@ export default function StatusHub() {
           </div>
 
           {/* Summary strip */}
+          {summary?.egressOk === false && (
+            <div className="mb-4 rounded-2xl border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">
+              Most probes failed from this panel host. Check outbound HTTPS/DNS on the server — Status Hub measures reachability from the panel, not from subscriber devices.
+            </div>
+          )}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
             {[
               { label: 'Online', value: summary?.up ?? '—', icon: CheckCircle2, tone: '#34d399' },
@@ -445,7 +474,7 @@ export default function StatusHub() {
           onClose={() => setAddOpen(false)}
           onSaved={async () => {
             setAddOpen(false);
-            await refreshAll(true);
+            await triggerScan();
             setTab('services');
           }}
         />
@@ -455,8 +484,7 @@ export default function StatusHub() {
           onClose={() => setHostOpen(false)}
           onSaved={async () => {
             setHostOpen(false);
-            const r = await api.get('/status-hub/uplink/check');
-            setUplink(r.data);
+            await triggerScan();
             setTab('uplink');
           }}
         />

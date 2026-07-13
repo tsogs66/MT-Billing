@@ -16,8 +16,10 @@ try {
 
 const HEARTBEAT_KEEP = 120;
 const DEFAULT_INTERVAL_SEC = 60;
-const PROBE_TIMEOUT_MS = 12_000;
-const CONCURRENCY = 8;
+const PROBE_TIMEOUT_MS = 8_000;
+const CONCURRENCY = 10;
+const UA =
+  'Mozilla/5.0 (compatible; MT-Billing-StatusHub/1.1; +https://github.com/tsogs66/MT-Billing) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
 
 export type MonitorType = 'http' | 'tcp' | 'ping';
 export type HeartbeatStatus = 'up' | 'down' | 'degraded' | 'pending';
@@ -124,6 +126,7 @@ const UPLINK_SEEDS: { slug: string; name: string; region: string; url: string; k
 
 let timer: ReturnType<typeof setInterval> | null = null;
 let running = false;
+let uplinkRunning = false;
 let lastRunAt: number | null = null;
 let lastUplinkRunAt: number | null = null;
 
@@ -252,36 +255,90 @@ function seedUplinkTargets() {
   }
 }
 
-async function probeHttp(url: string): Promise<{ status: HeartbeatStatus; ms: number; code: number; error?: string; body?: string }> {
-  const ac = new AbortController();
-  const to = setTimeout(() => ac.abort(), PROBE_TIMEOUT_MS);
-  const t0 = performance.now();
-  try {
-    const res = await fetch(url, {
-      method: 'GET',
-      redirect: 'follow',
-      signal: ac.signal,
-      headers: {
-        'User-Agent': 'MT-Billing-StatusHub/1.0',
-        Accept: '*/*',
-      },
-    });
-    const ms = Math.round(performance.now() - t0);
-    let body = '';
+async function probeHttp(
+  url: string,
+  opts?: { readBody?: boolean }
+): Promise<{ status: HeartbeatStatus; ms: number; code: number; error?: string; body?: string }> {
+  // Reachability probe: any HTTP response means the path works.
+  // Do NOT download full pages (Netflix/YouTube/etc.) — that caused mass timeouts → "all down".
+  const tryOnce = async (method: 'HEAD' | 'GET') => {
+    const ac = new AbortController();
+    const to = setTimeout(() => ac.abort(), PROBE_TIMEOUT_MS);
+    const t0 = performance.now();
     try {
-      body = (await res.text()).slice(0, 200).trim();
+      const res = await fetch(url, {
+        method,
+        redirect: 'follow',
+        signal: ac.signal,
+        headers: {
+          'User-Agent': UA,
+          Accept: '*/*',
+          'Cache-Control': 'no-cache',
+        },
+      });
+      const ms = Math.round(performance.now() - t0);
+      let body = '';
+      if (opts?.readBody) {
+        try {
+          body = (await res.text()).slice(0, 200).trim();
+        } catch {
+          /* ignore */
+        }
+      } else {
+        try {
+          await res.body?.cancel();
+        } catch {
+          /* ignore */
+        }
+      }
+      return { ok: true as const, ms, code: res.status, body };
+    } catch (e: any) {
+      const msg = e?.name === 'AbortError' ? 'timeout' : String(e?.message || e || 'network error');
+      return { ok: false as const, error: msg, ms: Math.round(performance.now() - t0) };
+    } finally {
+      clearTimeout(to);
+    }
+  };
+
+  let result = await tryOnce('HEAD');
+  if (!result.ok) result = await tryOnce('GET');
+  else if (result.code >= 500) {
+    const get = await tryOnce('GET');
+    if (get.ok) result = get;
+  }
+
+  if (!result.ok) {
+    // Last resort: TCP connect to the host (proves DNS + route even when HTTP is filtered)
+    try {
+      const u = new URL(url);
+      const port = Number(u.port || (u.protocol === 'https:' ? 443 : 80));
+      const tcp = await probeTcp(u.hostname, port);
+      if (tcp.status === 'up' || tcp.status === 'degraded') {
+        return {
+          status: 'degraded',
+          ms: tcp.ms,
+          code: 0,
+          error: `HTTP failed (${result.error}); TCP ${port} open`,
+        };
+      }
     } catch {
       /* ignore */
     }
-    const ok = res.status > 0 && res.status < 500;
-    const status: HeartbeatStatus = !ok ? 'down' : ms > 2500 ? 'degraded' : 'up';
-    return { status, ms, code: res.status, body };
-  } catch (e: any) {
-    const ms = Math.round(performance.now() - t0);
-    return { status: 'down', ms, code: 0, error: e?.name === 'AbortError' ? 'timeout' : String(e?.message || e) };
-  } finally {
-    clearTimeout(to);
+    return { status: 'down', ms: result.ms || 0, code: 0, error: result.error };
   }
+
+  if (result.code >= 500) {
+    return {
+      status: 'degraded',
+      ms: result.ms,
+      code: result.code,
+      error: `HTTP ${result.code}`,
+      body: result.body,
+    };
+  }
+
+  const status: HeartbeatStatus = result.ms > 2500 ? 'degraded' : 'up';
+  return { status, ms: result.ms, code: result.code, body: result.body };
 }
 
 function probeTcp(host: string, port: number): Promise<{ status: HeartbeatStatus; ms: number; error?: string }> {
@@ -333,12 +390,14 @@ async function mapPool<T, R>(items: T[], limit: number, fn: (item: T) => Promise
 }
 
 function pruneHeartbeats(monitorId: number) {
-  db.prepare(`
-    DELETE FROM status_heartbeats
-    WHERE monitor_id = ? AND id NOT IN (
-      SELECT id FROM status_heartbeats WHERE monitor_id = ? ORDER BY checked_at DESC LIMIT ?
+  const rows = db
+    .prepare(
+      'SELECT checked_at AS checkedAt FROM status_heartbeats WHERE monitor_id = ? ORDER BY checked_at DESC LIMIT ?'
     )
-  `).run(monitorId, monitorId, HEARTBEAT_KEEP);
+    .all(monitorId, HEARTBEAT_KEEP) as { checkedAt: number }[];
+  if (rows.length < HEARTBEAT_KEEP) return;
+  const cutoff = rows[rows.length - 1].checkedAt;
+  db.prepare('DELETE FROM status_heartbeats WHERE monitor_id = ? AND checked_at < ?').run(monitorId, cutoff);
 }
 
 function recordHeartbeat(monitorId: number, status: HeartbeatStatus, latencyMs: number | null, code: number | null, error?: string) {
@@ -351,7 +410,7 @@ function recordHeartbeat(monitorId: number, status: HeartbeatStatus, latencyMs: 
 }
 
 export async function runStatusChecks(monitorIds?: number[]) {
-  if (running) return { skipped: true };
+  if (running) return { skipped: true, running: true };
   running = true;
   try {
     let rows: any[];
@@ -380,42 +439,55 @@ export async function runStatusChecks(monitorIds?: number[]) {
 }
 
 function pruneUplinkResults(targetId: number) {
-  db.prepare(`
-    DELETE FROM status_uplink_results
-    WHERE target_id = ? AND id NOT IN (
-      SELECT id FROM status_uplink_results WHERE target_id = ? ORDER BY checked_at DESC LIMIT 60
+  const rows = db
+    .prepare(
+      'SELECT checked_at AS checkedAt FROM status_uplink_results WHERE target_id = ? ORDER BY checked_at DESC LIMIT 60'
     )
-  `).run(targetId, targetId);
+    .all(targetId) as { checkedAt: number }[];
+  if (rows.length < 60) return;
+  const cutoff = rows[rows.length - 1].checkedAt;
+  db.prepare('DELETE FROM status_uplink_results WHERE target_id = ? AND checked_at < ?').run(targetId, cutoff);
 }
 
+const ECHO_SLUGS = new Set(['ifconfig-me', 'icanhazip', 'ipify']);
+
 export async function runUplinkChecks() {
-  const targets = db.prepare('SELECT * FROM status_uplink_targets WHERE enabled = 1').all() as any[];
-  await mapPool(targets, CONCURRENCY, async (t) => {
-    const r = await probeHttp(t.url);
-    db.prepare(`
-      INSERT INTO status_uplink_results (target_id, status, latency_ms, code, body_snip, error, checked_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(t.id, r.status, r.ms, r.code, r.body || null, r.error || null, Date.now());
-    pruneUplinkResults(t.id);
-  });
+  if (uplinkRunning) return { skipped: true, running: true };
+  uplinkRunning = true;
+  try {
+    const targets = db.prepare('SELECT * FROM status_uplink_targets WHERE enabled = 1').all() as any[];
+    await mapPool(targets, CONCURRENCY, async (t) => {
+      const r = await probeHttp(t.url, { readBody: ECHO_SLUGS.has(String(t.slug)) });
+      db.prepare(`
+        INSERT INTO status_uplink_results (target_id, status, latency_ms, code, body_snip, error, checked_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(t.id, r.status, r.ms, r.code, r.body || null, r.error || null, Date.now());
+      pruneUplinkResults(t.id);
+    });
 
-  const hosts = db.prepare('SELECT * FROM status_uplink_hosts WHERE enabled = 1').all() as any[];
-  await mapPool(hosts, CONCURRENCY, async (h) => {
-    const r = await probeTcp(h.host, h.port || 443);
-    db.prepare(`
-      INSERT INTO status_uplink_host_results (host_id, status, latency_ms, error, checked_at)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(h.id, r.status, r.ms, r.error || null, Date.now());
-    db.prepare(`
-      DELETE FROM status_uplink_host_results
-      WHERE host_id = ? AND id NOT IN (
-        SELECT id FROM status_uplink_host_results WHERE host_id = ? ORDER BY checked_at DESC LIMIT 60
-      )
-    `).run(h.id, h.id);
-  });
+    const hosts = db.prepare('SELECT * FROM status_uplink_hosts WHERE enabled = 1').all() as any[];
+    await mapPool(hosts, CONCURRENCY, async (h) => {
+      const r = await probeTcp(h.host, h.port || 443);
+      db.prepare(`
+        INSERT INTO status_uplink_host_results (host_id, status, latency_ms, error, checked_at)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(h.id, r.status, r.ms, r.error || null, Date.now());
+      const hostRows = db
+        .prepare(
+          'SELECT checked_at AS checkedAt FROM status_uplink_host_results WHERE host_id = ? ORDER BY checked_at DESC LIMIT 60'
+        )
+        .all(h.id) as { checkedAt: number }[];
+      if (hostRows.length >= 60) {
+        const cutoff = hostRows[hostRows.length - 1].checkedAt;
+        db.prepare('DELETE FROM status_uplink_host_results WHERE host_id = ? AND checked_at < ?').run(h.id, cutoff);
+      }
+    });
 
-  lastUplinkRunAt = Date.now();
-  return { ok: true, targets: targets.length, hosts: hosts.length, at: lastUplinkRunAt };
+    lastUplinkRunAt = Date.now();
+    return { ok: true, targets: targets.length, hosts: hosts.length, at: lastUplinkRunAt };
+  } finally {
+    uplinkRunning = false;
+  }
 }
 
 function latestHeartbeat(monitorId: number) {
@@ -486,6 +558,13 @@ export function listStatusOverview() {
       return Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
     })(),
     lastRunAt,
+    scanning: running,
+    egressOk: (() => {
+      const settled = enriched.filter((m) => m.status !== 'pending');
+      if (settled.length < 5) return null as boolean | null;
+      const reachable = settled.filter((m) => m.status === 'up' || m.status === 'degraded').length;
+      return reachable / settled.length >= 0.2;
+    })(),
   };
 
   return { groups, monitors: enriched, summary };
