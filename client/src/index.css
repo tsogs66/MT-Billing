@@ -632,8 +632,8 @@ body {
   stroke-linecap: round;
 }
 .flow-line-backbone {
-  /* pulse kept as CSS; dash offset animated via JS */
-  animation: line-pulse 2.5s ease-in-out infinite;
+  /* no opacity pulse — it made dashes look like they paused */
+  stroke-linecap: round;
 }
 
 /* NAP → client (ONU) cables — color/glow via class; dashes animated via JS */
@@ -645,19 +645,15 @@ body {
   filter: drop-shadow(0 0 3px currentColor);
 }
 .leaflet-interactive.flow-line-client-online {
-  animation: line-pulse-green 1.8s ease-in-out infinite;
   filter: drop-shadow(0 0 2.5px rgba(34, 197, 94, 0.7));
 }
 .leaflet-interactive.flow-line-client-offline {
-  animation: line-pulse-red 2s ease-in-out infinite;
   filter: drop-shadow(0 0 2px rgba(239, 68, 68, 0.55));
 }
 .leaflet-interactive.flow-line-client-expired {
-  animation: line-pulse-rose 2s ease-in-out infinite;
   filter: drop-shadow(0 0 2px rgba(244, 63, 94, 0.55));
 }
 .leaflet-interactive.flow-line-client-non-payment {
-  animation: line-pulse-amber 2s ease-in-out infinite;
   filter: drop-shadow(0 0 2px rgba(245, 158, 11, 0.55));
 }
 .leaflet-interactive.flow-line-client-disabled {
@@ -813,7 +809,6 @@ body {
 }
 .leaflet-interactive.flow-line-pulse-online {
   filter: drop-shadow(0 0 2px rgba(34, 197, 94, 0.65));
-  animation: flow-dash 1.1s linear infinite, line-pulse-green 1.8s ease-in-out infinite;
 }
 @keyframes line-pulse-green {
   0%, 100% { stroke-opacity: 0.5; }

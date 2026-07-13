@@ -66,10 +66,9 @@ function clientCableClass(state: ClientState, highlighted: boolean): string {
 }
 
 /**
- * Imperative animated cable — Leaflet pane transforms break CSS dash animations,
- * and react-leaflet refs are unreliable for per-frame dashOffset updates.
- * Creates the polyline on the map directly and animates stroke-dashoffset every frame
- * so dashes visibly run parent → child (OLT → NAP → ONU).
+ * Imperative animated cable — continuous dash flow OLT → NAP → ONU.
+ * Offset decreases forever (no wrap reset) so motion never hitch/pauses.
+ * Style updates do not remount the layer (avoids animation restarts on poll).
  */
 function FlowPolyline({
   positions,
@@ -77,8 +76,9 @@ function FlowPolyline({
   weight,
   opacity = 0.95,
   className = '',
-  dashArray = '16 14',
-  speed = 1.1,
+  dashArray = '12 16',
+  /** Dash travel speed in CSS px per second (along the path toward the child). */
+  speed = 48,
 }: {
   positions: [number, number][];
   color: string;
@@ -86,28 +86,32 @@ function FlowPolyline({
   opacity?: number;
   className?: string;
   dashArray?: string;
-  /** Higher = faster. Negative dashoffset moves dashes along the path toward the child. */
   speed?: number;
 }) {
   const map = useMap();
   const posKey = JSON.stringify(positions);
+  const layerRef = useRef<L.Polyline | null>(null);
+  const underlayRef = useRef<L.Polyline | null>(null);
+  const offsetRef = useRef(0);
+  const optsRef = useRef({ color, weight, opacity, className, dashArray, speed });
+  optsRef.current = { color, weight, opacity, className, dashArray, speed };
 
+  // Create geometry once per path; keep a never-resetting rAF loop.
   useEffect(() => {
     if (!map || !positions?.length) return;
 
-    // One shared SVG renderer per map (canvas cannot animate dashOffset in Leaflet 1.9).
     const anyMap = map as L.Map & { __flowSvg?: L.SVG };
     if (!anyMap.__flowSvg) {
       anyMap.__flowSvg = L.svg({ padding: 0.5 });
       anyMap.__flowSvg.addTo(map);
     }
     const renderer = anyMap.__flowSvg;
+    const { color: c0, weight: w0, opacity: o0, className: cls0, dashArray: dash0 } = optsRef.current;
 
-    // Faint solid underlay so the route stays visible while dashes run on top.
     const underlay = L.polyline(positions, {
-      color,
-      weight: Math.max(1.5, weight - 0.5),
-      opacity: Math.min(0.4, opacity * 0.45),
+      color: c0,
+      weight: Math.max(1.5, w0 - 0.5),
+      opacity: Math.min(0.35, o0 * 0.4),
       interactive: false,
       className: 'flow-line-underlay',
       lineCap: 'round',
@@ -116,21 +120,18 @@ function FlowPolyline({
     }).addTo(map);
 
     const layer = L.polyline(positions, {
-      color,
-      weight,
-      opacity,
-      dashArray,
-      className,
+      color: c0,
+      weight: w0,
+      opacity: o0,
+      dashArray: dash0,
+      className: cls0,
       lineCap: 'round',
       lineJoin: 'round',
       renderer,
     }).addTo(map);
 
-    let raf = 0;
-    let offset = 0;
-    let last = performance.now();
-    const parts = dashArray.split(/[\s,]+/).map((n) => Number(n) || 0);
-    const cycle = Math.max(24, parts.reduce((a, b) => a + b, 0));
+    underlayRef.current = underlay;
+    layerRef.current = layer;
 
     const pathEl = (): SVGPathElement | null => {
       const el =
@@ -140,39 +141,32 @@ function FlowPolyline({
       return el as SVGPathElement | null;
     };
 
-    const apply = (value: number) => {
+    const apply = (value: number, dash: string, cls: string) => {
       const el = pathEl();
-      if (!el) {
-        try {
-          layer.setStyle({
-            dashArray,
-            dashOffset: String(Math.round(value)),
-          } as L.PathOptions & { dashOffset?: string });
-        } catch {
-          /* ignore */
-        }
-        return;
-      }
-      el.setAttribute('stroke-dasharray', dashArray);
+      if (!el) return;
+      el.setAttribute('stroke-dasharray', dash);
       el.setAttribute('stroke-dashoffset', String(value));
-      el.style.setProperty('stroke-dasharray', dashArray, 'important');
+      el.style.setProperty('stroke-dasharray', dash, 'important');
       el.style.setProperty('stroke-dashoffset', String(value), 'important');
-      for (const c of className.split(/\s+/)) {
+      // Keep opacity steady — no pulse (pulse looked like the dash "paused").
+      el.style.setProperty('stroke-opacity', '1', 'important');
+      for (const c of cls.split(/\s+/)) {
         if (c) el.classList.add(c);
       }
     };
 
-    apply(0);
+    apply(offsetRef.current, dash0, cls0);
 
+    let raf = 0;
+    let last = performance.now();
     const tick = (now: number) => {
-      if (document.visibilityState === 'visible') {
-        const dt = Math.min(50, now - last);
-        last = now;
-        offset -= speed * (dt / 16);
-        while (offset <= -cycle) offset += cycle;
-        apply(offset);
-      } else {
-        last = now;
+      const dtMs = Math.min(32, Math.max(0, now - last));
+      last = now;
+      if (document.visibilityState === 'visible' && dtMs > 0) {
+        const { dashArray: dash, speed: pxPerSec, className: cls } = optsRef.current;
+        // Continuous decrease — never wrap/reset (that caused a visible hitch).
+        offsetRef.current -= (pxPerSec * dtMs) / 1000;
+        apply(offsetRef.current, dash, cls);
       }
       raf = requestAnimationFrame(tick);
     };
@@ -182,9 +176,44 @@ function FlowPolyline({
       cancelAnimationFrame(raf);
       map.removeLayer(layer);
       map.removeLayer(underlay);
+      layerRef.current = null;
+      underlayRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [map, posKey, color, weight, opacity, className, dashArray, speed]);
+  }, [map, posKey]);
+
+  // Update paint without remounting (keeps dash motion continuous across polls).
+  useEffect(() => {
+    const layer = layerRef.current;
+    const underlay = underlayRef.current;
+    if (!layer) return;
+    layer.setStyle({
+      color,
+      weight,
+      opacity,
+      dashArray,
+      className,
+      lineCap: 'round',
+      lineJoin: 'round',
+    } as L.PathOptions);
+    underlay?.setStyle({
+      color,
+      weight: Math.max(1.5, weight - 0.5),
+      opacity: Math.min(0.35, opacity * 0.4),
+    });
+    // setStyle can wipe dashoffset — restore immediately so motion doesn't hitch.
+    const el =
+      (typeof (layer as any).getElement === 'function' ? (layer as any).getElement() : null) ||
+      (layer as any)._path ||
+      null;
+    if (el) {
+      el.setAttribute('stroke-dasharray', dashArray);
+      el.setAttribute('stroke-dashoffset', String(offsetRef.current));
+      el.style.setProperty('stroke-dasharray', dashArray, 'important');
+      el.style.setProperty('stroke-dashoffset', String(offsetRef.current), 'important');
+      el.style.setProperty('stroke-opacity', '1', 'important');
+    }
+  }, [color, weight, opacity, dashArray, className]);
 
   return null;
 }
@@ -901,8 +930,8 @@ export default function ClientsMap() {
                   weight={hi ? 4 : 3}
                   opacity={0.95 * lineDim(hi)}
                   className="flow-line-backbone"
-                  dashArray="18 14"
-                  speed={1.0}
+                  dashArray="12 16"
+                  speed={52}
                 />
               );
             })}
@@ -929,8 +958,8 @@ export default function ClientsMap() {
                   weight={hi ? 3.5 : 2.75}
                   opacity={0.95 * lineDim(!!hi)}
                   className="flow-line-backbone"
-                  dashArray="16 14"
-                  speed={1.15}
+                  dashArray="12 16"
+                  speed={56}
                 />
               );
             })}
@@ -951,8 +980,8 @@ export default function ClientsMap() {
                   weight={hi ? 3.5 : state === 'online' ? 3 : 2.5}
                   opacity={(state === 'online' ? 0.98 : 0.85) * lineDim(hi)}
                   className={clientCableClass(state, hi)}
-                  dashArray={state === 'online' ? '16 12' : state === 'disabled' ? '6 14' : '14 12'}
-                  speed={state === 'online' ? 1.35 : state === 'disabled' ? 0.45 : 0.9}
+                  dashArray={state === 'disabled' ? '6 16' : '12 16'}
+                  speed={state === 'online' ? 64 : state === 'disabled' ? 28 : 48}
                 />
               );
             })}
