@@ -1,8 +1,16 @@
 import axios from 'axios';
+import { getApiBase } from './config';
 
-export const api = axios.create({ baseURL: '/api' });
+export const api = axios.create({ baseURL: getApiBase() });
+
+/** Unauthenticated axios client (login helpers, branding). */
+export const publicApi = axios.create({ baseURL: getApiBase() });
 
 const WRITE_METHODS = new Set(['post', 'put', 'patch', 'delete']);
+
+function syncBaseURL(config: { baseURL?: string }) {
+  config.baseURL = getApiBase();
+}
 
 /** Paths that may mutate even when the panel license is inactive. */
 function isLicenseWriteAllowed(url?: string) {
@@ -21,6 +29,7 @@ function isViewerWriteAllowed(url?: string) {
 }
 
 api.interceptors.request.use((config) => {
+  syncBaseURL(config);
   const token = localStorage.getItem('mt_token');
   if (token) {
     config.headers = config.headers || {};
@@ -56,6 +65,11 @@ api.interceptors.request.use((config) => {
     }
   }
 
+  return config;
+});
+
+publicApi.interceptors.request.use((config) => {
+  syncBaseURL(config);
   return config;
 });
 

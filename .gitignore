@@ -12,3 +12,9 @@ server/data/*.db-*
 server/data/pay-proofs/
 !server/data/mt-billing.db
 *.tsbuildinfo
+
+# Capacitor / Android local tooling
+client/android/local.properties
+client/android/.idea/
+client/android/.gradle/
+client/android/**/build/

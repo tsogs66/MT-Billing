@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
 import { useCompany } from '../context/CompanyContext';
 import { Loader2, Lock, User, ArrowRight, Shield, Copy, CheckCircle2, KeyRound, ArrowLeft } from 'lucide-react';
@@ -8,8 +7,8 @@ import { FormField } from '../components/ui';
 import Logo from '../components/Logo';
 import { BRAND_SHORT, PRODUCT_TITLE } from '../branding';
 import { copyText } from '../lib/clipboard';
-
-const publicApi = axios.create({ baseURL: '/api' });
+import { publicApi } from '../api';
+import { isNativeApp, setStoredServerUrl, getStoredServerUrl } from '../config';
 
 export default function Login() {
   const { login } = useAuth();
@@ -165,6 +164,21 @@ export default function Login() {
                       )}
                     </button>
                   </form>
+                  {isNativeApp() && (
+                    <p className="text-xs text-slate-400 mt-6 text-center leading-relaxed">
+                      Panel: <span className="font-medium text-slate-500">{getStoredServerUrl() || 'not set'}</span>
+                      <button
+                        type="button"
+                        className="block mx-auto mt-2 text-brand-600 hover:text-brand-700 font-medium"
+                        onClick={() => {
+                          setStoredServerUrl('');
+                          window.location.reload();
+                        }}
+                      >
+                        Change server URL
+                      </button>
+                    </p>
+                  )}
                 </>
               ) : (
                 <ForgotPasswordForm

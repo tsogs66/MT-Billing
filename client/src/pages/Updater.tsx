@@ -4,6 +4,7 @@ import { DownloadCloud, RefreshCw, ExternalLink, GitBranch, Loader2, CheckCircle
 import Layout from '../components/Layout';
 import { Card, Flash, LoadingPage, PageHeader, Modal } from '../components/ui';
 import { api } from '../api';
+import { getApiBase } from '../config';
 
 type Phase = 'idle' | 'updating' | 'success' | 'failed';
 
@@ -165,7 +166,7 @@ export default function Updater() {
       try {
         // Prefer authenticated job status; bare /api/health is public but may 404 on old builds.
         const token = localStorage.getItem('mt_token');
-        const health = await fetch('/api/health', {
+        const health = await fetch(`${getApiBase()}/health`, {
           cache: 'no-store',
           headers: token ? { Authorization: `Bearer ${token}` } : undefined,
         });

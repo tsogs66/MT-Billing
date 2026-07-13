@@ -7,6 +7,7 @@ import '@xterm/xterm/css/xterm.css';
 import Layout from '../components/Layout';
 import { Card, StatusBadge, FormField, PageHeader } from '../components/ui';
 import { api } from '../api';
+import { getWsUrl } from '../config';
 import { useRouterDevice } from '../context/RouterContext';
 
 type ConnInfo = {
@@ -72,8 +73,7 @@ export default function TerminalPage() {
     xtermRef.current?.clear();
     writeTerm(`\r\n\x1b[1;36mConnecting to ${info.name} (${info.host}:${info.ssh_port})…\x1b[0m\r\n`);
 
-    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const ws = new WebSocket(`${proto}://${location.host}/api/terminal/ws?token=${encodeURIComponent(token)}`);
+    const ws = new WebSocket(getWsUrl(`/api/terminal/ws?token=${encodeURIComponent(token)}`));
     wsRef.current = ws;
     setMode('connecting');
 

@@ -1,6 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
-import axios from 'axios';
-import { api } from '../api';
+import { api, publicApi } from '../api';
 import { useAuth } from './AuthContext';
 
 export interface CompanyBrand {
@@ -22,8 +21,6 @@ const Ctx = createContext<CompanyCtx>({
   loading: true,
   refresh: async () => undefined,
 });
-
-const publicApi = axios.create({ baseURL: '/api' });
 
 const DEFAULTS: CompanyBrand = {
   name: 'ts0gs',

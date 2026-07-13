@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import App from './App';
@@ -6,11 +6,39 @@ import { AuthProvider } from './context/AuthContext';
 import { RouterProvider } from './context/RouterContext';
 import { CompanyProvider } from './context/CompanyContext';
 import { ThemeProvider } from './context/ThemeContext';
+import ServerSetup from './pages/ServerSetup';
+import { isNativeApp, needsServerSetup } from './config';
 import 'leaflet/dist/leaflet.css';
 import './index.css';
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
+async function initNativeShell() {
+  if (!isNativeApp()) return;
+  try {
+    const { StatusBar, Style } = await import('@capacitor/status-bar');
+    await StatusBar.setStyle({ style: Style.Dark });
+  } catch {
+    /* optional plugin */
+  }
+  try {
+    const { SplashScreen } = await import('@capacitor/splash-screen');
+    await SplashScreen.hide();
+  } catch {
+    /* optional plugin */
+  }
+}
+
+function Root() {
+  const [ready, setReady] = useState(!needsServerSetup());
+
+  useEffect(() => {
+    void initNativeShell();
+  }, []);
+
+  if (!ready) {
+    return <ServerSetup onReady={() => setReady(true)} />;
+  }
+
+  return (
     <BrowserRouter>
       <ThemeProvider>
         <AuthProvider>
@@ -22,5 +50,11 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
         </AuthProvider>
       </ThemeProvider>
     </BrowserRouter>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')!).render(
+  <React.StrictMode>
+    <Root />
   </React.StrictMode>
 );

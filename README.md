@@ -35,7 +35,7 @@ topology), sales reporting, hotspot vouchers, inventory and more.
 
 | Layer    | Technology |
 |----------|------------|
-| Frontend | React 18, Vite, TypeScript, Tailwind CSS, React Router, Recharts, Leaflet |
+| Frontend | React 18, Vite, TypeScript, Tailwind CSS, React Router, Recharts, Leaflet, Capacitor (Android) |
 | Backend  | Node.js, Express, TypeScript (run via `tsx`), better-sqlite3, JWT auth |
 | Database | SQLite (auto-created and seeded on first run at `server/data/mt-billing.db`) |
 
@@ -69,6 +69,17 @@ password: admin123
 
 The SQLite database is created and seeded automatically on first run.
 
+### Android app (Capacitor)
+
+Wraps the same React UI in a native Android shell. See **[client/ANDROID.md](./client/ANDROID.md)**.
+
+```bash
+npm run android:sync   # build web assets + sync into client/android
+npm run android:open   # open Android Studio → Build APK
+```
+
+On first launch, enter your public panel URL (e.g. `https://billing.example.com`), then sign in as usual.
+
 ### Configuration
 
 Server settings are read from `server/.env` (see `server/.env.example`):
@@ -93,6 +104,8 @@ data otherwise).
 | `npm run lint`      | Lint the frontend |
 | `npm --prefix server run build` | Compile the backend to `server/dist` |
 | `npm --prefix server run start` | Run the compiled backend |
+| `npm run android:sync` | Build web UI and sync into the Capacitor Android project |
+| `npm run android:open` | Open `client/android` in Android Studio |
 | `scripts/proxmox-install.sh` | Proxmox host helper → `ct/mt-billing.sh` |
 | `scripts/proxmox-update.sh` | Proxmox host helper → pull/build/restart inside LXC |
 | `scripts/proxmox-reinstall.sh` | Proxmox host helper → clean reinstall to Git defaults |

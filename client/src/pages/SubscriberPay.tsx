@@ -5,6 +5,7 @@ import {
   ZoomIn, Download, X, SwitchCamera, Upload, Copy, Check, AlertCircle,
 } from 'lucide-react';
 import { PRODUCT_TITLE } from '../branding';
+import { getApiBase } from '../config';
 
 type Channel = 'gcash' | 'maya' | '';
 
@@ -276,7 +277,7 @@ export default function SubscriberPay() {
 
   useEffect(() => {
     document.title = `Pay — ${PRODUCT_TITLE}`;
-    fetch(`/api/public/pay/${token}`)
+    fetch(`${getApiBase()}/public/pay/${token}`)
       .then(async (r) => {
         const j = await r.json();
         if (!r.ok) throw new Error(j.error || 'Not found');
@@ -477,7 +478,7 @@ export default function SubscriberPay() {
     setBusy(true);
     setError('');
     try {
-      const r = await fetch(`/api/public/pay/${token}/submit`, {
+      const r = await fetch(`${getApiBase()}/public/pay/${token}/submit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
