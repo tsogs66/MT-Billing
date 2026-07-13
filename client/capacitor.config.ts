@@ -1,4 +1,5 @@
 import type { CapacitorConfig } from '@capacitor/cli';
+import { KeyboardResize } from '@capacitor/keyboard';
 
 const config: CapacitorConfig = {
   appId: 'com.tsogs.mtbilling',
@@ -17,6 +18,10 @@ const config: CapacitorConfig = {
     StatusBar: {
       style: 'DARK',
       backgroundColor: '#0f172a',
+    },
+    Keyboard: {
+      resize: KeyboardResize.Body,
+      resizeOnFullScreen: true,
     },
   },
   android: {

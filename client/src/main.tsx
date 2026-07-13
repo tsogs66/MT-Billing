@@ -33,8 +33,8 @@ async function initNativeShell() {
     /* optional plugin */
   }
   try {
-    const { Keyboard } = await import('@capacitor/keyboard');
-    await Keyboard.setResizeMode({ mode: 'body' });
+    const { Keyboard, KeyboardResize } = await import('@capacitor/keyboard');
+    await Keyboard.setResizeMode({ mode: KeyboardResize.Body });
     await Keyboard.addListener('keyboardWillShow', (info) => {
       document.documentElement.classList.add('keyboard-open');
       document.documentElement.style.setProperty('--keyboard-offset', `${info.keyboardHeight || 0}px`);
