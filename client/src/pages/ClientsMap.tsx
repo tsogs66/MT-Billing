@@ -386,15 +386,22 @@ function MapLocationPicker({
 }) {
   const fb = normalizeMapCenter(fallback?.lat, fallback?.lng);
   const [draft, setDraft] = useState<LocDraft>({ lat: fb.lat, lng: fb.lng });
+  // Stable map mount center — do NOT remount when the pin moves (that reset zoom).
+  const [mapOrigin, setMapOrigin] = useState<[number, number]>([fb.lat, fb.lng]);
+  const [mapSeed, setMapSeed] = useState(0);
+  const wasOpen = useRef(false);
+
   useEffect(() => {
-    if (open) {
+    if (open && !wasOpen.current) {
       const next = normalizeMapCenter(Number(lat) || fb.lat, Number(lng) || fb.lng);
       setDraft(next);
+      setMapOrigin([next.lat, next.lng]);
+      setMapSeed((s) => s + 1);
     }
+    wasOpen.current = open;
   }, [open, lat, lng, fb.lat, fb.lng]);
 
   if (!open) return null;
-  const center: [number, number] = [draft.lat || fb.lat, draft.lng || fb.lng];
 
   return (
     <Modal
@@ -413,8 +420,8 @@ function MapLocationPicker({
       <div className="space-y-3">
         <div className="h-72 rounded-xl overflow-hidden border border-slate-200 relative">
           <MapContainer
-            key={`location-picker-${open}-${center[0]}-${center[1]}`}
-            center={center}
+            key={`location-picker-${mapSeed}`}
+            center={mapOrigin}
             zoom={17}
             minZoom={3}
             maxZoom={22}
