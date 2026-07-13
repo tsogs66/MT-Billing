@@ -215,15 +215,22 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
           }
           setActive((prev) => {
             if (!prev.length) return next;
-            const nextByName = new Map(next.map((s: any) => [String(s.username), s]));
+            const nextByName = new Map(next.map((s: any) => [String(s.username || '').toLowerCase(), s]));
             const merged = prev.map((old: any) => {
-              const s = nextByName.get(String(old.username));
+              const s = nextByName.get(String(old.username || '').toLowerCase());
               if (!s) return old;
-              nextByName.delete(String(old.username));
+              nextByName.delete(String(old.username || '').toLowerCase());
               if (!includeTraffic) {
                 return { ...s, downloadBps: old.downloadBps, uploadBps: old.uploadBps };
               }
-              return s;
+              // If the server omitted rates (traffic probe failed), keep the previous reading.
+              const hasDl = Object.prototype.hasOwnProperty.call(s, 'downloadBps');
+              const hasUl = Object.prototype.hasOwnProperty.call(s, 'uploadBps');
+              return {
+                ...s,
+                downloadBps: hasDl ? Number((s as any).downloadBps) || 0 : old.downloadBps,
+                uploadBps: hasUl ? Number((s as any).uploadBps) || 0 : old.uploadBps,
+              };
             });
             for (const s of nextByName.values()) merged.push(s);
             return merged;
@@ -431,11 +438,14 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
       }, ms);
     };
 
+    // Active traffic dual-samples ~1s on the router; poll a bit slower so requests don't stack.
+    const intervalMs = tab === 'active' ? 3000 : 2000;
+
     const tick = async () => {
       if (cancelled) return;
       if (document.visibilityState !== 'visible') return;
       if (toggleBusy || bulkBusy || fetching || toggleFor) {
-        schedule(2000);
+        schedule(intervalMs);
         return;
       }
       if (usersPollInFlight.current) return;
@@ -449,7 +459,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
         }
       } finally {
         usersPollInFlight.current = false;
-        if (!cancelled && document.visibilityState === 'visible') schedule(2000);
+        if (!cancelled && document.visibilityState === 'visible') schedule(intervalMs);
       }
     };
 
@@ -864,7 +874,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                     const down = Number(a.downloadBps) || 0;
                     const up = Number(a.uploadBps) || 0;
                     return {
-                      key: i,
+                      key: String(a.username || a.address || i),
                       sortValues: {
                         user: a.username,
                         customer: a.customer,

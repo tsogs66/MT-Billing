@@ -1970,6 +1970,7 @@ app.get('/api/pppoe/active', async (req, res) => {
       (s) => !service || s.service === 'any' || !s.service || s.service.includes(service) || service === 'pppoe'
     );
     let traffic: Record<string, { download: number; upload: number }> = {};
+    let trafficOk = false;
     if (wantTraffic) {
       try {
         const addresses: Record<string, string> = {};
@@ -1981,8 +1982,9 @@ app.get('/api/pppoe/active', async (req, res) => {
           filtered.map((s) => s.name),
           { addresses }
         );
+        trafficOk = true;
       } catch {
-        /* traffic optional */
+        /* traffic optional — omit rates so the UI keeps the previous reading */
       }
     }
     const trafficByKey = new Map<string, { download: number; upload: number }>();
@@ -2002,11 +2004,12 @@ app.get('/api/pppoe/active', async (req, res) => {
         uptime: s.uptime,
         caller: s.caller && s.caller !== '-' ? s.caller : '—',
         service: s.service,
-        downloadBps: t?.download ?? 0,
-        uploadBps: t?.upload ?? 0,
+        ...(trafficOk
+          ? { downloadBps: t?.download ?? 0, uploadBps: t?.upload ?? 0 }
+          : {}),
       };
     });
-    res.json({ sessions: out, live: true, routerId: router.id, routerName: router.name });
+    res.json({ sessions: out, live: true, routerId: router.id, routerName: router.name, trafficOk });
   } catch (e: any) {
     res.status(502).json({
       error: e?.message || 'Could not fetch active PPP sessions from MikroTik',
