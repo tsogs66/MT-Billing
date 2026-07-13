@@ -15,9 +15,12 @@ function registerServiceWorker() {
   // PWA install/offline shell for browser use on Android. The Capacitor app
   // ships its own local assets, so the SW is web-only, production-only.
   if (isNativeApp() || !import.meta.env.PROD || !('serviceWorker' in navigator)) return;
-  window.addEventListener('load', () => {
+  const register = () => {
     navigator.serviceWorker.register('/sw.js').catch(() => undefined);
-  });
+  };
+  // React mounts after the window load event on fast loads — register directly.
+  if (document.readyState === 'complete') register();
+  else window.addEventListener('load', register, { once: true });
 }
 
 async function initNativeShell() {
