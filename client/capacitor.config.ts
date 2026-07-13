@@ -6,21 +6,33 @@ const config: CapacitorConfig = {
   webDir: 'dist',
   server: {
     androidScheme: 'https',
-    // cleartext only needed if testing against http:// LAN IPs
+    // Allow cleartext for LAN http:// testing. Use HTTPS in production.
     cleartext: true,
   },
   plugins: {
     SplashScreen: {
       launchAutoHide: true,
+      launchShowDuration: 1200,
       backgroundColor: '#0f172a',
+      androidScaleType: 'CENTER_CROP',
+      showSpinner: false,
     },
     StatusBar: {
       style: 'DARK',
-      backgroundColor: '#0f172a',
+      backgroundColor: '#00000000',
+      overlaysWebView: true,
+    },
+    Keyboard: {
+      resize: 'body',
+      resizeOnFullScreen: true,
     },
   },
   android: {
     allowMixedContent: true,
+    // Edge-to-edge: the web shell handles status bar / nav bar insets via CSS
+    // env(safe-area-inset-*) variables.
+    initialFocus: false,
+    captureInput: false,
   },
 };
 

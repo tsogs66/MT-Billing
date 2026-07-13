@@ -596,7 +596,94 @@ body {
   cursor: not-allowed;
 }
 
-/* Thin scrollbars */
+/* ── Bottom navigation bar (mobile only, hidden on lg+) ── */
+.bottom-nav {
+  display: flex;
+  align-items: stretch;
+  justify-content: space-around;
+  background: var(--sidebar-bg);
+  border-top: 1px solid var(--sidebar-border);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  min-height: calc(3.5rem + env(safe-area-inset-bottom, 0px));
+  flex-shrink: 0;
+  position: relative;
+  z-index: 30;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.bottom-nav-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  flex: 1;
+  min-height: 3.5rem;
+  padding: 0.375rem 0.25rem 0;
+  color: var(--sidebar-muted);
+  text-decoration: none;
+  transition: color 0.15s ease, background-color 0.15s ease;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.bottom-nav-item.is-active,
+.bottom-nav-item:active {
+  color: var(--brand);
+}
+
+.bottom-nav-item:not(.is-active):active {
+  background: var(--sidebar-hover-bg);
+}
+
+.bottom-nav-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.75rem;
+  transition: background-color 0.15s ease, transform 0.15s ease;
+}
+
+.bottom-nav-icon.is-active {
+  background: color-mix(in srgb, var(--brand) 14%, transparent);
+  color: var(--brand);
+  transform: translateY(-2px);
+}
+
+.bottom-nav-label {
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.01em;
+}
+
+/* Dark theme bottom nav */
+[data-theme='dark'] .bottom-nav {
+  background: rgba(2, 6, 23, 0.96);
+  border-top-color: #1e293b;
+}
+
+/* One Piece theme bottom nav */
+[data-theme='onepiece'] .bottom-nav {
+  background: rgba(6, 16, 28, 0.96);
+  border-top-color: rgba(232, 185, 35, 0.35);
+}
+
+/* ── Mobile data table: force horizontal scroll ── */
+.mobile-table-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  border-radius: 0 0 1rem 1rem;
+}
+
+/* ── Thin scrollbars */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;

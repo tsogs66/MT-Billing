@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Brand / primary orange -->
+    <color name="colorPrimary">#f97316</color>
+    <color name="colorPrimaryDark">#0f172a</color>
+    <color name="colorAccent">#f97316</color>
+
+    <!-- App shell background (matches splash + status bar) -->
+    <color name="ic_launcher_background">#0f172a</color>
+    <color name="appBackground">#0f172a</color>
+</resources>

@@ -1,0 +1,55 @@
+{
+  "name": "MT-Billing Panel",
+  "short_name": "MT-Billing",
+  "description": "MikroTik ISP Billing, Monitoring and Commissioning Panel",
+  "start_url": "/",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone"],
+  "orientation": "portrait-primary",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "scope": "/",
+  "lang": "en",
+  "categories": ["business", "productivity", "utilities"],
+  "icons": [
+    {
+      "src": "/favicon-32.png",
+      "sizes": "32x32",
+      "type": "image/png"
+    },
+    {
+      "src": "/favicon-64.png",
+      "sizes": "64x64",
+      "type": "image/png"
+    },
+    {
+      "src": "/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png"
+    },
+    {
+      "src": "/logo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "screenshots": [],
+  "shortcuts": [
+    {
+      "name": "Dashboard",
+      "short_name": "Dashboard",
+      "description": "View system dashboard",
+      "url": "/",
+      "icons": [{ "src": "/favicon-64.png", "sizes": "64x64" }]
+    },
+    {
+      "name": "PPPoE",
+      "short_name": "PPPoE",
+      "description": "Manage PPPoE subscribers",
+      "url": "/pppoe",
+      "icons": [{ "src": "/favicon-64.png", "sizes": "64x64" }]
+    }
+  ],
+  "prefer_related_applications": false
+}

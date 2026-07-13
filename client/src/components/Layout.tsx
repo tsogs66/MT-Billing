@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { KeyRound } from 'lucide-react';
 import Sidebar from './Sidebar';
 import Topbar from './Topbar';
+import BottomNav from './BottomNav';
 import { useAuth } from '../context/AuthContext';
 
 type LayoutContextValue = {
@@ -81,7 +82,7 @@ export default function Layout({
             className={
               fullBleed
                 ? `flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden p-0 page-enter ${readOnly ? 'panel-readonly' : ''}`
-                : `flex-1 min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-y-contain p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:p-6 lg:p-8 page-enter ${readOnly ? 'panel-readonly' : ''}`
+                : `flex-1 min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-y-contain p-3 pb-[max(calc(3.5rem+env(safe-area-inset-bottom)),0.75rem)] sm:p-6 sm:pb-6 lg:p-8 lg:pb-8 page-enter ${readOnly ? 'panel-readonly' : ''}`
             }
             aria-readonly={readOnly || undefined}
           >
@@ -91,6 +92,8 @@ export default function Layout({
               <div className="max-w-[1600px] mx-auto w-full min-w-0">{children}</div>
             )}
           </main>
+
+          <BottomNav />
         </div>
       </div>
     </LayoutContext.Provider>

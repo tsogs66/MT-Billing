@@ -301,7 +301,7 @@ export function Flash({ message, type = 'success', onDismiss }: { message: strin
 export function Toast({ message }: { message: string }) {
   if (!message) return null;
   return (
-    <div className="fixed bottom-6 right-6 z-[2000] max-w-sm animate-fade-in-up">
+    <div className="fixed right-4 z-[2000] max-w-sm animate-fade-in-up bottom-[calc(4rem+env(safe-area-inset-bottom,0px))] lg:bottom-6">
       <div className="flex items-center gap-2.5 bg-slate-900 text-white text-sm font-medium px-4 py-3 rounded-xl shadow-card-hover border border-slate-700/50">
         <CheckCircle2 size={18} className="text-emerald-400 shrink-0" />
         {message}

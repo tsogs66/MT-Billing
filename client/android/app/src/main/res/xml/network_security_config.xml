@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Allow cleartext HTTP for local/LAN testing only.
+         Production usage should always be HTTPS. -->
+    <domain-config cleartextTrafficPermitted="true">
+        <!-- Common private LAN ranges -->
+        <domain includeSubdomains="true">192.168.0.0</domain>
+        <domain includeSubdomains="true">192.168.1.1</domain>
+        <domain includeSubdomains="true">10.0.0.1</domain>
+        <domain includeSubdomains="true">10.10.10.1</domain>
+        <domain includeSubdomains="true">172.16.0.1</domain>
+        <domain includeSubdomains="true">localhost</domain>
+    </domain-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+            <!-- Also trust user-installed certs (e.g. self-signed in dev) -->
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
