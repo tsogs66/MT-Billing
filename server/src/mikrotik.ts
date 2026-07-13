@@ -1248,21 +1248,33 @@ async function readPppIfaceByteCounters(
   return map;
 }
 
+/** Last interface byte snapshot per router — used to derive live bps between UI polls
+ * without sleeping 1s inside each request (so Active Connections can refresh every 2s). */
+const lastPppIfaceSnap = new Map<
+  string,
+  { t: number; byKey: Map<string, { down: number; up: number; iface: string }> }
+>();
+
+function routerSnapKey(conn: RouterConn): string {
+  return `${conn.host || ''}:${conn.port || 8728}:${conn.api_user || ''}`;
+}
+
 /** Live bits/s for PPP active sessions via their dynamic <pppoe-user> interfaces.
  *
  * Those interfaces face the subscriber (LAN side of the PPP session), not the WAN:
  *   - TX (to client)  = subscriber download
  *   - RX (from client) = subscriber upload
  *
- * Always measures every matched PPPoE interface (no early exit on idle queues),
- * so Active Connections shows live rates for all online users — not only a few.
+ * Fast path (opts.fast): one counter print + delta vs previous poll, then queues /
+ * monitor-traffic fill-ins — no 1s sleep, so the Active tab can poll every 2s.
  */
 export async function fetchPppActiveTraffic(
   conn: RouterConn,
   usernames: string[],
-  opts?: { addresses?: Record<string, string> }
+  opts?: { addresses?: Record<string, string>; fast?: boolean }
 ): Promise<Record<string, { download: number; upload: number }>> {
   if (!usernames.length) return {};
+  const fast = opts?.fast !== false; // default fast for live UI; pass fast:false for one-shot accuracy
   return withRouter(conn, async (api) => {
     const out: Record<string, { download: number; upload: number }> = {};
     const nameByKey = new Map<string, string>();
@@ -1287,27 +1299,57 @@ export async function fetchPppActiveTraffic(
       };
     };
 
-    // ---- 1) Dual-sample byte counters on ALL dynamic PPP interfaces (primary) ----
-    // This covers every online PPPoE user in two prints — no per-user probe cap.
+    // ---- 1) Interface byte counters → bps via previous poll snapshot (no sleep) ----
+    let ifaceMap = new Map<string, { down: number; up: number; iface: string }>();
     try {
-      const t0 = Date.now();
-      const a = await readPppIfaceByteCounters(api);
-      await new Promise((r) => setTimeout(r, 1000));
-      const b = await readPppIfaceByteCounters(api);
-      const dt = Math.max(0.6, (Date.now() - t0) / 1000);
-      for (const key of wantKeys) {
-        const s0 = a.get(key);
-        const s1 = b.get(key);
-        if (!s0 || !s1) continue;
-        const downBytes = Math.max(0, s1.down - s0.down);
-        const upBytes = Math.max(0, s1.up - s0.up);
-        setRate(key, Math.round((downBytes * 8) / dt), Math.round((upBytes * 8) / dt));
+      ifaceMap = await readPppIfaceByteCounters(api);
+      const snapKey = routerSnapKey(conn);
+      const now = Date.now();
+      const prev = lastPppIfaceSnap.get(snapKey);
+      lastPppIfaceSnap.set(snapKey, { t: now, byKey: ifaceMap });
+
+      if (prev && prev.byKey.size) {
+        const dt = Math.max(0.4, (now - prev.t) / 1000);
+        // Only trust deltas from recent polls (0.4s–12s) — covers 2s UI refresh.
+        if (dt >= 0.4 && dt <= 12) {
+          for (const key of wantKeys) {
+            const s0 = prev.byKey.get(key);
+            const s1 = ifaceMap.get(key);
+            if (!s0 || !s1) continue;
+            const downBytes = Math.max(0, s1.down - s0.down);
+            const upBytes = Math.max(0, s1.up - s0.up);
+            setRate(key, Math.round((downBytes * 8) / dt), Math.round((upBytes * 8) / dt));
+          }
+        }
+      }
+
+      // Slow/one-shot path: if no usable prior sample, dual-sample once (accurate but ~1s).
+      if (!fast && ![...wantKeys].some((k) => {
+        const u = nameByKey.get(k)!;
+        const t = out[u];
+        return t && (t.download > 0 || t.upload > 0);
+      })) {
+        await new Promise((r) => setTimeout(r, 900));
+        const b = await readPppIfaceByteCounters(api);
+        const dt = 0.9;
+        lastPppIfaceSnap.set(snapKey, { t: Date.now(), byKey: b });
+        for (const key of wantKeys) {
+          const s0 = ifaceMap.get(key);
+          const s1 = b.get(key);
+          if (!s0 || !s1) continue;
+          setRate(
+            key,
+            Math.round((Math.max(0, s1.down - s0.down) * 8) / dt),
+            Math.round((Math.max(0, s1.up - s0.up) * 8) / dt)
+          );
+        }
+        ifaceMap = b;
       }
     } catch {
       /* optional */
     }
 
-    // ---- 2) Overlay simple-queue live rates when present (never skip dual-sample) ----
+    // ---- 2) Overlay simple-queue live rates when present ----
     try {
       let simple = (await api.write('/queue/simple/print')) as Record<string, string>[];
       if (!(simple || []).some((q) => q.rate != null && String(q.rate) !== '' && String(q.rate) !== '0/0')) {
@@ -1331,7 +1373,6 @@ export async function fetchPppActiveTraffic(
         const raw = String(q.rate || '');
         if (!raw || raw === '0' || raw === '0/0') continue;
         const parts = raw.split('/');
-        // Client-targeted simple queue: rate = upload/download
         const upload = parseRosRate(parts[0]);
         const download = parseRosRate(parts[1] || parts[0]);
         if (download > 0 || upload > 0) setRate(key, download, upload);
@@ -1340,7 +1381,7 @@ export async function fetchPppActiveTraffic(
       /* optional */
     }
 
-    // ---- 3) monitor-traffic for users still at 0/0 or missing (batched, then sequential) ----
+    // ---- 3) monitor-traffic for users still at 0 (batched). Cap work on fast polls. ----
     const needProbe = [...wantKeys].filter((k) => {
       const u = nameByKey.get(k)!;
       const t = out[u];
@@ -1348,16 +1389,21 @@ export async function fetchPppActiveTraffic(
     });
     if (needProbe.length) {
       try {
-        const ifaces = await readPppIfaceByteCounters(api);
         const ifaceByKey = new Map<string, string>();
         const needSet = new Set(needProbe);
-        for (const [key, v] of ifaces) {
+        for (const [key, v] of ifaceMap) {
           if (needSet.has(key)) ifaceByKey.set(key, v.iface);
         }
+        // If iface map was empty, refresh names for monitor.
+        if (!ifaceByKey.size) {
+          const fresh = await readPppIfaceByteCounters(api);
+          for (const [key, v] of fresh) {
+            if (needSet.has(key)) ifaceByKey.set(key, v.iface);
+          }
+        }
 
-        // Prefer multi-interface monitor-traffic (comma-separated) in chunks.
-        const keys = [...ifaceByKey.keys()];
-        const CHUNK = 12;
+        const keys = [...ifaceByKey.keys()].slice(0, fast ? 40 : 200);
+        const CHUNK = fast ? 16 : 12;
         for (let i = 0; i < keys.length; i += CHUNK) {
           const chunk = keys.slice(i, i + CHUNK);
           const ifaceList = chunk.map((k) => ifaceByKey.get(k)!).join(',');
@@ -1375,7 +1421,7 @@ export async function fetchPppActiveTraffic(
               setRate(key, tx, rx);
             }
           } catch {
-            // Fall back to sequential one-by-one for this chunk
+            if (fast) continue; // don't fall into slow sequential path during 2s polls
             for (const key of chunk) {
               const iface = ifaceByKey.get(key);
               if (!iface) continue;
@@ -1399,12 +1445,11 @@ export async function fetchPppActiveTraffic(
       }
     }
 
-    // Ensure every requested username has a numeric entry so the UI never looks blank.
     for (const u of usernames) {
       if (out[u] == null) out[u] = { download: 0, upload: 0 };
     }
     return out;
-  }, { timeoutSec: 60 });
+  }, { timeoutSec: fast ? 20 : 45 });
 }
 
 /**

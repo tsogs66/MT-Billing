@@ -1950,6 +1950,8 @@ app.get('/api/pppoe/active', async (req, res) => {
   const service = String(req.query.service || 'pppoe');
   const routerId = req.query.routerId ? Number(req.query.routerId) : null;
   const wantTraffic = String(req.query.traffic ?? '1') !== '0';
+  // fast=1 (default for live polls): no 1s dual-sample sleep — uses counter deltas between polls.
+  const fast = String(req.query.fast ?? '1') !== '0';
   const router = getRouterById(routerId);
   if (!router) {
     return res.status(400).json({ error: 'Select a router in the top bar.', sessions: [], live: false });
@@ -1977,11 +1979,7 @@ app.get('/api/pppoe/active', async (req, res) => {
         for (const s of filtered) {
           if (s.name && s.address && s.address !== '-') addresses[s.name] = s.address;
         }
-        traffic = await fetchPppActiveTraffic(
-          router,
-          filtered.map((s) => s.name),
-          { addresses }
-        );
+        traffic = await fetchPppActiveTraffic(router, filtered.map((s) => s.name), { addresses, fast });
         trafficOk = true;
       } catch {
         /* traffic optional — omit rates so the UI keeps the previous reading */
@@ -1994,7 +1992,6 @@ app.get('/api/pppoe/active', async (req, res) => {
       const u = byUser.get(key);
       const sec = secretByName.get(key);
       const t = trafficByKey.get(key);
-      // Profile column: always from /ppp/secret, not the active-session row / billing plan.
       const secretProfile = String(sec?.profile || '').trim();
       return {
         username: s.name,
@@ -2009,7 +2006,14 @@ app.get('/api/pppoe/active', async (req, res) => {
           : {}),
       };
     });
-    res.json({ sessions: out, live: true, routerId: router.id, routerName: router.name, trafficOk });
+    res.json({
+      sessions: out,
+      live: true,
+      trafficOk,
+      routerId: router.id,
+      routerName: router.name,
+      polledAt: new Date().toISOString(),
+    });
   } catch (e: any) {
     res.status(502).json({
       error: e?.message || 'Could not fetch active PPP sessions from MikroTik',

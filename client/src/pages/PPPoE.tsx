@@ -205,7 +205,15 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
     }
     const includeTraffic = opts?.traffic ?? !opts?.silent;
     return api
-      .get('/pppoe/active', { params: { service, ...routerParams, traffic: includeTraffic ? 1 : 0 } })
+      .get('/pppoe/active', {
+        params: {
+          service,
+          ...routerParams,
+          traffic: includeTraffic ? 1 : 0,
+          // Silent live polls use fast counter-delta path (no 1s sleep on router).
+          fast: opts?.silent ? 1 : 0,
+        },
+      })
       .then((r) => {
         const next = r.data.sessions || (Array.isArray(r.data) ? r.data : []);
         const apply = () => {
@@ -223,7 +231,6 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
               if (!includeTraffic) {
                 return { ...s, downloadBps: old.downloadBps, uploadBps: old.uploadBps };
               }
-              // If the server omitted rates (traffic probe failed), keep the previous reading.
               const hasDl = Object.prototype.hasOwnProperty.call(s, 'downloadBps');
               const hasUl = Object.prototype.hasOwnProperty.call(s, 'uploadBps');
               return {
@@ -236,8 +243,8 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
             return merged;
           });
         };
-        if (opts?.silent) startTransition(apply);
-        else apply();
+        // Don't defer traffic updates — keep the Active table live.
+        apply();
         if (r.data.error) setTabError(r.data.error);
       })
       .catch((e) => {
@@ -414,7 +421,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
   }, [tab, current?.id]);
 
   // Live status on Users / Offline; live traffic only on Active Connections.
-  // 2s refresh while the browser tab is visible; stop completely when hidden / in background.
+  // Active: refresh every 2s while visible; stop completely when tab is hidden.
   const usersPollInFlight = useRef(false);
   useEffect(() => {
     if (!current?.id) return;
@@ -422,6 +429,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
 
     let cancelled = false;
     let timer: number | null = null;
+    const POLL_MS = 2000;
 
     const clearTimer = () => {
       if (timer != null) {
@@ -438,28 +446,33 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
       }, ms);
     };
 
-    // Active traffic dual-samples ~1s on the router; poll a bit slower so requests don't stack.
-    const intervalMs = tab === 'active' ? 3000 : 2000;
-
     const tick = async () => {
       if (cancelled) return;
       if (document.visibilityState !== 'visible') return;
       if (toggleBusy || bulkBusy || fetching || toggleFor) {
-        schedule(intervalMs);
+        schedule(POLL_MS);
         return;
       }
-      if (usersPollInFlight.current) return;
+      if (usersPollInFlight.current) {
+        // Don't drop the loop if a tick overlaps — retry shortly after.
+        schedule(400);
+        return;
+      }
       usersPollInFlight.current = true;
+      const started = Date.now();
       try {
         if (tab === 'active') {
           await loadActive({ silent: true, traffic: true });
         } else {
-          // Status + 24h usage only — no live monitor-traffic on the Users list.
           await loadUsers({ silent: true, traffic: false });
         }
       } finally {
         usersPollInFlight.current = false;
-        if (!cancelled && document.visibilityState === 'visible') schedule(intervalMs);
+        if (!cancelled && document.visibilityState === 'visible') {
+          // Aim for ~2s between poll starts (not 2s after slow requests finish).
+          const wait = Math.max(250, POLL_MS - (Date.now() - started));
+          schedule(wait);
+        }
       }
     };
 
