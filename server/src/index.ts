@@ -273,6 +273,9 @@ app.post('/api/public/pay/:token/confirm', async (req, res) => {
   }
 });
 
+/** Public liveness probe — Updater UI polls this without an Authorization header. */
+app.get('/api/health', (_req, res) => res.json({ ok: true, ts: Date.now() }));
+
 app.use('/api', requireAuth);
 app.use('/api', requireLicenseOrAllowlist);
 
@@ -3413,8 +3416,6 @@ app.use('/api', settingsRouter);
 app.use('/api', aiRouter);
 app.use('/api', terminalRouter);
 app.use('/api', extraRouter);
-
-app.get('/api/health', (_req, res) => res.json({ ok: true }));
 
 const server = http.createServer(app);
 initTerminalWs(server);

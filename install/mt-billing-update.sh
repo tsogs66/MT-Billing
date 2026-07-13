@@ -61,6 +61,69 @@ STATE_FILE="${STATE_DIR}/.last-update.json"
 PANEL_UPDATE_UNIT="/etc/systemd/system/mt-billing-panel-update.service"
 SUDOERS_FILE="/etc/sudoers.d/mt-billing"
 
+service_user() {
+  if [[ -f "$SERVICE_UNIT" ]]; then
+    grep '^User=' "$SERVICE_UNIT" | cut -d= -f2
+  else
+    echo "${var_service_user:-mtbilling}"
+  fi
+}
+
+# Install full passwordless sudoers (must stay in sync with install/mt-billing-sudoers).
+install_sudoers_for_updater() {
+  local svc_user="$1"
+  local install_dir="$2"
+  local template="${install_dir}/install/mt-billing-sudoers"
+  local tmp
+  tmp="$(mktemp)"
+  if [[ -f "$template" ]]; then
+    sed -e "s|__SVC_USER__|${svc_user}|g" -e "s|__INSTALL_DIR__|${install_dir}|g" \
+      -e "s|^Defaults:mtbilling |Defaults:${svc_user} |g" \
+      -e "s|^mtbilling ALL=|${svc_user} ALL=|g" \
+      -e "s|/opt/mt-billing|${install_dir}|g" \
+      "$template" >"$tmp"
+  else
+    cat >"$tmp" <<EOF
+# MT-Billing — allow panel service user to start the root update oneshot
+Defaults:${svc_user} !requiretty
+${svc_user} ALL=(root) NOPASSWD: /bin/true
+${svc_user} ALL=(root) NOPASSWD: /usr/bin/true
+${svc_user} ALL=(root) NOPASSWD: /bin/systemctl start mt-billing-panel-update.service
+${svc_user} ALL=(root) NOPASSWD: /bin/systemctl start --no-block mt-billing-panel-update.service
+${svc_user} ALL=(root) NOPASSWD: /usr/bin/systemctl start mt-billing-panel-update.service
+${svc_user} ALL=(root) NOPASSWD: /usr/bin/systemctl start --no-block mt-billing-panel-update.service
+${svc_user} ALL=(root) NOPASSWD: /bin/systemctl restart mt-billing-api.service
+${svc_user} ALL=(root) NOPASSWD: /bin/systemctl restart mt-billing-api
+${svc_user} ALL=(root) NOPASSWD: /usr/bin/systemctl restart mt-billing-api.service
+${svc_user} ALL=(root) NOPASSWD: /usr/bin/systemctl restart mt-billing-api
+${svc_user} ALL=(root) NOPASSWD: /bin/bash ${install_dir}/install/mt-billing-update.sh
+${svc_user} ALL=(root) NOPASSWD: /usr/bin/bash ${install_dir}/install/mt-billing-update.sh
+${svc_user} ALL=(root) NOPASSWD: /bin/bash ${install_dir}/install/mt-billing-self-update.sh
+${svc_user} ALL=(root) NOPASSWD: /usr/bin/bash ${install_dir}/install/mt-billing-self-update.sh
+${svc_user} ALL=(root) NOPASSWD: /bin/bash ${install_dir}/install/mt-billing-cloudflare-tunnel.sh
+${svc_user} ALL=(root) NOPASSWD: /usr/bin/bash ${install_dir}/install/mt-billing-cloudflare-tunnel.sh
+${svc_user} ALL=(root) NOPASSWD: /bin/systemctl start cloudflared-mt-billing.service
+${svc_user} ALL=(root) NOPASSWD: /bin/systemctl stop cloudflared-mt-billing.service
+${svc_user} ALL=(root) NOPASSWD: /bin/systemctl restart cloudflared-mt-billing.service
+${svc_user} ALL=(root) NOPASSWD: /bin/systemctl is-active cloudflared-mt-billing.service
+${svc_user} ALL=(root) NOPASSWD: /usr/bin/systemctl start cloudflared-mt-billing.service
+${svc_user} ALL=(root) NOPASSWD: /usr/bin/systemctl stop cloudflared-mt-billing.service
+${svc_user} ALL=(root) NOPASSWD: /usr/bin/systemctl restart cloudflared-mt-billing.service
+${svc_user} ALL=(root) NOPASSWD: /usr/bin/systemctl is-active cloudflared-mt-billing.service
+EOF
+  fi
+  install -m 440 "$tmp" "$SUDOERS_FILE"
+  rm -f "$tmp"
+  if command -v visudo >/dev/null 2>&1; then
+    if ! visudo -cf "$SUDOERS_FILE" >/dev/null 2>&1; then
+      log_err "Invalid sudoers file — removing ${SUDOERS_FILE}"
+      rm -f "$SUDOERS_FILE"
+      return 1
+    fi
+  fi
+  return 0
+}
+
 # Allow the API service user to trigger updates from the panel UI.
 install_panel_update_privs() {
   local svc_user
@@ -81,6 +144,8 @@ Type=oneshot
 Nice=5
 Environment=var_install_dir=${INSTALL_DIR}
 Environment=var_repo_branch=${REPO_BRANCH}
+Environment=INSTALL_DIR=${INSTALL_DIR}
+Environment=REPO_BRANCH=${REPO_BRANCH}
 Environment=MT_BILLING_AUTO_ONLY=0
 ExecStart=/bin/bash ${INSTALL_DIR}/install/mt-billing-update.sh
 StandardOutput=journal
@@ -91,36 +156,9 @@ WantedBy=multi-user.target
 EOF
   fi
 
-  cat >"${SUDOERS_FILE}" <<EOF
-# MT-Billing — allow panel service user to start the root update oneshot
-Defaults:${svc_user} !requiretty
-${svc_user} ALL=(root) NOPASSWD: /bin/true
-${svc_user} ALL=(root) NOPASSWD: /usr/bin/true
-${svc_user} ALL=(root) NOPASSWD: /bin/systemctl start mt-billing-panel-update.service
-${svc_user} ALL=(root) NOPASSWD: /bin/systemctl start --no-block mt-billing-panel-update.service
-${svc_user} ALL=(root) NOPASSWD: /usr/bin/systemctl start mt-billing-panel-update.service
-${svc_user} ALL=(root) NOPASSWD: /usr/bin/systemctl start --no-block mt-billing-panel-update.service
-${svc_user} ALL=(root) NOPASSWD: /bin/bash ${INSTALL_DIR}/install/mt-billing-update.sh
-${svc_user} ALL=(root) NOPASSWD: /usr/bin/bash ${INSTALL_DIR}/install/mt-billing-update.sh
-EOF
-  chmod 440 "${SUDOERS_FILE}"
-  if command -v visudo >/dev/null 2>&1; then
-    if ! visudo -cf "${SUDOERS_FILE}" >/dev/null 2>&1; then
-      log_err "Invalid sudoers file — removing ${SUDOERS_FILE}"
-      rm -f "${SUDOERS_FILE}"
-      return 1
-    fi
-  fi
+  install_sudoers_for_updater "$svc_user" "$INSTALL_DIR" || return 1
   systemctl daemon-reload 2>/dev/null || true
   log_ok "Panel updater privileges installed (${svc_user} → ${PANEL_UPDATE_UNIT})"
-}
-
-service_user() {
-  if [[ -f "$SERVICE_UNIT" ]]; then
-    grep '^User=' "$SERVICE_UNIT" | cut -d= -f2
-  else
-    echo "${var_service_user:-mtbilling}"
-  fi
 }
 
 remote_sha() {

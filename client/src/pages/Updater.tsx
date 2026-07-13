@@ -163,13 +163,23 @@ export default function Updater() {
       }
 
       try {
-        const health = await fetch('/api/health', { cache: 'no-store' });
+        // Prefer authenticated job status; bare /api/health is public but may 404 on old builds.
+        const token = localStorage.getItem('mt_token');
+        const health = await fetch('/api/health', {
+          cache: 'no-store',
+          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        });
         if (!health.ok) throw new Error('health');
       } catch {
-        seenOfflineRef.current = true;
-        healthyTicksRef.current = 0;
-        setStatusText('Panel offline while updating — rebuilding and restarting services…');
-        return;
+        // Fall back: if authenticated updater responds, API is up even if /health is old/auth-gated
+        try {
+          await api.get('/updater/job', { timeout: 4000 });
+        } catch {
+          seenOfflineRef.current = true;
+          healthyTicksRef.current = 0;
+          setStatusText('Panel offline while updating — rebuilding and restarting services…');
+          return;
+        }
       }
 
       healthyTicksRef.current += 1;

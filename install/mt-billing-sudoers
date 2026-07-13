@@ -1,29 +1,29 @@
 # Allow the MT-Billing API service user to trigger a root oneshot update.
 # Installed to /etc/sudoers.d/mt-billing by grant/install/update scripts.
-# Placeholders: service user is rewritten for the actual User= in mt-billing-api.service.
+# Placeholders __SVC_USER__ and __INSTALL_DIR__ are rewritten at install time.
 # /bin/true is allowed so older panel builds that probed `sudo -n true` still work.
-Defaults:mtbilling !requiretty
-mtbilling ALL=(root) NOPASSWD: /bin/true
-mtbilling ALL=(root) NOPASSWD: /usr/bin/true
-mtbilling ALL=(root) NOPASSWD: /bin/systemctl start mt-billing-panel-update.service
-mtbilling ALL=(root) NOPASSWD: /bin/systemctl start --no-block mt-billing-panel-update.service
-mtbilling ALL=(root) NOPASSWD: /usr/bin/systemctl start mt-billing-panel-update.service
-mtbilling ALL=(root) NOPASSWD: /usr/bin/systemctl start --no-block mt-billing-panel-update.service
-mtbilling ALL=(root) NOPASSWD: /bin/systemctl restart mt-billing-api.service
-mtbilling ALL=(root) NOPASSWD: /bin/systemctl restart mt-billing-api
-mtbilling ALL=(root) NOPASSWD: /usr/bin/systemctl restart mt-billing-api.service
-mtbilling ALL=(root) NOPASSWD: /usr/bin/systemctl restart mt-billing-api
-mtbilling ALL=(root) NOPASSWD: /bin/bash /opt/mt-billing/install/mt-billing-update.sh
-mtbilling ALL=(root) NOPASSWD: /usr/bin/bash /opt/mt-billing/install/mt-billing-update.sh
-mtbilling ALL=(root) NOPASSWD: /bin/bash /opt/mt-billing/install/mt-billing-self-update.sh
-mtbilling ALL=(root) NOPASSWD: /usr/bin/bash /opt/mt-billing/install/mt-billing-self-update.sh
-mtbilling ALL=(root) NOPASSWD: /bin/bash /opt/mt-billing/install/mt-billing-cloudflare-tunnel.sh
-mtbilling ALL=(root) NOPASSWD: /usr/bin/bash /opt/mt-billing/install/mt-billing-cloudflare-tunnel.sh
-mtbilling ALL=(root) NOPASSWD: /bin/systemctl start cloudflared-mt-billing.service
-mtbilling ALL=(root) NOPASSWD: /bin/systemctl stop cloudflared-mt-billing.service
-mtbilling ALL=(root) NOPASSWD: /bin/systemctl restart cloudflared-mt-billing.service
-mtbilling ALL=(root) NOPASSWD: /bin/systemctl is-active cloudflared-mt-billing.service
-mtbilling ALL=(root) NOPASSWD: /usr/bin/systemctl start cloudflared-mt-billing.service
-mtbilling ALL=(root) NOPASSWD: /usr/bin/systemctl stop cloudflared-mt-billing.service
-mtbilling ALL=(root) NOPASSWD: /usr/bin/systemctl restart cloudflared-mt-billing.service
-mtbilling ALL=(root) NOPASSWD: /usr/bin/systemctl is-active cloudflared-mt-billing.service
+Defaults:__SVC_USER__ !requiretty
+__SVC_USER__ ALL=(root) NOPASSWD: /bin/true
+__SVC_USER__ ALL=(root) NOPASSWD: /usr/bin/true
+__SVC_USER__ ALL=(root) NOPASSWD: /bin/systemctl start mt-billing-panel-update.service
+__SVC_USER__ ALL=(root) NOPASSWD: /bin/systemctl start --no-block mt-billing-panel-update.service
+__SVC_USER__ ALL=(root) NOPASSWD: /usr/bin/systemctl start mt-billing-panel-update.service
+__SVC_USER__ ALL=(root) NOPASSWD: /usr/bin/systemctl start --no-block mt-billing-panel-update.service
+__SVC_USER__ ALL=(root) NOPASSWD: /bin/systemctl restart mt-billing-api.service
+__SVC_USER__ ALL=(root) NOPASSWD: /bin/systemctl restart mt-billing-api
+__SVC_USER__ ALL=(root) NOPASSWD: /usr/bin/systemctl restart mt-billing-api.service
+__SVC_USER__ ALL=(root) NOPASSWD: /usr/bin/systemctl restart mt-billing-api
+__SVC_USER__ ALL=(root) NOPASSWD: /bin/bash __INSTALL_DIR__/install/mt-billing-update.sh
+__SVC_USER__ ALL=(root) NOPASSWD: /usr/bin/bash __INSTALL_DIR__/install/mt-billing-update.sh
+__SVC_USER__ ALL=(root) NOPASSWD: /bin/bash __INSTALL_DIR__/install/mt-billing-self-update.sh
+__SVC_USER__ ALL=(root) NOPASSWD: /usr/bin/bash __INSTALL_DIR__/install/mt-billing-self-update.sh
+__SVC_USER__ ALL=(root) NOPASSWD: /bin/bash __INSTALL_DIR__/install/mt-billing-cloudflare-tunnel.sh
+__SVC_USER__ ALL=(root) NOPASSWD: /usr/bin/bash __INSTALL_DIR__/install/mt-billing-cloudflare-tunnel.sh
+__SVC_USER__ ALL=(root) NOPASSWD: /bin/systemctl start cloudflared-mt-billing.service
+__SVC_USER__ ALL=(root) NOPASSWD: /bin/systemctl stop cloudflared-mt-billing.service
+__SVC_USER__ ALL=(root) NOPASSWD: /bin/systemctl restart cloudflared-mt-billing.service
+__SVC_USER__ ALL=(root) NOPASSWD: /bin/systemctl is-active cloudflared-mt-billing.service
+__SVC_USER__ ALL=(root) NOPASSWD: /usr/bin/systemctl start cloudflared-mt-billing.service
+__SVC_USER__ ALL=(root) NOPASSWD: /usr/bin/systemctl stop cloudflared-mt-billing.service
+__SVC_USER__ ALL=(root) NOPASSWD: /usr/bin/systemctl restart cloudflared-mt-billing.service
+__SVC_USER__ ALL=(root) NOPASSWD: /usr/bin/systemctl is-active cloudflared-mt-billing.service

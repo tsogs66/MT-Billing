@@ -389,18 +389,24 @@ export async function applyUpdate(): Promise<{
   const trySystemdUpdate = async (): Promise<boolean> => {
     const unitFile = '/etc/systemd/system/mt-billing-panel-update.service';
     if (!fs.existsSync(unitFile)) return false;
-    try {
-      // Must use the exact commands allowed in install/mt-billing-sudoers /
-      // mt-billing-grant-updater-root.sh — do NOT probe with `sudo -n true`
-      // (that is not permitted and falsely reports “needs root”).
-      await execFileAsync('sudo', ['-n', 'systemctl', 'start', '--no-block', unit], {
-        timeout: 20_000,
-        env: updateEnv,
-      });
-      return true;
-    } catch {
-      return false;
+    // Exact commands allowed in install/mt-billing-sudoers — do NOT probe with `sudo -n true`.
+    for (const args of [
+      ['-n', 'systemctl', 'start', '--no-block', unit],
+      ['-n', '/bin/systemctl', 'start', '--no-block', unit],
+      ['-n', '/usr/bin/systemctl', 'start', '--no-block', unit],
+      ['-n', 'systemctl', 'start', unit],
+    ]) {
+      try {
+        await execFileAsync('sudo', args, {
+          timeout: 20_000,
+          env: updateEnv,
+        });
+        return true;
+      } catch {
+        /* try next form */
+      }
     }
+    return false;
   };
 
   /** Fallback: sudo the update script directly (needs sudoers or root). */

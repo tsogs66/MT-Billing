@@ -112,6 +112,8 @@ Type=oneshot
 Nice=5
 Environment=var_install_dir=${INSTALL_DIR}
 Environment=var_repo_branch=${REPO_BRANCH}
+Environment=INSTALL_DIR=${INSTALL_DIR}
+Environment=REPO_BRANCH=${REPO_BRANCH}
 Environment=MT_BILLING_AUTO_ONLY=0
 ExecStart=/bin/bash ${INSTALL_DIR}/install/mt-billing-update.sh
 StandardOutput=journal
@@ -120,7 +122,15 @@ StandardError=journal
 [Install]
 WantedBy=multi-user.target
 EOF
-cat >/etc/sudoers.d/mt-billing <<EOF
+# Prefer shared template when present (keeps restart + tunnel privileges)
+if [[ -f "${INSTALL_DIR}/install/mt-billing-sudoers" ]]; then
+  sed -e "s|__SVC_USER__|${SVC_USER_FOR_SUDO}|g" -e "s|__INSTALL_DIR__|${INSTALL_DIR}|g" \
+    -e "s|^Defaults:mtbilling |Defaults:${SVC_USER_FOR_SUDO} |g" \
+    -e "s|^mtbilling ALL=|${SVC_USER_FOR_SUDO} ALL=|g" \
+    -e "s|/opt/mt-billing|${INSTALL_DIR}|g" \
+    "${INSTALL_DIR}/install/mt-billing-sudoers" >/etc/sudoers.d/mt-billing
+else
+  cat >/etc/sudoers.d/mt-billing <<EOF
 Defaults:${SVC_USER_FOR_SUDO} !requiretty
 ${SVC_USER_FOR_SUDO} ALL=(root) NOPASSWD: /bin/true
 ${SVC_USER_FOR_SUDO} ALL=(root) NOPASSWD: /usr/bin/true
@@ -128,10 +138,20 @@ ${SVC_USER_FOR_SUDO} ALL=(root) NOPASSWD: /bin/systemctl start mt-billing-panel-
 ${SVC_USER_FOR_SUDO} ALL=(root) NOPASSWD: /bin/systemctl start --no-block mt-billing-panel-update.service
 ${SVC_USER_FOR_SUDO} ALL=(root) NOPASSWD: /usr/bin/systemctl start mt-billing-panel-update.service
 ${SVC_USER_FOR_SUDO} ALL=(root) NOPASSWD: /usr/bin/systemctl start --no-block mt-billing-panel-update.service
+${SVC_USER_FOR_SUDO} ALL=(root) NOPASSWD: /bin/systemctl restart mt-billing-api.service
+${SVC_USER_FOR_SUDO} ALL=(root) NOPASSWD: /bin/systemctl restart mt-billing-api
+${SVC_USER_FOR_SUDO} ALL=(root) NOPASSWD: /usr/bin/systemctl restart mt-billing-api.service
+${SVC_USER_FOR_SUDO} ALL=(root) NOPASSWD: /usr/bin/systemctl restart mt-billing-api
 ${SVC_USER_FOR_SUDO} ALL=(root) NOPASSWD: /bin/bash ${INSTALL_DIR}/install/mt-billing-update.sh
 ${SVC_USER_FOR_SUDO} ALL=(root) NOPASSWD: /usr/bin/bash ${INSTALL_DIR}/install/mt-billing-update.sh
+${SVC_USER_FOR_SUDO} ALL=(root) NOPASSWD: /bin/bash ${INSTALL_DIR}/install/mt-billing-self-update.sh
+${SVC_USER_FOR_SUDO} ALL=(root) NOPASSWD: /usr/bin/bash ${INSTALL_DIR}/install/mt-billing-self-update.sh
 EOF
+fi
 chmod 440 /etc/sudoers.d/mt-billing
+if command -v visudo >/dev/null 2>&1; then
+  visudo -cf /etc/sudoers.d/mt-billing >/dev/null || msg_error "sudoers validation failed"
+fi
 $STD systemctl daemon-reload
 msg_ok "Panel updater privileges ready"
 

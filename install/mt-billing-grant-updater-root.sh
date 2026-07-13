@@ -19,11 +19,13 @@ set -euo pipefail
 
 INSTALL_DIR="${var_install_dir:-${INSTALL_DIR:-/opt/mt-billing}}"
 REPO_BRANCH="${var_repo_branch:-${REPO_BRANCH:-main}}"
+REPO_URL="${var_repo_url:-${REPO_URL:-https://github.com/tsogs66/MT-Billing.git}}"
 SERVICE_UNIT="/etc/systemd/system/mt-billing-api.service"
 PANEL_UPDATE_UNIT="/etc/systemd/system/mt-billing-panel-update.service"
 SUDOERS_FILE="/etc/sudoers.d/mt-billing"
 UPDATE_SCRIPT="${INSTALL_DIR}/install/mt-billing-update.sh"
 SELF_UPDATE_SCRIPT="${INSTALL_DIR}/install/mt-billing-self-update.sh"
+RAW_BASE="https://raw.githubusercontent.com/tsogs66/MT-Billing/${REPO_BRANCH}/install"
 
 log_info() { printf '\033[1;34m[INFO]\033[0m %s\n' "$*"; }
 log_ok() { printf '\033[1;32m[OK]\033[0m %s\n' "$*"; }
@@ -51,16 +53,34 @@ log_info "Granting updater root privilege to service user: ${svc_user}"
 fetch_helper() {
   local name="$1"
   local dest="${INSTALL_DIR}/install/${name}"
+  local mode="${2:-755}"
   mkdir -p "$(dirname "$dest")"
-  if [[ ! -f "$dest" ]]; then
-    log_info "Fetching ${name} from GitHub"
-    curl -fsSL "https://raw.githubusercontent.com/tsogs66/MT-Billing/${REPO_BRANCH}/install/${name}" -o "$dest"
+  # Always refresh from GitHub when possible so LXC gets the latest fix
+  if curl -fsSL "${RAW_BASE}/${name}" -o "${dest}.tmp" 2>/dev/null; then
+    mv -f "${dest}.tmp" "$dest"
+    log_ok "Refreshed ${name} from GitHub"
+  elif [[ -d "${INSTALL_DIR}/.git" ]] && git -C "$INSTALL_DIR" show "origin/${REPO_BRANCH}:install/${name}" >"${dest}.tmp" 2>/dev/null; then
+    mv -f "${dest}.tmp" "$dest"
+    log_ok "Refreshed ${name} from origin/${REPO_BRANCH}"
+  elif [[ -f "$dest" ]]; then
+    log_info "Keeping existing ${name} (could not refresh)"
+  else
+    log_err "Missing ${name} and could not download it"
+    return 1
   fi
-  chmod 755 "$dest"
+  chmod "$mode" "$dest"
 }
+
+# Best-effort fetch of latest helpers
+if [[ -d "${INSTALL_DIR}/.git" ]]; then
+  git -C "$INSTALL_DIR" remote set-url origin "$REPO_URL" 2>/dev/null || true
+  git -C "$INSTALL_DIR" fetch -q origin "$REPO_BRANCH" 2>/dev/null || true
+fi
 
 fetch_helper mt-billing-update.sh
 fetch_helper mt-billing-self-update.sh
+fetch_helper mt-billing-sudoers 644 || true
+fetch_helper mt-billing-panel-update.service 644 || true
 
 # Panel-triggered oneshot (runs update as root under systemd)
 cat >"$PANEL_UPDATE_UNIT" <<EOF
@@ -85,11 +105,18 @@ StandardError=journal
 WantedBy=multi-user.target
 EOF
 
-# Passwordless sudo for the API service user — start oneshot, restart API, or run update scripts.
-# /bin/true is included so older panel builds that probed `sudo -n true` still work.
-cat >"$SUDOERS_FILE" <<EOF
+# Passwordless sudo from shared template (full privileges)
+TEMPLATE="${INSTALL_DIR}/install/mt-billing-sudoers"
+TMP_SUDOERS="$(mktemp)"
+if [[ -f "$TEMPLATE" ]]; then
+  sed -e "s|__SVC_USER__|${svc_user}|g" -e "s|__INSTALL_DIR__|${INSTALL_DIR}|g" \
+    -e "s|^Defaults:mtbilling |Defaults:${svc_user} |g" \
+    -e "s|^mtbilling ALL=|${svc_user} ALL=|g" \
+    -e "s|/opt/mt-billing|${INSTALL_DIR}|g" \
+    "$TEMPLATE" >"$TMP_SUDOERS"
+else
+  cat >"$TMP_SUDOERS" <<EOF
 # MT-Billing — Application Updater root privilege
-# Managed by install/mt-billing-grant-updater-root.sh — do not edit by hand
 Defaults:${svc_user} !requiretty
 ${svc_user} ALL=(root) NOPASSWD: /bin/true
 ${svc_user} ALL=(root) NOPASSWD: /usr/bin/true
@@ -105,18 +132,10 @@ ${svc_user} ALL=(root) NOPASSWD: /bin/bash ${UPDATE_SCRIPT}
 ${svc_user} ALL=(root) NOPASSWD: /usr/bin/bash ${UPDATE_SCRIPT}
 ${svc_user} ALL=(root) NOPASSWD: /bin/bash ${SELF_UPDATE_SCRIPT}
 ${svc_user} ALL=(root) NOPASSWD: /usr/bin/bash ${SELF_UPDATE_SCRIPT}
-${svc_user} ALL=(root) NOPASSWD: /bin/bash ${INSTALL_DIR}/install/mt-billing-cloudflare-tunnel.sh
-${svc_user} ALL=(root) NOPASSWD: /usr/bin/bash ${INSTALL_DIR}/install/mt-billing-cloudflare-tunnel.sh
-${svc_user} ALL=(root) NOPASSWD: /bin/systemctl start cloudflared-mt-billing.service
-${svc_user} ALL=(root) NOPASSWD: /bin/systemctl stop cloudflared-mt-billing.service
-${svc_user} ALL=(root) NOPASSWD: /bin/systemctl restart cloudflared-mt-billing.service
-${svc_user} ALL=(root) NOPASSWD: /bin/systemctl is-active cloudflared-mt-billing.service
-${svc_user} ALL=(root) NOPASSWD: /usr/bin/systemctl start cloudflared-mt-billing.service
-${svc_user} ALL=(root) NOPASSWD: /usr/bin/systemctl stop cloudflared-mt-billing.service
-${svc_user} ALL=(root) NOPASSWD: /usr/bin/systemctl restart cloudflared-mt-billing.service
-${svc_user} ALL=(root) NOPASSWD: /usr/bin/systemctl is-active cloudflared-mt-billing.service
 EOF
-chmod 440 "$SUDOERS_FILE"
+fi
+install -m 440 "$TMP_SUDOERS" "$SUDOERS_FILE"
+rm -f "$TMP_SUDOERS"
 
 if command -v visudo >/dev/null 2>&1; then
   if ! visudo -cf "$SUDOERS_FILE" >/dev/null 2>&1; then
@@ -135,7 +154,6 @@ if id "$svc_user" >/dev/null 2>&1; then
   if sudo -u "$svc_user" sudo -n true 2>/dev/null; then
     log_ok "Verified: ${svc_user} can use passwordless sudo"
   else
-    # sudo -n true may fail if no blanket rule — check specific command
     if sudo -u "$svc_user" sudo -n systemctl start --no-block mt-billing-panel-update.service --dry-run 2>/dev/null \
       || sudo -u "$svc_user" sudo -n -l 2>/dev/null | grep -q mt-billing-panel-update; then
       log_ok "Verified: ${svc_user} may start mt-billing-panel-update.service"

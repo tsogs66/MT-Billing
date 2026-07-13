@@ -44,19 +44,24 @@ if [[ -d "${INSTALL_DIR}/.git" ]]; then
   log_info "Refreshing install helpers from origin/${REPO_BRANCH}"
   git -C "$INSTALL_DIR" remote set-url origin "$REPO_URL" 2>/dev/null || true
   git -C "$INSTALL_DIR" fetch -q origin "$REPO_BRANCH" 2>/dev/null || true
-  for name in mt-billing-grant-updater-root.sh mt-billing-update.sh mt-billing-self-update.sh; do
+  for name in mt-billing-grant-updater-root.sh mt-billing-update.sh mt-billing-self-update.sh mt-billing-sudoers mt-billing-panel-update.service; do
     if git -C "$INSTALL_DIR" show "origin/${REPO_BRANCH}:install/${name}" >/dev/null 2>&1; then
       git -C "$INSTALL_DIR" show "origin/${REPO_BRANCH}:install/${name}" \
         >"${INSTALL_DIR}/install/${name}"
-      chmod 755 "${INSTALL_DIR}/install/${name}"
+      if [[ "$name" == *.sh ]]; then
+        chmod 755 "${INSTALL_DIR}/install/${name}"
+      else
+        chmod 644 "${INSTALL_DIR}/install/${name}"
+      fi
     else
-      fetch "$name"
+      fetch "$name" || true
     fi
   done
 else
   fetch mt-billing-grant-updater-root.sh
   fetch mt-billing-update.sh
   fetch mt-billing-self-update.sh || true
+  fetch mt-billing-sudoers || true
 fi
 
 export var_install_dir="$INSTALL_DIR"
