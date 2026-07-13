@@ -69,6 +69,8 @@ export function buildBrandedEmail(opts: {
   bodyHtml?: string;
   plainText?: string;
   company?: CompanyBrand;
+  /** Show “not an official receipt” footer — only for payment confirmation emails. */
+  isPaymentConfirmation?: boolean;
 }): { html: string; text: string; logoCid: string | null; logo: ReturnType<typeof parseLogoDataUrl> } {
   const company = opts.company || getCompanyBrand();
   const logo = parseLogoDataUrl(company.logo);
@@ -77,6 +79,7 @@ export function buildBrandedEmail(opts: {
   const address = company.address ? escapeHtml(company.address) : '';
   const phone = company.phone ? escapeHtml(company.phone) : '';
   const email = company.email ? escapeHtml(company.email) : '';
+  const showUnofficial = Boolean(opts.isPaymentConfirmation);
 
   const bodyHtml =
     opts.bodyHtml ||
@@ -87,12 +90,16 @@ export function buildBrandedEmail(opts: {
     opts.plainText || stripTags(opts.bodyHtml || ''),
     '',
     [company.address, company.phone ? `Tel: ${company.phone}` : '', company.email].filter(Boolean).join('\n'),
-    '',
-    'This is not an official receipt / formal notice unless stated otherwise.',
+    showUnofficial ? '' : null,
+    showUnofficial ? 'This is not an official receipt / formal notice unless stated otherwise.' : null,
   ].filter((p) => p != null && String(p).length);
 
   const logoBlock = logoCid
     ? `<img src="cid:${logoCid}" alt="${name}" width="72" height="72" style="display:block;margin:0 auto 10px;max-width:72px;height:auto;border:0;border-radius:10px;" />`
+    : '';
+
+  const unofficialFooter = showUnofficial
+    ? `<div style="font-size:11px;font-weight:700;margin-top:12px;text-transform:uppercase;color:#111827;">This is not an official receipt</div>`
     : '';
 
   const html = `<!DOCTYPE html>
@@ -124,7 +131,7 @@ export function buildBrandedEmail(opts: {
               ${address ? `<div style="font-size:12px;line-height:1.4;margin:2px 0;">${address}</div>` : ''}
               ${phone ? `<div style="font-size:12px;margin:2px 0;">Tel: ${phone}</div>` : ''}
               ${email ? `<div style="font-size:12px;margin:2px 0;">${email}</div>` : ''}
-              <div style="font-size:11px;font-weight:700;margin-top:12px;text-transform:uppercase;color:#111827;">This is not an official receipt</div>
+              ${unofficialFooter}
             </td>
           </tr>
         </table>

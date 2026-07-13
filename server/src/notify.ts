@@ -444,7 +444,7 @@ export async function sendPaymentReceiptEmail(opts: {
 }): Promise<{ sent: boolean; detail: string }> {
   const subject = `Payment Receipt — ${opts.receipt?.account || opts.customerName || 'Account'}`;
   const { bodyHtml, plainText } = buildReceiptEmailBody(opts.receipt);
-  const branded = buildBrandedEmail({ subject, bodyHtml, plainText });
+  const branded = buildBrandedEmail({ subject, bodyHtml, plainText, isPaymentConfirmation: true });
   const r = await deliver('email', opts.to, subject, plainText, {
     html: branded.html,
     logo: branded.logo,
