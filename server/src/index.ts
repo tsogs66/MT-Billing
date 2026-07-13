@@ -49,6 +49,19 @@ import {
 import { probeOlt } from './olt.js';
 import { getUptime, getUptimeSummary, runUptimeChecks, startUptime, getUptimeScopes, getActiveScope, setActiveScope, type UptimeScope } from './uptime.js';
 import {
+  startStatusHub,
+  listStatusOverview,
+  listUplinkOverview,
+  runStatusChecks,
+  runUplinkChecks,
+  createMonitor,
+  deleteMonitor,
+  setMonitorEnabled,
+  createUplinkHost,
+  deleteUplinkHost,
+  prometheusMetrics,
+} from './statusHub.js';
+import {
   recordPppoePayment,
   createPaymentLink,
   submitPaymentProof,
@@ -3343,6 +3356,84 @@ app.post('/api/uptime/check', async (req, res) => {
   res.json({ summary: getUptimeSummary(scope), monitors: getUptime(scope), scopes: getUptimeScopes() });
 });
 
+// ---- Status Hub (Uptime-Kuma style + uplink probes) ----
+app.get('/api/status-hub', (_req, res) => {
+  res.json(listStatusOverview());
+});
+
+app.get('/api/status-hub/uplink', (_req, res) => {
+  res.json(listUplinkOverview());
+});
+
+app.get('/api/status-hub/check', async (_req, res) => {
+  try {
+    await runStatusChecks();
+    res.json(listStatusOverview());
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Check failed' });
+  }
+});
+
+app.get('/api/status-hub/uplink/check', async (_req, res) => {
+  try {
+    await runUplinkChecks();
+    res.json(listUplinkOverview());
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Uplink check failed' });
+  }
+});
+
+app.post('/api/status-hub/monitors', (req, res) => {
+  try {
+    const row = createMonitor(req.body || {});
+    res.status(201).json(row);
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message || 'Could not create monitor' });
+  }
+});
+
+app.patch('/api/status-hub/monitors/:id', (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (typeof req.body?.enabled === 'boolean') setMonitorEnabled(id, req.body.enabled);
+    else return res.status(400).json({ error: 'Nothing to update' });
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message || 'Update failed' });
+  }
+});
+
+app.delete('/api/status-hub/monitors/:id', (req, res) => {
+  try {
+    deleteMonitor(Number(req.params.id));
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message || 'Delete failed' });
+  }
+});
+
+app.post('/api/status-hub/uplink/hosts', (req, res) => {
+  try {
+    const row = createUplinkHost(req.body || {});
+    res.status(201).json(row);
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message || 'Could not add host' });
+  }
+});
+
+app.delete('/api/status-hub/uplink/hosts/:id', (req, res) => {
+  try {
+    deleteUplinkHost(Number(req.params.id));
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message || 'Delete failed' });
+  }
+});
+
+app.get('/api/status-hub/metrics', (_req, res) => {
+  res.type('text/plain; version=0.0.4; charset=utf-8').send(prometheusMetrics());
+});
+
 // ---- Live interface traffic (dashboard graphs) ----
 app.get('/api/interfaces', async (req, res) => {
   const routerId = req.query.routerId ? Number(req.query.routerId) : null;
@@ -3502,6 +3593,7 @@ process.on('mt-billing-restart' as any, () => {
 server.listen(PORT, () => {
   console.log(`MT-Billing API listening on http://localhost:${PORT}`);
   startUptime(90000);
+  startStatusHub(60_000);
   startNotifyScheduler(5 * 60 * 1000);
   startUsageScheduler(60_000);
 });

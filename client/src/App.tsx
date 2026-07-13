@@ -14,6 +14,7 @@ import Hotspot from './pages/Hotspot';
 import Logs from './pages/Logs';
 import Company from './pages/Company';
 import Uptime from './pages/Uptime';
+import StatusHub from './pages/StatusHub';
 import Notifications from './pages/Notifications';
 import SystemSettings from './pages/SystemSettings';
 import CloudflareAccess from './pages/CloudflareAccess';
@@ -102,6 +103,7 @@ export default function App() {
                 <Route path="/inventory" element={<Inventory />} />
                 <Route path="/hotspot" element={<Hotspot />} />
                 <Route path="/uptime" element={<Uptime />} />
+                <Route path="/status-hub" element={<StatusHub />} />
                 <Route path="/notifications" element={<Notifications />} />
                 <Route path="/logs" element={<Logs />} />
                 <Route path="/company" element={<Company />} />
