@@ -35,6 +35,7 @@ export default function Layout({
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const { canWrite, user } = useAuth();
   const readOnly = !!user && !canWrite && !allowWrite;
+  const roleViewer = !!user?.readOnly && !!user?.licenseActivated;
 
   return (
     <LayoutContext.Provider
@@ -60,12 +61,20 @@ export default function Layout({
           <Topbar title={title} />
           {readOnly && (
             <div className="shrink-0 border-b border-amber-200 bg-amber-50 px-4 sm:px-6 lg:px-8 py-2.5 flex flex-wrap items-center justify-between gap-2">
-              <p className="text-sm text-amber-900">
-                <b>Read-only mode</b> — license not activated. You can browse every menu, but saving and edits are disabled.
-              </p>
-              <Link to="/license" className="inline-flex items-center gap-1.5 text-sm font-medium text-amber-800 hover:text-amber-950 underline underline-offset-2">
-                <KeyRound size={14} /> Activate license
-              </Link>
+              {roleViewer ? (
+                <p className="text-sm text-amber-900">
+                  <b>Viewer mode</b> — you can browse the entire system, but saving and edits are disabled.
+                </p>
+              ) : (
+                <>
+                  <p className="text-sm text-amber-900">
+                    <b>Read-only mode</b> — license not activated. You can browse every menu, but saving and edits are disabled.
+                  </p>
+                  <Link to="/license" className="inline-flex items-center gap-1.5 text-sm font-medium text-amber-800 hover:text-amber-950 underline underline-offset-2">
+                    <KeyRound size={14} /> Activate license
+                  </Link>
+                </>
+              )}
             </div>
           )}
           <main

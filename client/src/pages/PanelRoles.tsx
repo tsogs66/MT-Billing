@@ -17,6 +17,10 @@ const DEFAULT_LOGINS = [
   { role: 'Read-only', username: 'viewer', password: 'view123' },
 ];
 
+const ROLE_HINTS: Record<string, string> = {
+  'Read-only': 'Sees every menu; cannot save or change anything.',
+};
+
 export default function PanelRoles() {
   const [roles, setRoles] = useState<any[]>([]);
   const [users, setUsers] = useState<any[]>([]);
@@ -51,13 +55,13 @@ export default function PanelRoles() {
     <Layout title="Panel Roles">
       <PageHeader
         title="Roles & Users"
-        description="Assign menu access by role. Create panel logins and pick a role for each user."
+        description="Assign menu access by role. The Read-only role can view the entire system but cannot make changes."
         icon={ShieldCheck}
       />
 
       <Card className="mb-5" title="Default logins" icon={Users}>
         <p className="text-sm text-slate-500 mb-3">
-          Seeded accounts (change passwords after first login). Until the license is activated, every user only sees Dashboard and License.
+          Seeded accounts (change passwords after first login). <b>viewer</b> uses the Read-only role: full browse access, no edits.
         </p>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -71,7 +75,12 @@ export default function PanelRoles() {
             <tbody>
               {DEFAULT_LOGINS.map((d) => (
                 <tr key={d.role} className="border-b border-slate-50">
-                  <td className="py-2 pr-3 font-medium text-slate-700">{d.role}</td>
+                  <td className="py-2 pr-3 font-medium text-slate-700">
+                    {d.role}
+                    {ROLE_HINTS[d.role] ? (
+                      <div className="text-[11px] font-normal text-slate-400 mt-0.5">{ROLE_HINTS[d.role]}</div>
+                    ) : null}
+                  </td>
                   <td className="py-2 pr-3 font-mono text-slate-600">{d.username}</td>
                   <td className="py-2 font-mono text-slate-600">{d.password}</td>
                 </tr>

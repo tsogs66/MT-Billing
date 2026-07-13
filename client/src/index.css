@@ -561,7 +561,7 @@ body {
   overflow-anchor: none;
 }
 
-/* Unlicensed / read-only panel — browse OK, mutations blocked (API + primary actions) */
+/* Unlicensed / viewer read-only panel — browse OK, mutations blocked (API + primary actions) */
 .panel-readonly button.btn-primary:not([data-allow-write]),
 .panel-readonly .btn-primary:not([data-allow-write]),
 .panel-readonly button.btn-secondary:not([data-allow-write]),
@@ -571,6 +571,13 @@ body {
   opacity: 0.45;
   cursor: not-allowed;
   filter: grayscale(0.35);
+}
+.panel-readonly input[type='checkbox']:not([data-allow-write]),
+.panel-readonly input[type='file']:not([data-allow-write]),
+.panel-readonly textarea:not([data-allow-write]) {
+  pointer-events: none;
+  opacity: 0.7;
+  cursor: not-allowed;
 }
 
 /* Thin scrollbars */

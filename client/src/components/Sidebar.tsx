@@ -70,13 +70,14 @@ const NAV_SECTIONS: NavSection[] = [
 
 export default function Sidebar() {
   const { sidebarOpen, setSidebarOpen } = useLayout();
-  const { canAccess, user } = useAuth();
+  const { canAccess, canWrite, user } = useAuth();
   const { theme } = useTheme();
   const location = useLocation();
   const navRef = useRef<HTMLElement>(null);
   const scrollPos = useRef(0);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const logoVariant = theme === 'light' ? 'light' : 'dark';
+  const viewerMode = !!user && !canWrite && !!user.licenseActivated;
 
   // Preserve sidebar scroll — do not jump when a menu is selected
   useEffect(() => {
@@ -133,6 +134,11 @@ export default function Sidebar() {
         {!user?.licenseActivated && (
           <div className="theme-sidebar-banner mx-2 mb-3 rounded-lg px-3 py-2 text-[11px] leading-snug">
             License inactive — all menus are visible in <b>read-only</b> mode. Activate to enable edits.
+          </div>
+        )}
+        {viewerMode && (
+          <div className="theme-sidebar-banner mx-2 mb-3 rounded-lg px-3 py-2 text-[11px] leading-snug">
+            Viewer account — full system access in <b>read-only</b> mode. Changes are disabled.
           </div>
         )}
         {sections.map((section) => {

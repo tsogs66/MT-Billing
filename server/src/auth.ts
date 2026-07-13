@@ -1,7 +1,7 @@
 import jwt from 'jsonwebtoken';
 import type { Request, Response, NextFunction } from 'express';
 import { db } from './db.js';
-import { getLicenseStatus } from './extra.js';
+import { ALL_PERMISSIONS, getLicenseStatus } from './extra.js';
 
 const SECRET = process.env.JWT_SECRET || 'change-me-in-production';
 
@@ -29,6 +29,11 @@ export function requireAuth(req: AuthedRequest, res: Response, next: NextFunctio
   }
 }
 
+/** Built-in viewer role — browse everything, never mutate. */
+export function roleIsReadOnlyByName(roleName: string): boolean {
+  return /^read[\s_-]?only$/i.test(String(roleName || '').trim());
+}
+
 /** Resolve permission list for a panel role name. */
 export function permissionsForRole(roleName: string): string[] {
   if (!roleName) return ['dashboard', 'license'];
@@ -39,14 +44,27 @@ export function permissionsForRole(roleName: string): string[] {
   if (!row) {
     // Unknown role string — treat Administrator-like names as full access
     if (/admin/i.test(roleName)) return ['*'];
+    if (roleIsReadOnlyByName(roleName)) return [...ALL_PERMISSIONS, 'readonly'];
     return ['dashboard', 'license'];
   }
+  let perms: string[] = [];
   try {
-    const perms = JSON.parse(row.permissions || '[]');
-    return Array.isArray(perms) ? perms : ['dashboard', 'license'];
+    const parsed = JSON.parse(row.permissions || '[]');
+    perms = Array.isArray(parsed) ? parsed.map(String) : ['dashboard', 'license'];
   } catch {
-    return ['dashboard', 'license'];
+    perms = ['dashboard', 'license'];
   }
+  // Viewer / Read-only: always grant every menu for browsing (writes blocked separately).
+  if (roleIsReadOnlyByName(roleName) || perms.includes('readonly')) {
+    return [...new Set([...ALL_PERMISSIONS, 'readonly', ...perms.filter((p) => p !== '*')])];
+  }
+  return perms;
+}
+
+export function roleIsReadOnly(roleName: string): boolean {
+  if (roleIsReadOnlyByName(roleName)) return true;
+  const perms = permissionsForRole(roleName);
+  return perms.includes('readonly');
 }
 
 export function userHasPermission(roleName: string, permission: string): boolean {
@@ -59,6 +77,8 @@ export function userHasPermission(roleName: string, permission: string): boolean
 export function sessionPayload(user: { id: number; username: string; role: string }) {
   const license = getLicenseStatus();
   const permissions = permissionsForRole(user.role);
+  const roleReadOnly = roleIsReadOnly(user.role);
+  const canWrite = !!license.activated && !roleReadOnly;
   return {
     user: {
       id: user.id,
@@ -66,6 +86,8 @@ export function sessionPayload(user: { id: number; username: string; role: strin
       role: user.role,
       permissions,
       licenseActivated: license.activated,
+      readOnly: !canWrite,
+      canWrite,
     },
     license: {
       activated: license.activated,
@@ -97,5 +119,21 @@ export function requireLicenseOrAllowlist(req: AuthedRequest, res: Response, nex
     error: 'License required',
     code: 'LICENSE_READONLY',
     message: 'Panel is read-only until a license is activated. You can view data but cannot make changes.',
+  });
+}
+
+/**
+ * Viewer / Read-only role: allow GET everywhere, block all mutations.
+ */
+export function requireRoleWritable(req: AuthedRequest, res: Response, next: NextFunction) {
+  if (!req.user || !roleIsReadOnly(req.user.role)) return next();
+
+  const method = (req.method || 'GET').toUpperCase();
+  if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return next();
+
+  return res.status(403).json({
+    error: 'Read-only account',
+    code: 'ROLE_READONLY',
+    message: 'Viewer accounts can browse the system but cannot make changes.',
   });
 }

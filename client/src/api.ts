@@ -14,6 +14,12 @@ function isLicenseWriteAllowed(url?: string) {
   );
 }
 
+/** Auth endpoints still allowed for viewer / read-only accounts. */
+function isViewerWriteAllowed(url?: string) {
+  const path = String(url || '');
+  return /(^|\/)login\b/.test(path) || /\/auth\//.test(path);
+}
+
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('mt_token');
   if (token) {
@@ -22,17 +28,25 @@ api.interceptors.request.use((config) => {
   }
 
   const method = String(config.method || 'get').toLowerCase();
-  // Only enforce read-only when a session exists and license is inactive
-  if (token && WRITE_METHODS.has(method) && !isLicenseWriteAllowed(config.url)) {
-    const licensed = localStorage.getItem('mt_licensed') === '1';
-    if (!licensed) {
+  if (token && WRITE_METHODS.has(method)) {
+    const canWrite = localStorage.getItem('mt_can_write') === '1';
+    if (!canWrite) {
+      const licensed = localStorage.getItem('mt_licensed') === '1';
+      // Unlicensed: allow license activation only
+      if (!licensed && isLicenseWriteAllowed(config.url)) return config;
+      // Viewer / any other read-only session: only login/auth
+      if (licensed && isViewerWriteAllowed(config.url)) return config;
+      if (!licensed && isViewerWriteAllowed(config.url)) return config;
+
       return Promise.reject({
         response: {
           status: 403,
           data: {
-            error: 'License required',
-            code: 'LICENSE_READONLY',
-            message: 'Panel is read-only until a license is activated.',
+            error: licensed ? 'Read-only account' : 'License required',
+            code: licensed ? 'ROLE_READONLY' : 'LICENSE_READONLY',
+            message: licensed
+              ? 'Viewer accounts can browse the system but cannot make changes.'
+              : 'Panel is read-only until a license is activated.',
           },
         },
         config,
@@ -51,6 +65,8 @@ api.interceptors.response.use(
     if (err?.response?.status === 401 && localStorage.getItem('mt_token')) {
       localStorage.removeItem('mt_token');
       localStorage.removeItem('mt_licensed');
+      localStorage.removeItem('mt_can_write');
+      localStorage.removeItem('mt_readonly');
       if (!location.pathname.startsWith('/login')) location.href = '/login';
     }
     return Promise.reject(err);

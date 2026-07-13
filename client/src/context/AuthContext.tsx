@@ -7,6 +7,9 @@ export interface User {
   role: string;
   permissions: string[];
   licenseActivated: boolean;
+  /** True when UI/API must not mutate (unlicensed or viewer role). */
+  readOnly: boolean;
+  canWrite: boolean;
 }
 
 interface AuthCtx {
@@ -17,20 +20,42 @@ interface AuthCtx {
   refresh: () => Promise<void>;
   /** Menu/route visibility (role-based when licensed; all menus when unlicensed). */
   canAccess: (permission: string) => boolean;
-  /** False until license is activated — panel is view-only. */
+  /** False for unlicensed panels and Read-only / viewer accounts. */
   canWrite: boolean;
 }
 
 const Ctx = createContext<AuthCtx>(null as unknown as AuthCtx);
 
 function normalizeUser(raw: any): User {
+  const licenseActivated = !!raw.licenseActivated;
+  const role = String(raw.role || '');
+  const permissions = Array.isArray(raw.permissions) ? raw.permissions.map(String) : ['dashboard', 'license'];
+  const roleReadOnly = /^read[\s_-]?only$/i.test(role.trim()) || permissions.includes('readonly');
+  const canWrite =
+    typeof raw.canWrite === 'boolean' ? !!raw.canWrite : licenseActivated && !roleReadOnly;
+  const readOnly = typeof raw.readOnly === 'boolean' ? !!raw.readOnly : !canWrite;
   return {
     id: raw.id,
     username: raw.username,
-    role: raw.role,
-    permissions: Array.isArray(raw.permissions) ? raw.permissions : ['dashboard', 'license'],
-    licenseActivated: !!raw.licenseActivated,
+    role,
+    permissions,
+    licenseActivated,
+    readOnly,
+    canWrite,
   };
+}
+
+function persistSessionFlags(u: User) {
+  localStorage.setItem('mt_licensed', u.licenseActivated ? '1' : '0');
+  localStorage.setItem('mt_can_write', u.canWrite ? '1' : '0');
+  localStorage.setItem('mt_readonly', u.readOnly ? '1' : '0');
+}
+
+function clearSessionFlags() {
+  localStorage.removeItem('mt_token');
+  localStorage.removeItem('mt_licensed');
+  localStorage.removeItem('mt_can_write');
+  localStorage.removeItem('mt_readonly');
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -40,7 +65,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const token = localStorage.getItem('mt_token');
     if (!token) {
-      localStorage.removeItem('mt_licensed');
+      clearSessionFlags();
       setLoading(false);
       return;
     }
@@ -48,12 +73,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .get('/me')
       .then((r) => {
         const u = normalizeUser(r.data.user);
-        localStorage.setItem('mt_licensed', u.licenseActivated ? '1' : '0');
+        persistSessionFlags(u);
         setUser(u);
       })
       .catch(() => {
-        localStorage.removeItem('mt_token');
-        localStorage.removeItem('mt_licensed');
+        clearSessionFlags();
       })
       .finally(() => setLoading(false));
   }, []);
@@ -62,20 +86,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const r = await api.post('/login', { username, password });
     localStorage.setItem('mt_token', r.data.token);
     const u = normalizeUser(r.data.user);
-    localStorage.setItem('mt_licensed', u.licenseActivated ? '1' : '0');
+    persistSessionFlags(u);
     setUser(u);
   };
 
   const logout = () => {
-    localStorage.removeItem('mt_token');
-    localStorage.removeItem('mt_licensed');
+    clearSessionFlags();
     setUser(null);
   };
 
   const refresh = async () => {
     const r = await api.get('/me');
     const u = normalizeUser(r.data.user);
-    localStorage.setItem('mt_licensed', u.licenseActivated ? '1' : '0');
+    persistSessionFlags(u);
     setUser(u);
   };
 
@@ -83,6 +106,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!user) return false;
     // Unlicensed: show every menu (read-only browsing)
     if (!user.licenseActivated) return true;
+    // Viewer / Read-only: full menu visibility
+    if (user.readOnly || user.permissions.includes('readonly') || /^read[\s_-]?only$/i.test(user.role)) {
+      return true;
+    }
     if (user.permissions.includes('*')) return true;
     if (user.permissions.includes(permission)) return true;
     // Routers merged into Network — either permission grants access
@@ -90,7 +117,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return false;
   };
 
-  const canWrite = !!user?.licenseActivated;
+  const canWrite = !!user?.canWrite;
 
   return (
     <Ctx.Provider value={{ user, loading, login, logout, refresh, canAccess, canWrite }}>

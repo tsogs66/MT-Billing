@@ -8,7 +8,7 @@ import cors from 'cors';
 import bcrypt from 'bcryptjs';
 import si from 'systeminformation';
 import { db, initSchema, seed, migrate } from './db.js';
-import { signToken, requireAuth, sessionPayload, requireLicenseOrAllowlist, type AuthedRequest } from './auth.js';
+import { signToken, requireAuth, sessionPayload, requireLicenseOrAllowlist, requireRoleWritable, type AuthedRequest } from './auth.js';
 import { panelHardwareId, expectedPasswordResetCode, normalizeCode } from './panelId.js';
 import {
   tryLiveResource,
@@ -279,6 +279,7 @@ app.get('/api/health', (_req, res) => res.json({ ok: true, ts: Date.now() }));
 
 app.use('/api', requireAuth);
 app.use('/api', requireLicenseOrAllowlist);
+app.use('/api', requireRoleWritable);
 
 // ---- Routers ----
 app.get('/api/routers', async (_req, res) => {

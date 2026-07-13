@@ -128,12 +128,34 @@ export function initExtra() {
     );
     ins.run(
       'Read-only',
-      'View dashboards and reports',
-      JSON.stringify(['dashboard', 'sales', 'map', 'uptime', 'license'])
+      'View the entire system without making changes',
+      JSON.stringify([...ALL_PERMISSIONS, 'readonly'])
     );
   }
 
+  ensureReadOnlyRoleViewsAll();
   seedDefaultPanelUsers();
+}
+
+/** Keep the built-in Read-only role able to open every menu (writes blocked separately). */
+function ensureReadOnlyRoleViewsAll() {
+  const row = db.prepare("SELECT id, permissions FROM roles WHERE name = 'Read-only'").get() as
+    | { id: number; permissions: string }
+    | undefined;
+  const desired = JSON.stringify([...ALL_PERMISSIONS, 'readonly']);
+  if (!row) {
+    db.prepare('INSERT INTO roles (name, description, permissions) VALUES (?, ?, ?)').run(
+      'Read-only',
+      'View the entire system without making changes',
+      desired
+    );
+    return;
+  }
+  db.prepare('UPDATE roles SET description = ?, permissions = ? WHERE id = ?').run(
+    'View the entire system without making changes',
+    desired,
+    row.id
+  );
 }
 
 /** Default logins for each role (documented in Panel Roles). */
