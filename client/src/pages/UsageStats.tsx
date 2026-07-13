@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Activity, Globe2, RefreshCw, Users, X } from 'lucide-react';
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import Layout from '../components/Layout';
@@ -59,6 +60,55 @@ export default function UsageStats() {
   const [servicesNote, setServicesNote] = useState('');
   const [detailBusy, setDetailBusy] = useState(false);
   const [toast, setToast] = useState('');
+  const panelSlotRef = useRef<HTMLDivElement>(null);
+  /** Horizontal box for the floating panel — vertical stays viewport-centered so it remains visible while scrolling. */
+  const [panelBox, setPanelBox] = useState<{ left: number; width: number; anchored: boolean } | null>(null);
+
+  const closeDetail = () => {
+    setSelected(null);
+    setHistory([]);
+    setTrafficSeries([]);
+    setLiveServices([]);
+    setLive(null);
+  };
+
+  // Keep the floating panel aligned to the table’s right slot (inside the card), while staying
+  // vertically centered in the viewport so it remains visible as the page scrolls.
+  useEffect(() => {
+    if (!selected || tab !== 'users') {
+      setPanelBox(null);
+      return;
+    }
+
+    const sync = () => {
+      const slot = panelSlotRef.current;
+      const wide = window.matchMedia('(min-width: 1024px)').matches;
+      if (wide && slot) {
+        const r = slot.getBoundingClientRect();
+        if (r.width > 40) {
+          setPanelBox({ left: r.left, width: r.width, anchored: true });
+          return;
+        }
+      }
+      setPanelBox({ left: 0, width: 0, anchored: false });
+    };
+
+    sync();
+    const t1 = window.setTimeout(sync, 50);
+    const t2 = window.setTimeout(sync, 350); // after table shrink transition
+    window.addEventListener('resize', sync);
+    const ro = new ResizeObserver(sync);
+    if (panelSlotRef.current) ro.observe(panelSlotRef.current);
+    const split = panelSlotRef.current?.parentElement;
+    if (split) ro.observe(split);
+
+    return () => {
+      window.clearTimeout(t1);
+      window.clearTimeout(t2);
+      window.removeEventListener('resize', sync);
+      ro.disconnect();
+    };
+  }, [selected, tab, users.length]);
 
   const load = () => {
     setBusy(true);
@@ -400,9 +450,30 @@ export default function UsageStats() {
                 />
               </div>
 
+              {/* Invisible slot reserves the card’s right column so the floating panel looks inside the container. */}
               {selected && (
+                <div
+                  ref={panelSlotRef}
+                  className="hidden lg:block w-[26rem] max-w-[42%] shrink-0 pointer-events-none"
+                  aria-hidden
+                  style={{ minHeight: 1 }}
+                />
+              )}
+            </div>
+
+            {selected &&
+              createPortal(
                 <aside
-                  className="usage-detail-panel w-full lg:w-[26rem] lg:max-w-[42%] shrink-0 self-stretch lg:self-start lg:sticky lg:top-4 max-h-[min(88vh,calc(100vh-6rem))] overflow-y-auto rounded-2xl border border-slate-200 bg-white/95 backdrop-blur-sm shadow-lg p-5"
+                  className={
+                    panelBox?.anchored
+                      ? 'usage-detail-panel fixed z-[80] top-1/2 -translate-y-1/2 max-h-[88vh] overflow-y-auto rounded-2xl border border-slate-200 bg-white/95 backdrop-blur-sm shadow-2xl p-5'
+                      : 'usage-detail-panel fixed z-[80] right-3 sm:right-5 left-3 sm:left-auto top-1/2 -translate-y-1/2 w-auto sm:w-[min(460px,calc(100vw-1.25rem))] max-h-[88vh] overflow-y-auto rounded-2xl border border-slate-200 bg-white/95 backdrop-blur-sm shadow-2xl p-5'
+                  }
+                  style={
+                    panelBox?.anchored
+                      ? { left: panelBox.left, width: panelBox.width, right: 'auto' }
+                      : undefined
+                  }
                   role="dialog"
                   aria-label={`Usage for ${selected.username}`}
                 >
@@ -413,13 +484,7 @@ export default function UsageStats() {
                       type="button"
                       className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100"
                       title="Close"
-                      onClick={() => {
-                        setSelected(null);
-                        setHistory([]);
-                        setTrafficSeries([]);
-                        setLiveServices([]);
-                        setLive(null);
-                      }}
+                      onClick={closeDetail}
                     >
                       <X size={14} />
                     </button>
@@ -599,9 +664,9 @@ export default function UsageStats() {
                       </div>
                     </div>
                   </div>
-                </aside>
+                </aside>,
+                document.body
               )}
-            </div>
           </div>
         )}
 
