@@ -58,6 +58,14 @@ VITE_API_BASE=https://billing.yourdomain.com npm run cap:sync
 
 Then the connect screen is skipped.
 
+## Alternative: install as a PWA (no APK)
+
+The web build is a Progressive Web App: on Android Chrome, open your panel URL
+and choose **⋮ → Add to Home screen / Install app**. You get a home-screen icon,
+standalone (no browser chrome) window, and app-shell caching via
+`public/sw.js`. Live `/api` data is never cached. Use the Capacitor APK when you
+need a Play-Store-distributable build or native plugins (status bar, splash).
+
 ## Notes
 
 - The app does **not** run the Node API on the phone — it is a remote client.

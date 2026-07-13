@@ -80,6 +80,15 @@ npm run android:open   # open Android Studio → Build APK
 
 On first launch, enter your public panel URL (e.g. `https://billing.example.com`), then sign in as usual.
 
+### Progressive Web App (Android browser install)
+
+The panel is also installable straight from Chrome on Android — no APK needed.
+Open the panel URL, then **⋮ → Add to Home screen / Install app**. The web build
+ships a manifest (`client/public/manifest.webmanifest`) and a service worker
+(`client/public/sw.js`) that caches the app shell and static assets for fast
+loads; live `/api` data is never cached. Pages are code-split so heavy screens
+(maps, charts, terminal) only download when opened.
+
 ### Configuration
 
 Server settings are read from `server/.env` (see `server/.env.example`):
