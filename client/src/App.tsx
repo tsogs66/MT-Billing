@@ -1,39 +1,42 @@
+import { lazy, Suspense, useEffect } from 'react';
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { useAuth } from './context/AuthContext';
 import Layout from './components/Layout';
-import { PageStub } from './components/ui';
+import { LoadingPage, PageStub } from './components/ui';
 import { permissionForPath } from './components/Sidebar';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
-import PPPoE from './pages/PPPoE';
-import IPoE from './pages/IPoE';
-import ClientsMap from './pages/ClientsMap';
-import SalesReport from './pages/SalesReport';
-import Inventory from './pages/Inventory';
-import Hotspot from './pages/Hotspot';
-import Logs from './pages/Logs';
-import Company from './pages/Company';
-import Uptime from './pages/Uptime';
-import StatusHub from './pages/StatusHub';
-import Notifications from './pages/Notifications';
-import SystemSettings from './pages/SystemSettings';
-import CloudflareAccess from './pages/CloudflareAccess';
-import Network from './pages/Network';
-import ZeroTier from './pages/ZeroTier';
-import MikrotikFiles from './pages/MikrotikFiles';
-import Updater from './pages/Updater';
-import PanelRoles from './pages/PanelRoles';
-import License from './pages/License';
-import AiScripting from './pages/AiScripting';
-import TerminalPage from './pages/Terminal';
-import SubscriberPay from './pages/SubscriberPay';
-import PayPortal from './pages/PayPortal';
-import UsageStats from './pages/UsageStats';
-import FairUseAlerts from './pages/FairUseAlerts';
 import { Loader2 } from 'lucide-react';
 import Logo from './components/Logo';
-import { useEffect } from 'react';
 import { PRODUCT_TITLE } from './branding';
+
+// Route-level code splitting: heavy pages (maps, charts, terminal, OCR) load
+// on demand — critical for Android/mobile startup time and data usage.
+const PPPoE = lazy(() => import('./pages/PPPoE'));
+const IPoE = lazy(() => import('./pages/IPoE'));
+const ClientsMap = lazy(() => import('./pages/ClientsMap'));
+const SalesReport = lazy(() => import('./pages/SalesReport'));
+const Inventory = lazy(() => import('./pages/Inventory'));
+const Hotspot = lazy(() => import('./pages/Hotspot'));
+const Logs = lazy(() => import('./pages/Logs'));
+const Company = lazy(() => import('./pages/Company'));
+const Uptime = lazy(() => import('./pages/Uptime'));
+const StatusHub = lazy(() => import('./pages/StatusHub'));
+const Notifications = lazy(() => import('./pages/Notifications'));
+const SystemSettings = lazy(() => import('./pages/SystemSettings'));
+const CloudflareAccess = lazy(() => import('./pages/CloudflareAccess'));
+const Network = lazy(() => import('./pages/Network'));
+const ZeroTier = lazy(() => import('./pages/ZeroTier'));
+const MikrotikFiles = lazy(() => import('./pages/MikrotikFiles'));
+const Updater = lazy(() => import('./pages/Updater'));
+const PanelRoles = lazy(() => import('./pages/PanelRoles'));
+const License = lazy(() => import('./pages/License'));
+const AiScripting = lazy(() => import('./pages/AiScripting'));
+const TerminalPage = lazy(() => import('./pages/Terminal'));
+const SubscriberPay = lazy(() => import('./pages/SubscriberPay'));
+const PayPortal = lazy(() => import('./pages/PayPortal'));
+const UsageStats = lazy(() => import('./pages/UsageStats'));
+const FairUseAlerts = lazy(() => import('./pages/FairUseAlerts'));
 
 function DocumentTitle() {
   useEffect(() => {
@@ -82,6 +85,7 @@ export default function App() {
   return (
     <>
       <DocumentTitle />
+      <Suspense fallback={<LoadingPage label="Loading page…" />}>
       <Routes>
       <Route path="/login" element={user ? <Navigate to="/" replace /> : <Login />} />
       <Route path="/pay/:token" element={<SubscriberPay />} />
@@ -125,6 +129,7 @@ export default function App() {
         }
       />
     </Routes>
+    </Suspense>
     </>
   );
 }
