@@ -343,18 +343,20 @@ export function Modal({
     <div
       className="theme-modal-backdrop fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-[2000] p-4 animate-fade-in"
       style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0 }}
-      onClick={onClose}
+      role="presentation"
     >
       <div
         className={`theme-modal bg-white rounded-2xl shadow-2xl w-full ${wide ? 'max-w-2xl' : widths[maxWidth]} max-h-[90vh] flex flex-col animate-scale-in border border-slate-200/80`}
-        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="modal-title"
       >
         <div className="theme-modal-header flex items-start justify-between px-5 py-4 border-b border-slate-100 shrink-0">
           <div>
-            <h3 className="font-bold text-slate-900 text-lg tracking-tight">{title}</h3>
+            <h3 id="modal-title" className="font-bold text-slate-900 text-lg tracking-tight">{title}</h3>
             {subtitle && <p className="text-sm text-slate-400 mt-0.5">{subtitle}</p>}
           </div>
-          <button type="button" onClick={onClose} className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors">
+          <button type="button" onClick={onClose} className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors" aria-label="Close">
             <X size={18} />
           </button>
         </div>

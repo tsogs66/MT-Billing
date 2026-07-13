@@ -110,11 +110,11 @@ export default function LocationEditor({
   };
 
   return createPortal(
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[2100] p-4" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0 }} onClick={onCancel}>
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[2100] p-4" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0 }} role="presentation">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto" role="dialog" aria-modal="true" aria-label="Set Map Location">
         <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100">
           <h3 className="font-semibold text-slate-700 flex items-center gap-2"><MapPin size={18} className="text-brand-600" /> Set Map Location</h3>
-          <button onClick={onCancel} className="text-slate-400 hover:text-slate-600"><X size={18} /></button>
+          <button type="button" onClick={onCancel} className="text-slate-400 hover:text-slate-600" aria-label="Close"><X size={18} /></button>
         </div>
 
         <div className="p-5 space-y-3">
