@@ -72,5 +72,6 @@ Then the connect screen is skipped.
 |------|------|
 | `client/capacitor.config.ts` | Capacitor app id / plugins |
 | `client/android/` | Native Android Studio project |
+| `client/android/README_ANDROID_STUDIO.md` | Quick Android Studio build steps |
 | `client/src/config.ts` | API base URL (web vs native) |
 | `client/src/pages/ServerSetup.tsx` | First-run panel URL screen |

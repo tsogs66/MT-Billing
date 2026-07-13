@@ -45,7 +45,7 @@ export default function Layout({
         toggleSidebar: () => setSidebarOpen((v) => !v),
       }}
     >
-      <div className="flex h-[100dvh] max-h-[100dvh] bg-slate-100 bg-mesh-light theme-main overflow-hidden">
+      <div className="flex h-[var(--app-vh)] max-h-[var(--app-vh)] bg-slate-100 bg-mesh-light theme-main overflow-hidden">
         {sidebarOpen && (
           <button
             type="button"

@@ -65,7 +65,7 @@ export default function Topbar({ title }: { title: string }) {
           <Menu size={20} />
         </button>
         <div className="min-w-0">
-          <h1 className="theme-topbar-title text-lg sm:text-xl font-bold tracking-tight truncate">{title}</h1>
+          <h1 className="theme-topbar-title text-base sm:text-xl font-bold tracking-tight truncate">{title}</h1>
           <p className="theme-topbar-subtitle text-[11px] hidden lg:block truncate max-w-[420px]" title={PRODUCT_TITLE}>
             {PRODUCT_TITLE}
           </p>
@@ -78,16 +78,16 @@ export default function Topbar({ title }: { title: string }) {
             type="button"
             onClick={() => routers.length > 0 && setRouterOpen((v) => !v)}
             disabled={routers.length === 0}
-            className="theme-topbar-pill text-sm"
+            className="theme-topbar-pill text-sm max-[420px]:px-2"
           >
-            <span className="theme-topbar-pill-icon hidden sm:flex">
+            <span className="theme-topbar-pill-icon flex">
               <RouterIcon size={15} />
             </span>
             <div className="text-left hidden sm:block">
               <div className="theme-topbar-pill-label">Active router</div>
               <div className="theme-topbar-pill-name">{current?.name ?? 'None'}</div>
             </div>
-            <span className="theme-topbar-pill-name sm:hidden max-w-[80px] truncate">{current?.name ?? 'None'}</span>
+            <span className="theme-topbar-pill-name sm:hidden max-[420px]:hidden max-w-[80px] truncate">{current?.name ?? 'None'}</span>
             <ChevronDown
               size={14}
               className={`theme-topbar-subtitle transition-transform ${routerOpen ? 'rotate-180' : ''}`}

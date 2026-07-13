@@ -4,6 +4,7 @@
 
 :root {
   color-scheme: light;
+  --app-vh: 100dvh;
   --brand: #f97316;
   --brand-glow: rgba(249, 115, 22, 0.35);
   --sidebar-width: 260px;
@@ -44,7 +45,7 @@ body,
 #root {
   height: 100%;
   min-height: 100%;
-  min-height: 100dvh;
+  min-height: var(--app-vh);
 }
 
 body {
@@ -63,7 +64,21 @@ body {
 }
 
 #root {
+  min-height: var(--app-vh);
   overflow: hidden;
+}
+
+@media (max-width: 420px) {
+  .theme-topbar {
+    padding-left: max(0.5rem, env(safe-area-inset-left));
+    padding-right: max(0.5rem, env(safe-area-inset-right));
+  }
+  .theme-topbar-pill {
+    padding: 0.35rem 0.5rem;
+  }
+  .theme-topbar-user-btn {
+    padding-right: 0.2rem;
+  }
 }
 
 /* ── Sidebar (theme-aware base = light) ── */
