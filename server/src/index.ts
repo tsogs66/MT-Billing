@@ -1350,6 +1350,7 @@ app.get('/api/payment-links/config', (_req, res) => {
       app?.cf_tunnel_status === 'running'
         ? app?.cf_tunnel_url || (app?.cf_tunnel_hostname ? `https://${app.cf_tunnel_hostname}` : null)
         : null,
+    websiteUrl: resolved.baseUrl ? `${String(resolved.baseUrl).replace(/\/$/, '')}/login` : null,
     lanIp: detectLanIpv4(),
     lanBaseUrl,
     effective: resolved.baseUrl || null,

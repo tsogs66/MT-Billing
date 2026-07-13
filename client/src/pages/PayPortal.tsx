@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Copy, Link2, Plus, Trash2, RefreshCw, Globe2, Save, Network, Check, X, ImageIcon } from 'lucide-react';
 import Layout from '../components/Layout';
 import { Card, Toolbar, StatusBadge, IconAction } from '../components/ui';
@@ -226,6 +227,41 @@ export default function PayPortal() {
       {toast && (
         <div className="mb-4 text-sm text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2">{toast}</div>
       )}
+
+      <Card className="mb-5">
+        <div className="flex items-start gap-3 mb-3">
+          <div className="w-10 h-10 rounded-xl bg-violet-50 text-violet-600 flex items-center justify-center shrink-0">
+            <Link2 size={20} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="font-semibold text-slate-800">Website access link</div>
+            <p className="text-sm text-slate-500 mt-0.5">
+              Public panel login URL (same Cloudflare / public base as pay links). Configure the tunnel under{' '}
+              <Link to="/cloudflare" className="text-brand-600 hover:underline font-medium">
+                Cloudflare Access
+              </Link>
+              .
+            </p>
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2 items-center">
+          <div className="flex-1 min-w-[240px] input font-mono text-sm bg-slate-50 truncate">
+            {effective ? `${String(effective).replace(/\/$/, '')}/login` : '(No public URL yet)'}
+          </div>
+          <button
+            type="button"
+            className="btn-primary"
+            disabled={!effective}
+            onClick={async () => {
+              const url = `${String(effective).replace(/\/$/, '')}/login`;
+              const ok = await copyTextOrPrompt(url, 'Website access link — copy:');
+              show(ok ? 'Website link copied' : 'Copy from the dialog');
+            }}
+          >
+            <Copy size={16} /> Copy website link
+          </button>
+        </div>
+      </Card>
 
       <Card className="mb-5">
         <div className="flex items-start gap-3 mb-3">

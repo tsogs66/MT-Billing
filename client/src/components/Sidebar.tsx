@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Bot, TerminalSquare, Network, Users, Share2, Map,
   BarChart3, Boxes, Wifi, FileCode2, Globe, Building2, Settings, ShieldCheck,
   DownloadCloud, ServerCog, ScrollText, KeyRound, Activity, Bell, ChevronDown,
-  X, Link2, PieChart, ShieldAlert,
+  X, Link2, PieChart, ShieldAlert, Cloud,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import Logo from './Logo';
@@ -57,6 +57,7 @@ const NAV_SECTIONS: NavSection[] = [
     title: 'System',
     items: [
       { to: '/company', label: 'Company', icon: Building2, permission: 'company' },
+      { to: '/cloudflare', label: 'Cloudflare Access', icon: Cloud, permission: 'settings' },
       { to: '/settings', label: 'System Settings', icon: Settings, permission: 'settings' },
       { to: '/roles', label: 'Panel Roles', icon: ShieldCheck, permission: 'roles' },
       { to: '/uptime', label: 'Uptime Monitor', icon: Activity, permission: 'uptime' },
@@ -234,6 +235,7 @@ export function permissionForPath(pathname: string): string {
     '/uptime': 'uptime',
     '/logs': 'logs',
     '/company': 'company',
+    '/cloudflare': 'settings',
     '/settings': 'settings',
     '/roles': 'roles',
     '/updater': 'updater',

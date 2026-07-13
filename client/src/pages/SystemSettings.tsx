@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   Settings as SettingsIcon, Sun, Moon, Anchor, Database as DbIcon, Bot, Clock, KeyRound,
   Router as RouterIcon, Globe2, Download, Trash2, RefreshCw, Plus, Pencil, Power, Cloud,
@@ -259,7 +260,12 @@ function CloudflareTunnelSettings({ app, setA, save, flash, reload }: any) {
     <SettingsSection icon={Cloud} title="Cloudflare Tunnel">
       <div className="space-y-4 max-w-2xl">
         <p className="text-sm text-slate-500">
-          Expose subscriber payment links with Cloudflare Tunnel — no port-forwarding or DynDNS required.
+          Expose the panel website and subscriber payment links with Cloudflare Tunnel — no port-forwarding or DynDNS required.
+          Prefer the dedicated{' '}
+          <Link to="/cloudflare" className="text-brand-600 hover:underline font-medium">
+            Cloudflare Access
+          </Link>{' '}
+          page to paste your connector token and copy the website login link.
           Create a tunnel in{' '}
           <a
             href="https://one.dash.cloudflare.com/"

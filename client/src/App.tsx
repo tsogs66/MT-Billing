@@ -16,6 +16,7 @@ import Company from './pages/Company';
 import Uptime from './pages/Uptime';
 import Notifications from './pages/Notifications';
 import SystemSettings from './pages/SystemSettings';
+import CloudflareAccess from './pages/CloudflareAccess';
 import Network from './pages/Network';
 import ZeroTier from './pages/ZeroTier';
 import MikrotikFiles from './pages/MikrotikFiles';
@@ -110,6 +111,7 @@ export default function App() {
                 <Route path="/files" element={<MikrotikFiles />} />
                 <Route path="/zerotier" element={<ZeroTier />} />
                 <Route path="/settings" element={<SystemSettings />} />
+                <Route path="/cloudflare" element={<CloudflareAccess />} />
                 <Route path="/roles" element={<PanelRoles />} />
                 <Route path="/updater" element={<Updater />} />
                 <Route path="/super-router" element={stub('Super Router', 'Central controller for managing multiple MikroTik routers.')} />
