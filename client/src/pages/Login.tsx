@@ -165,11 +165,6 @@ export default function Login() {
                       )}
                     </button>
                   </form>
-
-                  <p className="text-xs text-slate-400 mt-6 sm:mt-8 text-center leading-relaxed">
-                    First install default: <span className="font-medium text-slate-500">admin</span> / <span className="font-medium text-slate-500">admin123</span>
-                    <span className="block mt-1 text-slate-400">Change the password after your first sign-in.</span>
-                  </p>
                 </>
               ) : (
                 <ForgotPasswordForm
@@ -288,7 +283,7 @@ function ForgotPasswordForm({ onBack, onSuccess }: { onBack: () => void; onSucce
       </form>
 
       <p className="text-xs text-slate-400 mt-6 text-center">
-        After reset, sign in with <span className="font-medium text-slate-500">{defaultUser}</span> and your default password (typically <span className="font-medium text-slate-500">admin123</span>).
+        After reset, sign in with username <span className="font-medium text-slate-500">{defaultUser}</span> and the restored password from your vendor.
       </p>
     </div>
   );
