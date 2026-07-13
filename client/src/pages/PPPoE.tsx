@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { startTransition, useEffect, useRef, useState } from 'react';
 import { Users, WifiOff, Activity, Layers, Server, ReceiptText, Plus, Pencil, Trash2, KeyRound, Eye, EyeOff, MapPin, DownloadCloud, RefreshCw, Link2, ShieldOff, ShieldCheck, Loader2, ClipboardCheck } from 'lucide-react';
 import Layout from '../components/Layout';
 import {
@@ -152,20 +152,34 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
       .get(q)
       .then((r) => {
         const next = Array.isArray(r.data) ? r.data : [];
-        if (opts?.silent && !includeTraffic) {
+        const apply = () => {
+          if (!opts?.silent) {
+            setUsers(next);
+            return;
+          }
+          // Silent polls: merge into existing rows so the table doesn't remount/freeze.
           setUsers((prev) => {
-            const prevById = new Map(prev.map((u) => [u.id, u]));
-            return next.map((u: PUser) => {
-              const old = prevById.get(u.id);
-              if (old && (old.downloadBps || old.uploadBps)) {
-                return { ...u, downloadBps: old.downloadBps, uploadBps: old.uploadBps };
+            if (!prev.length) return next;
+            const nextById = new Map(next.map((u: PUser) => [u.id, u]));
+            const merged = prev.map((old) => {
+              const u = nextById.get(old.id);
+              if (!u) return old;
+              nextById.delete(old.id);
+              if (!includeTraffic) {
+                return {
+                  ...u,
+                  downloadBps: old.downloadBps,
+                  uploadBps: old.uploadBps,
+                };
               }
               return u;
             });
+            for (const u of nextById.values()) merged.push(u);
+            return merged;
           });
-        } else {
-          setUsers(next);
-        }
+        };
+        if (opts?.silent) startTransition(apply);
+        else apply();
       })
       .catch(() => {
         if (!opts?.silent) setUsers([]);
@@ -194,20 +208,29 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
       .get('/pppoe/active', { params: { service, ...routerParams, traffic: includeTraffic ? 1 : 0 } })
       .then((r) => {
         const next = r.data.sessions || (Array.isArray(r.data) ? r.data : []);
-        if (opts?.silent && !includeTraffic) {
+        const apply = () => {
+          if (!opts?.silent) {
+            setActive(next);
+            return;
+          }
           setActive((prev) => {
-            const prevByName = new Map(prev.map((s: any) => [String(s.username), s]));
-            return next.map((s: any) => {
-              const old = prevByName.get(String(s.username));
-              if (old && (old.downloadBps || old.uploadBps)) {
+            if (!prev.length) return next;
+            const nextByName = new Map(next.map((s: any) => [String(s.username), s]));
+            const merged = prev.map((old: any) => {
+              const s = nextByName.get(String(old.username));
+              if (!s) return old;
+              nextByName.delete(String(old.username));
+              if (!includeTraffic) {
                 return { ...s, downloadBps: old.downloadBps, uploadBps: old.uploadBps };
               }
               return s;
             });
+            for (const s of nextByName.values()) merged.push(s);
+            return merged;
           });
-        } else {
-          setActive(next);
-        }
+        };
+        if (opts?.silent) startTransition(apply);
+        else apply();
         if (r.data.error) setTabError(r.data.error);
       })
       .catch((e) => {
@@ -357,6 +380,11 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
   };
 
   useEffect(() => {
+    // Drop previous router’s rows immediately so the UI never mixes devices.
+    setUsers([]);
+    setActive([]);
+    setServers([]);
+    setProfiles([]);
     setTab('users');
     setSearch('');
     setSelected(new Set());
@@ -378,41 +406,68 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, current?.id]);
 
-  // Live status polling on Users / Offline / Active tabs.
-  // Avoid hammering MikroTik: longer interval, no overlapping requests, pause during mutations,
-  // and skip expensive per-user monitor-traffic on silent polls.
+  // Live status + traffic polling on Users / Offline / Active tabs.
+  // 2s refresh while the browser tab is visible; stop completely when hidden / in background.
   const usersPollInFlight = useRef(false);
-  const usersPollTick = useRef(0);
   useEffect(() => {
     if (!current?.id) return;
     if (tab !== 'users' && tab !== 'offline' && tab !== 'active') return;
+
+    let cancelled = false;
+    let timer: number | null = null;
+
+    const clearTimer = () => {
+      if (timer != null) {
+        window.clearTimeout(timer);
+        timer = null;
+      }
+    };
+
+    const schedule = (ms: number) => {
+      clearTimer();
+      if (cancelled || document.visibilityState !== 'visible') return;
+      timer = window.setTimeout(() => {
+        void tick();
+      }, ms);
+    };
+
     const tick = async () => {
-      if (toggleBusy || bulkBusy || fetching || toggleFor) return;
-      if (tab === 'active') {
-        if (usersPollInFlight.current) return;
-        usersPollInFlight.current = true;
-        usersPollTick.current += 1;
-        const withTraffic = usersPollTick.current % 4 === 0;
-        try {
-          await loadActive({ silent: true, traffic: withTraffic });
-        } finally {
-          usersPollInFlight.current = false;
-        }
+      if (cancelled) return;
+      if (document.visibilityState !== 'visible') return;
+      if (toggleBusy || bulkBusy || fetching || toggleFor) {
+        schedule(2000);
         return;
       }
       if (usersPollInFlight.current) return;
       usersPollInFlight.current = true;
-      usersPollTick.current += 1;
-      // Every 4th poll (~12s) also refreshes live traffic rates.
-      const withTraffic = usersPollTick.current % 4 === 0;
       try {
-        await loadUsers({ silent: true, traffic: withTraffic });
+        if (tab === 'active') {
+          await loadActive({ silent: true, traffic: true });
+        } else {
+          await loadUsers({ silent: true, traffic: true });
+        }
       } finally {
         usersPollInFlight.current = false;
+        if (!cancelled && document.visibilityState === 'visible') schedule(2000);
       }
     };
-    const id = setInterval(tick, 3000);
-    return () => clearInterval(id);
+
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        void tick();
+      } else {
+        clearTimer();
+      }
+    };
+
+    document.addEventListener('visibilitychange', onVisibility);
+    void tick();
+
+    return () => {
+      cancelled = true;
+      clearTimer();
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, current?.id, service, toggleBusy, bulkBusy, fetching, toggleFor]);
 

@@ -103,10 +103,17 @@ const overCapSince = new Map<string, number>();
  * Absolute interface counters are snapshotted; only the increase since the last
  * sample is added to today's usage (handles router reboot / counter reset).
  */
-export async function pollUsageAndFairUse() {
+export async function pollUsageAndFairUse(opts?: { routerId?: number | null }) {
   ensureUsageTables();
   const settings = getFairUseSettings();
-  const routers = db.prepare('SELECT * FROM routers WHERE host IS NOT NULL AND api_user IS NOT NULL').all() as any[];
+  const onlyId = opts?.routerId != null && Number(opts.routerId) > 0 ? Number(opts.routerId) : null;
+  const routers = (
+    onlyId
+      ? db
+          .prepare('SELECT * FROM routers WHERE id = ? AND host IS NOT NULL AND api_user IS NOT NULL')
+          .all(onlyId)
+      : db.prepare('SELECT * FROM routers WHERE host IS NOT NULL AND api_user IS NOT NULL').all()
+  ) as any[];
   let samples = 0;
   let alerts = 0;
   let services = 0;
@@ -607,38 +614,75 @@ export async function getSubscriberUsageDetail(
   };
 }
 
-export function getUsageSummary(days = 7) {
-  const users = db
-    .prepare(
-      `SELECT subject_key AS username,
-              SUM(rx_bytes) AS rxBytes, SUM(tx_bytes) AS txBytes,
-              MAX(peak_rx_bps) AS peakRxBps, MAX(peak_tx_bps) AS peakTxBps
-       FROM usage_daily
-       WHERE subject_type = 'pppoe' AND day >= date('now', ?)
-       GROUP BY subject_key
-       ORDER BY (SUM(rx_bytes)+SUM(tx_bytes)) DESC
-       LIMIT 100`
-    )
-    .all(`-${Math.max(1, days)} days`) as any[];
+export function getUsageSummary(days = 7, routerId?: number | null) {
+  const dayArg = `-${Math.max(1, days)} days`;
+  const rid = routerId != null && Number(routerId) > 0 ? Number(routerId) : null;
+
+  const users = (
+    rid
+      ? db.prepare(
+          `SELECT d.subject_key AS username,
+                  SUM(d.rx_bytes) AS rxBytes, SUM(d.tx_bytes) AS txBytes,
+                  MAX(d.peak_rx_bps) AS peakRxBps, MAX(d.peak_tx_bps) AS peakTxBps
+           FROM usage_daily d
+           INNER JOIN pppoe_users u ON u.username = d.subject_key COLLATE NOCASE AND u.router_id = ?
+           WHERE d.subject_type = 'pppoe' AND d.day >= date('now', ?)
+           GROUP BY d.subject_key
+           ORDER BY (SUM(d.rx_bytes)+SUM(d.tx_bytes)) DESC
+           LIMIT 100`
+        ).all(rid, dayArg)
+      : db.prepare(
+          `SELECT subject_key AS username,
+                  SUM(rx_bytes) AS rxBytes, SUM(tx_bytes) AS txBytes,
+                  MAX(peak_rx_bps) AS peakRxBps, MAX(peak_tx_bps) AS peakTxBps
+           FROM usage_daily
+           WHERE subject_type = 'pppoe' AND day >= date('now', ?)
+           GROUP BY subject_key
+           ORDER BY (SUM(rx_bytes)+SUM(tx_bytes)) DESC
+           LIMIT 100`
+        ).all(dayArg)
+  ) as any[];
 
   const enriched = users.map((u) => {
-    const client = db
-      .prepare('SELECT id, customer_name, profile, account_number FROM pppoe_users WHERE username = ? COLLATE NOCASE')
-      .get(u.username) as any;
-    const live = db
-      .prepare(
-        `SELECT rx_bps AS downloadBps, tx_bps AS uploadBps, sampled_at AS sampledAt
-         FROM usage_samples
-         WHERE subject_type = 'pppoe' AND subject_key = ? COLLATE NOCASE
-         ORDER BY id DESC LIMIT 1`
-      )
-      .get(u.username) as any;
+    const client = (
+      rid
+        ? db
+            .prepare(
+              'SELECT id, customer_name, profile, account_number, router_id FROM pppoe_users WHERE username = ? COLLATE NOCASE AND router_id = ?'
+            )
+            .get(u.username, rid)
+        : db
+            .prepare(
+              'SELECT id, customer_name, profile, account_number, router_id FROM pppoe_users WHERE username = ? COLLATE NOCASE'
+            )
+            .get(u.username)
+    ) as any;
+    const live = (
+      rid
+        ? db
+            .prepare(
+              `SELECT rx_bps AS downloadBps, tx_bps AS uploadBps, sampled_at AS sampledAt
+               FROM usage_samples
+               WHERE subject_type = 'pppoe' AND subject_key = ? COLLATE NOCASE AND router_id = ?
+               ORDER BY id DESC LIMIT 1`
+            )
+            .get(u.username, rid)
+        : db
+            .prepare(
+              `SELECT rx_bps AS downloadBps, tx_bps AS uploadBps, sampled_at AS sampledAt
+               FROM usage_samples
+               WHERE subject_type = 'pppoe' AND subject_key = ? COLLATE NOCASE
+               ORDER BY id DESC LIMIT 1`
+            )
+            .get(u.username)
+    ) as any;
     return {
       ...u,
       customer: client?.customer_name || u.username,
       profile: client?.profile || null,
       account: client?.account_number || null,
       userId: client?.id || null,
+      routerId: client?.router_id ?? rid ?? null,
       downloadBps: live?.downloadBps ?? 0,
       uploadBps: live?.uploadBps ?? 0,
       sampledAt: live?.sampledAt || null,
@@ -646,28 +690,48 @@ export function getUsageSummary(days = 7) {
   });
 
   // Also include currently-online users with 0 accumulated bytes so the list isn't empty
-  const online = db
-    .prepare(
-      `SELECT username, customer_name AS customer, profile, account_number AS account, id AS userId
-       FROM pppoe_users WHERE online = 1`
-    )
-    .all() as any[];
+  const online = (
+    rid
+      ? db
+          .prepare(
+            `SELECT username, customer_name AS customer, profile, account_number AS account, id AS userId, router_id AS routerId
+             FROM pppoe_users WHERE online = 1 AND router_id = ?`
+          )
+          .all(rid)
+      : db
+          .prepare(
+            `SELECT username, customer_name AS customer, profile, account_number AS account, id AS userId, router_id AS routerId
+             FROM pppoe_users WHERE online = 1`
+          )
+          .all()
+  ) as any[];
   const seen = new Set(enriched.map((u) => String(u.username).toLowerCase()));
   for (const o of online) {
     if (seen.has(String(o.username).toLowerCase())) continue;
-    const live = db
-      .prepare(
-        `SELECT rx_bps AS downloadBps, tx_bps AS uploadBps, sampled_at AS sampledAt
-         FROM usage_samples WHERE subject_type = 'pppoe' AND subject_key = ? COLLATE NOCASE
-         ORDER BY id DESC LIMIT 1`
-      )
-      .get(o.username) as any;
+    const live = (
+      rid
+        ? db
+            .prepare(
+              `SELECT rx_bps AS downloadBps, tx_bps AS uploadBps, sampled_at AS sampledAt
+               FROM usage_samples WHERE subject_type = 'pppoe' AND subject_key = ? COLLATE NOCASE AND router_id = ?
+               ORDER BY id DESC LIMIT 1`
+            )
+            .get(o.username, rid)
+        : db
+            .prepare(
+              `SELECT rx_bps AS downloadBps, tx_bps AS uploadBps, sampled_at AS sampledAt
+               FROM usage_samples WHERE subject_type = 'pppoe' AND subject_key = ? COLLATE NOCASE
+               ORDER BY id DESC LIMIT 1`
+            )
+            .get(o.username)
+    ) as any;
     enriched.push({
       username: o.username,
       customer: o.customer || o.username,
       profile: o.profile,
       account: o.account,
       userId: o.userId,
+      routerId: o.routerId ?? rid ?? null,
       rxBytes: 0,
       txBytes: 0,
       peakRxBps: live?.downloadBps || 0,
@@ -678,28 +742,51 @@ export function getUsageSummary(days = 7) {
     });
   }
 
-  const services = db
-    .prepare(
-      `SELECT service_id AS id, service_name AS name, category,
-              SUM(hits) AS hits
-       FROM usage_services
-       WHERE day >= date('now', ?)
-       GROUP BY service_id
-       ORDER BY SUM(hits) DESC
-       LIMIT 40`
-    )
-    .all(`-${Math.max(1, days)} days`);
+  const services = (
+    rid
+      ? db
+          .prepare(
+            `SELECT service_id AS id, service_name AS name, category,
+                    SUM(hits) AS hits
+             FROM usage_services
+             WHERE day >= date('now', ?) AND router_id = ?
+             GROUP BY service_id
+             ORDER BY SUM(hits) DESC
+             LIMIT 40`
+          )
+          .all(dayArg, rid)
+      : db
+          .prepare(
+            `SELECT service_id AS id, service_name AS name, category,
+                    SUM(hits) AS hits
+             FROM usage_services
+             WHERE day >= date('now', ?)
+             GROUP BY service_id
+             ORDER BY SUM(hits) DESC
+             LIMIT 40`
+          )
+          .all(dayArg)
+  );
 
   const sampleCount = (
-    db.prepare(`SELECT COUNT(*) AS c FROM usage_samples WHERE datetime(sampled_at) >= datetime('now', '-1 day')`).get() as {
-      c: number;
-    }
-  ).c;
+    rid
+      ? (db
+          .prepare(
+            `SELECT COUNT(*) AS c FROM usage_samples
+             WHERE datetime(sampled_at) >= datetime('now', '-1 day') AND router_id = ?`
+          )
+          .get(rid) as { c: number }).c
+      : (db
+          .prepare(`SELECT COUNT(*) AS c FROM usage_samples WHERE datetime(sampled_at) >= datetime('now', '-1 day')`).get() as {
+          c: number;
+        }).c
+  );
 
   return {
     users: enriched,
     services,
     days,
+    routerId: rid,
     accounting: 'delta',
     sampleCount,
     note: 'Per-user download/upload are real byte deltas from MikroTik <pppoe-*> interfaces. Platforms tab uses DNS-cache popularity (falls back to connection destinations when the cache is empty).',

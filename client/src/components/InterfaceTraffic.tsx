@@ -61,7 +61,10 @@ export default function InterfaceTraffic({ routerId, routerName }: { routerId?: 
 
   useEffect(() => {
     let alive = true;
+    let id: number | null = null;
+
     const poll = async () => {
+      if (document.visibilityState !== 'visible') return;
       try {
         const ifaces = graphs.filter((g) => g.enabled).map((g) => g.iface).join(',');
         const q = new URLSearchParams();
@@ -83,11 +86,31 @@ export default function InterfaceTraffic({ routerId, routerName }: { routerId?: 
         /* ignore transient errors */
       }
     };
-    poll();
-    const id = setInterval(poll, POLL_MS);
+
+    const start = () => {
+      if (id != null) return;
+      void poll();
+      id = window.setInterval(() => {
+        void poll();
+      }, POLL_MS);
+    };
+    const stop = () => {
+      if (id != null) {
+        window.clearInterval(id);
+        id = null;
+      }
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') start();
+      else stop();
+    };
+
+    if (document.visibilityState === 'visible') start();
+    document.addEventListener('visibilitychange', onVisibility);
     return () => {
       alive = false;
-      clearInterval(id);
+      stop();
+      document.removeEventListener('visibilitychange', onVisibility);
     };
   }, [routerId, graphs]);
 

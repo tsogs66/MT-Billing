@@ -148,10 +148,6 @@ function SystemOverviewUnlicensed() {
       </div>
 
       <SectionTitle icon={Server}>System Overview</SectionTitle>
-      <p className="text-sm text-slate-500 mb-4">
-        Live status of this billing host
-        {current ? ` and selected router (${current.name})` : ''}. Full subscriber and sales dashboards unlock after activation.
-      </p>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <StatTile
@@ -282,6 +278,11 @@ function DashboardLicensed() {
   }, []);
 
   useEffect(() => {
+    // Clear router-bound panels immediately so UI never shows the previous router’s data.
+    setRouter(null);
+    setQueues([]);
+    setStatusCounts(null);
+
     const loadStatus = () => {
       const q = current?.id ? `?routerId=${current.id}` : '';
       api.get(`/dashboard/status${q}`).then((r) => setStatusCounts(r.data));
@@ -317,9 +318,6 @@ function DashboardLicensed() {
   return (
     <Layout title="Dashboard">
       <SectionTitle icon={Activity}>Account Status{current ? ` — ${current.name}` : ''}</SectionTitle>
-      <p className="text-xs text-slate-500 -mt-2 mb-3">
-        Expired = past due date. Non-payment = limited profile / unpaid hold (including disabled after grace).
-      </p>
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4 mb-8">
         <StatTile label="Online" value={statusCounts?.online ?? '—'} dot="bg-emerald-500" tone="text-emerald-600" icon={CircleDot} accent="from-emerald-500/15 to-transparent" delay={0} />
         <StatTile label="Offline" value={statusCounts?.offline ?? '—'} dot="bg-amber-500" tone="text-amber-600" icon={WifiOff} accent="from-amber-500/15 to-transparent" delay={50} />
@@ -330,10 +328,6 @@ function DashboardLicensed() {
       </div>
 
       <SectionTitle icon={Server}>System Overview</SectionTitle>
-      <p className="text-sm text-slate-500 mb-4">
-        <b>Host Panel</b> shows this billing server. <b>Router</b> shows the MikroTik selected in the top-right dropdown
-        {current ? ` (${current.name})` : ''}.
-      </p>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-5 mb-8">
         <Card title="Host Panel Status" icon={Cpu} interactive right={<span className="text-xs text-slate-400">This server</span>}>
@@ -402,14 +396,12 @@ function DashboardLicensed() {
               <MiniStat icon={<WifiOff size={16} />} label="Offline" value={router?.offline ?? 0} tone="text-amber-600" bg="bg-amber-50 border-amber-100" />
               <MiniStat icon={<AlertTriangle size={16} />} label="Expired" value={router?.expired ?? 0} tone="text-rose-600" bg="bg-rose-50 border-rose-100" />
             </div>
-            <p className="text-[11px] text-slate-400 pt-1">
-              Active / Offline / Expired use the same rules as Account Status above
-              {router?.online != null ? ` (Online sessions: ${router.online})` : ''}.
-            </p>
           </div>
           )}
         </Card>
       </div>
+
+      <InterfaceTraffic routerId={current?.id} routerName={current?.name} />
 
       <SectionTitle icon={TrendingUp}>Sales Overview</SectionTitle>
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
@@ -489,8 +481,6 @@ function DashboardLicensed() {
           </div>
         </Card>
       </div>
-
-      <InterfaceTraffic routerId={current?.id} routerName={current?.name} />
     </Layout>
   );
 }

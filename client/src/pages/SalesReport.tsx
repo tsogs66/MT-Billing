@@ -1,12 +1,11 @@
 import { useEffect, useState } from 'react';
-import { BarChart, Bar, ResponsiveContainer, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
+import { BarChart, Bar, ResponsiveContainer, XAxis, YAxis, Tooltip, CartesianGrid, LabelList } from 'recharts';
 import { Wallet, Receipt, TrendingUp, CalendarDays, Trash2 } from 'lucide-react';
 import Layout from '../components/Layout';
 import { Card, StatTile, TabPills, DataTable, Flash } from '../components/ui';
 import { api, peso } from '../api';
 
 const GROUPS = [
-  { key: 'week', label: 'Weekly' },
   { key: 'month', label: 'Monthly' },
   { key: 'year', label: 'Yearly' },
 ];
@@ -66,6 +65,13 @@ export default function SalesReport() {
     }
   };
 
+  const formatBarAmount = (v: number) => {
+    const n = Number(v) || 0;
+    if (n >= 1_000_000) return `₱${(n / 1_000_000).toFixed(1)}M`;
+    if (n >= 1000) return `₱${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k`;
+    return peso(n);
+  };
+
   return (
     <Layout title="Sales Report">
       {flash && <Flash type={flash.type} message={flash.msg} onDismiss={() => setFlash(null)} />}
@@ -78,9 +84,9 @@ export default function SalesReport() {
       </div>
 
       <Card title="Revenue" interactive right={<TabPills tabs={GROUPS} active={range} onChange={setRange} />}>
-        <div className="h-64">
+        <div className="h-72">
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={sales?.series ?? []} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+            <BarChart data={sales?.series ?? []} margin={{ top: 28, right: 12, left: 8, bottom: 4 }}>
               <defs>
                 <linearGradient id="salesBar" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="0%" stopColor="#fb923c" stopOpacity={1} />
@@ -88,10 +94,21 @@ export default function SalesReport() {
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-              <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#94a3b8' }} tickFormatter={(v) => (String(v).includes('-') ? String(v).slice(5) : String(v))} />
-              <YAxis tick={{ fontSize: 11, fill: '#94a3b8' }} tickFormatter={(v) => (v >= 1000 ? `${v / 1000}k` : v)} width={40} />
+              <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#94a3b8' }} tickFormatter={(v) => String(v)} />
+              <YAxis
+                tick={{ fontSize: 11, fill: '#94a3b8' }}
+                tickFormatter={(v) => (v >= 1000 ? `₱${v / 1000}k` : `₱${v}`)}
+                width={56}
+              />
               <Tooltip formatter={(v: number) => peso(v)} labelStyle={{ color: '#334155' }} contentStyle={{ borderRadius: '12px', border: '1px solid #e2e8f0' }} />
-              <Bar dataKey="value" fill="url(#salesBar)" radius={[6, 6, 0, 0]} />
+              <Bar dataKey="value" fill="url(#salesBar)" radius={[6, 6, 0, 0]} name="Amount">
+                <LabelList
+                  dataKey="value"
+                  position="top"
+                  formatter={(v: number) => (Number(v) > 0 ? formatBarAmount(Number(v)) : '')}
+                  style={{ fill: '#475569', fontSize: 11, fontWeight: 600 }}
+                />
+              </Bar>
             </BarChart>
           </ResponsiveContainer>
         </div>

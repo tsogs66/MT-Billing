@@ -579,29 +579,29 @@ body {
   width: 100% !important;
 }
 
-/* Animated fiber connection lines (dashes run along the path toward the child endpoint) */
+/* Animated fiber connection lines — dashes flow toward the parent (upstream) endpoint */
 .flow-line {
   stroke-dasharray: 6 8;
-  animation: flow-dash 0.9s linear infinite;
+  animation: flow-dash-to-parent 0.9s linear infinite;
 }
 .flow-line-slow {
   stroke-dasharray: 4 10;
-  animation: flow-dash 2.4s linear infinite;
+  animation: flow-dash-to-parent 2.4s linear infinite;
 }
 .flow-line-active {
   stroke-dasharray: 8 6;
-  animation: flow-dash 1.1s linear infinite, line-pulse 2s ease-in-out infinite;
+  animation: flow-dash-to-parent 1.1s linear infinite, line-pulse 2s ease-in-out infinite;
 }
 .flow-line-backbone {
   stroke-dasharray: 10 8 !important;
-  animation: flow-dash 1.6s linear infinite, line-pulse 2.5s ease-in-out infinite;
+  animation: flow-dash-to-parent 1.6s linear infinite, line-pulse 2.5s ease-in-out infinite;
 }
 
-/* NAP → client cables: always dashed + animated; color set via Leaflet stroke */
+/* NAP → client cables: always dashed + animated toward parent NAP; color via Leaflet stroke */
 .leaflet-interactive.flow-line-client {
   stroke-dasharray: 10 12 !important;
   stroke-linecap: round;
-  animation: flow-dash 1.15s linear infinite;
+  animation: flow-dash-to-parent 1.15s linear infinite;
 }
 .leaflet-interactive.flow-line-client.is-hot {
   stroke-width: 3.5;
@@ -609,27 +609,27 @@ body {
 }
 .leaflet-interactive.flow-line-client-online {
   stroke-dasharray: 12 10 !important;
-  animation: flow-dash 0.85s linear infinite, line-pulse-green 1.8s ease-in-out infinite;
+  animation: flow-dash-to-parent 0.85s linear infinite, line-pulse-green 1.8s ease-in-out infinite;
   filter: drop-shadow(0 0 2.5px rgba(34, 197, 94, 0.7));
 }
 .leaflet-interactive.flow-line-client-offline {
   stroke-dasharray: 8 10 !important;
-  animation: flow-dash 1.4s linear infinite, line-pulse-red 2s ease-in-out infinite;
+  animation: flow-dash-to-parent 1.4s linear infinite, line-pulse-red 2s ease-in-out infinite;
   filter: drop-shadow(0 0 2px rgba(239, 68, 68, 0.55));
 }
 .leaflet-interactive.flow-line-client-expired {
   stroke-dasharray: 8 10 !important;
-  animation: flow-dash 1.35s linear infinite, line-pulse-rose 2s ease-in-out infinite;
+  animation: flow-dash-to-parent 1.35s linear infinite, line-pulse-rose 2s ease-in-out infinite;
   filter: drop-shadow(0 0 2px rgba(244, 63, 94, 0.55));
 }
 .leaflet-interactive.flow-line-client-non-payment {
   stroke-dasharray: 7 11 !important;
-  animation: flow-dash 1.5s linear infinite, line-pulse-amber 2s ease-in-out infinite;
+  animation: flow-dash-to-parent 1.5s linear infinite, line-pulse-amber 2s ease-in-out infinite;
   filter: drop-shadow(0 0 2px rgba(245, 158, 11, 0.55));
 }
 .leaflet-interactive.flow-line-client-disabled {
   stroke-dasharray: 4 12 !important;
-  animation: flow-dash-slow 2.2s linear infinite;
+  animation: flow-dash-to-parent-slow 2.2s linear infinite;
   filter: drop-shadow(0 0 1px rgba(148, 163, 184, 0.4));
   opacity: 0.7;
 }
@@ -639,14 +639,26 @@ body {
   50% { stroke-opacity: 1; }
 }
 
+/* Positive dashoffset = dashes travel against path direction (parent ← child) */
+@keyframes flow-dash-to-parent {
+  to {
+    stroke-dashoffset: 28;
+  }
+}
+@keyframes flow-dash-to-parent-slow {
+  to {
+    stroke-dashoffset: 32;
+  }
+}
+/* Keep legacy aliases for any leftover class references */
 @keyframes flow-dash {
   to {
-    stroke-dashoffset: -28;
+    stroke-dashoffset: 28;
   }
 }
 @keyframes flow-dash-slow {
   to {
-    stroke-dashoffset: -32;
+    stroke-dashoffset: 32;
   }
 }
 

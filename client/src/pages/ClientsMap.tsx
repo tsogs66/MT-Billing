@@ -533,7 +533,7 @@ export default function ClientsMap() {
               />
             </div>
             <span className="hidden lg:inline text-xs text-slate-400 max-w-md">
-              Cables: Online green · Offline red · Expired rose · Non-payment amber · Disabled gray (animated toward client)
+              Cables: Online green · Offline red · Expired rose · Non-payment amber · Disabled gray (dashes flow toward parent)
             </span>
           </div>
         </div>
@@ -800,7 +800,7 @@ export default function ClientsMap() {
               const state = clientState(c);
               const hi = highlightChain?.clientId === c.id;
               const lineColor = CLIENT_COLORS[state].fill;
-              // Path NAP → client so CSS dash animation flows toward the subscriber connection
+              // Path parent → child; CSS dash animation flows toward the parent connection
               const path = resolvePath(connectors, 'nap-client', nap.id, c.id, defaultPath([nap.lat, nap.lng], [c.lat, c.lng]));
               return (
                 <Polyline

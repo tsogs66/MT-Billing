@@ -1481,7 +1481,8 @@ app.post('/api/payment-links/:id/reject', (req, res) => {
 // ---- Usage stats & fair-use ----
 app.get('/api/usage/summary', (req, res) => {
   const days = Math.max(1, Math.min(90, Number(req.query.days) || 7));
-  res.json(getUsageSummary(days));
+  const routerId = req.query.routerId ? Number(req.query.routerId) : null;
+  res.json(getUsageSummary(days, routerId));
 });
 
 app.get('/api/usage/users/:id/history', (req, res) => {
@@ -1516,8 +1517,9 @@ app.post('/api/usage/alerts/:id/ack', (req, res) => {
 
 app.get('/api/usage/settings', (_req, res) => res.json(getFairUseSettings()));
 app.put('/api/usage/settings', (req, res) => res.json(updateFairUseSettings(req.body || {})));
-app.post('/api/usage/poll', async (_req, res) => {
-  const r = await pollUsageAndFairUse();
+app.post('/api/usage/poll', async (req, res) => {
+  const routerId = req.body?.routerId ? Number(req.body.routerId) : null;
+  const r = await pollUsageAndFairUse({ routerId });
   res.json(r);
 });
 

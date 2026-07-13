@@ -109,6 +109,7 @@ export default function IPoE() {
   };
 
   useEffect(() => {
+    setLeases([]);
     setSearch('');
     setError('');
     if (tab === 'users' || tab === 'offline' || tab === 'active') loadLeases();
@@ -121,12 +122,53 @@ export default function IPoE() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, current?.id]);
 
-  // Live traffic poll on Users / Offline / Active
+  // Live traffic poll on Users / Offline / Active — 2s while visible, stop when tab is hidden.
   useEffect(() => {
     if (!current?.id) return;
     if (tab !== 'users' && tab !== 'offline' && tab !== 'active') return;
-    const id = setInterval(() => loadLeases(undefined, { silent: true }), 1000);
-    return () => clearInterval(id);
+
+    let cancelled = false;
+    let timer: number | null = null;
+    let inFlight = false;
+
+    const clearTimer = () => {
+      if (timer != null) {
+        window.clearTimeout(timer);
+        timer = null;
+      }
+    };
+
+    const schedule = (ms: number) => {
+      clearTimer();
+      if (cancelled || document.visibilityState !== 'visible') return;
+      timer = window.setTimeout(() => {
+        void tick();
+      }, ms);
+    };
+
+    const tick = async () => {
+      if (cancelled || document.visibilityState !== 'visible' || inFlight) return;
+      inFlight = true;
+      try {
+        await loadLeases(undefined, { silent: true });
+      } finally {
+        inFlight = false;
+        if (!cancelled && document.visibilityState === 'visible') schedule(2000);
+      }
+    };
+
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') void tick();
+      else clearTimer();
+    };
+
+    document.addEventListener('visibilitychange', onVisibility);
+    void tick();
+    return () => {
+      cancelled = true;
+      clearTimer();
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, current?.id]);
 
