@@ -66,6 +66,22 @@ Then the connect screen is skipped.
 - `cleartext: true` is enabled for LAN `http://` testing only; prefer HTTPS in production.
 - Play Store release: create a keystore and use a release build variant in Android Studio.
 
+## Mobile optimizations
+
+The React UI is tuned for phone-sized WebViews and mobile browsers:
+
+| Area | Behavior |
+|------|----------|
+| **Layout** | Collapsible sidebar drawer, `100dvh` shell, safe-area insets on topbar/main |
+| **Tables** | Horizontal touch-scroll wrappers on all `DataTable` views |
+| **Modals** | Bottom-sheet style on small screens; full-width action buttons |
+| **Terminal** | Stacked controls + shorter xterm height on narrow viewports |
+| **Topology map** | Full-bleed map stage with mobile panel sizing |
+| **PWA** | `manifest.webmanifest` for “Add to Home screen” in Chrome/Android browser |
+| **Native shell** | Android back closes menu → history back → minimize; keyboard resizes body |
+
+Native behaviors live in `client/src/lib/nativeShell.ts` and load automatically in Capacitor builds.
+
 ## Project layout
 
 | Path | Role |

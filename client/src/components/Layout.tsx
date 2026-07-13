@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { KeyRound } from 'lucide-react';
 import Sidebar from './Sidebar';
 import Topbar from './Topbar';
+import NativeAppBridge from './NativeAppBridge';
 import { useAuth } from '../context/AuthContext';
 
 type LayoutContextValue = {
@@ -46,6 +47,7 @@ export default function Layout({
       }}
     >
       <div className="flex h-[100dvh] max-h-[100dvh] bg-slate-100 bg-mesh-light theme-main overflow-hidden">
+        <NativeAppBridge />
         {sidebarOpen && (
           <button
             type="button"

@@ -248,7 +248,7 @@ export function TabBar({
   className?: string;
 }) {
   return (
-    <div className={`flex items-center gap-1 border-b border-slate-200/80 overflow-x-auto scrollbar-thin ${className}`}>
+    <div className={`flex items-center gap-1 border-b border-slate-200/80 overflow-x-auto table-scroll-touch -mx-1 px-1 ${className}`}>
       {tabs.map((t) => {
         const Icon = t.icon;
         const isActive = active === t.key;
@@ -258,7 +258,7 @@ export function TabBar({
             type="button"
             onClick={() => onChange(t.key)}
             className={[
-              'relative flex items-center gap-2 px-4 py-3 text-sm font-medium whitespace-nowrap transition-colors',
+              'relative flex items-center gap-2 px-4 py-3 min-h-11 text-sm font-medium whitespace-nowrap transition-colors shrink-0',
               isActive ? 'text-brand-600' : 'text-slate-500 hover:text-slate-700',
             ].join(' ')}
           >
@@ -301,7 +301,7 @@ export function Flash({ message, type = 'success', onDismiss }: { message: strin
 export function Toast({ message }: { message: string }) {
   if (!message) return null;
   return (
-    <div className="fixed bottom-6 right-6 z-[2000] max-w-sm animate-fade-in-up">
+    <div className="fixed bottom-[max(1.5rem,env(safe-area-inset-bottom))] right-4 left-4 sm:left-auto z-[2000] sm:max-w-sm animate-fade-in-up">
       <div className="flex items-center gap-2.5 bg-slate-900 text-white text-sm font-medium px-4 py-3 rounded-xl shadow-card-hover border border-slate-700/50">
         <CheckCircle2 size={18} className="text-emerald-400 shrink-0" />
         {message}
@@ -341,12 +341,12 @@ export function Modal({
 
   return createPortal(
     <div
-      className="theme-modal-backdrop fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-[2000] p-4 animate-fade-in"
+      className="theme-modal-backdrop fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-end sm:items-center justify-center z-[2000] p-0 sm:p-4 animate-fade-in"
       style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0 }}
       role="presentation"
     >
       <div
-        className={`theme-modal bg-white rounded-2xl shadow-2xl w-full ${wide ? 'max-w-2xl' : widths[maxWidth]} max-h-[90vh] flex flex-col animate-scale-in border border-slate-200/80`}
+        className={`theme-modal bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl w-full ${wide ? 'max-w-2xl' : widths[maxWidth]} max-h-[min(92dvh,90vh)] flex flex-col animate-scale-in border border-slate-200/80 pb-[env(safe-area-inset-bottom)]`}
         role="dialog"
         aria-modal="true"
         aria-labelledby="modal-title"
@@ -361,7 +361,11 @@ export function Modal({
           </button>
         </div>
         <div className="p-5 overflow-y-auto flex-1 min-h-0">{children}</div>
-        {footer && <div className="theme-modal-footer flex justify-end gap-2 px-5 py-3 border-t border-slate-100 bg-slate-50/80 rounded-b-2xl shrink-0">{footer}</div>}
+        {footer && (
+          <div className="theme-modal-footer flex flex-col-reverse sm:flex-row sm:justify-end gap-2 px-5 py-3 border-t border-slate-100 bg-slate-50/80 rounded-b-2xl shrink-0">
+            {footer}
+          </div>
+        )}
       </div>
     </div>,
     document.body
@@ -377,9 +381,9 @@ export function ModalFooter({ onCancel, onConfirm, confirmLabel = 'Save', busy, 
 }) {
   return (
     <>
-      <button type="button" className="btn-secondary" onClick={onCancel} disabled={busy}>{cancelLabel}</button>
+      <button type="button" className="btn-secondary w-full sm:w-auto" onClick={onCancel} disabled={busy}>{cancelLabel}</button>
       {onConfirm && (
-        <button type="button" className="btn-primary" onClick={onConfirm} disabled={busy}>
+        <button type="button" className="btn-primary w-full sm:w-auto" onClick={onConfirm} disabled={busy}>
           {busy ? <><Loader2 size={16} className="animate-spin" /> Saving…</> : confirmLabel}
         </button>
       )}
@@ -447,7 +451,7 @@ export function DataTable({
   };
 
   return (
-    <div className="overflow-x-auto rounded-xl border border-slate-100/80">
+    <div className="table-scroll-touch overflow-x-auto rounded-xl border border-slate-100/80 -mx-0.5 px-0.5">
       <table className="data-table w-full text-sm">
         <thead className={stickyHeader ? 'sticky top-0 z-10' : ''}>
           <tr>

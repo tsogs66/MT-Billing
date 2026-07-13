@@ -285,7 +285,7 @@ export default function TerminalPage() {
               </span>
               <span className="uppercase tracking-wider font-semibold">{connected ? 'live' : 'idle'}</span>
             </div>
-            <div ref={termRef} className="h-[min(70vh,520px)] p-1 bg-slate-950" />
+            <div ref={termRef} className="h-[min(52dvh,420px)] sm:h-[min(70vh,520px)] p-1 bg-slate-950" />
           </div>
         </div>
       </div>

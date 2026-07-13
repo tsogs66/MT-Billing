@@ -59,11 +59,52 @@ body {
      can clip vertical scroll when height is locked to the viewport. */
   overflow: hidden;
   touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
   transition: background-color 0.25s ease, color 0.25s ease;
 }
 
 #root {
   overflow: hidden;
+}
+
+/* ── Mobile / native WebView (Capacitor Android) ── */
+.table-scroll-touch {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+}
+.native-app .theme-topbar-icon-btn,
+.native-app .theme-sidebar-link,
+.native-app .btn-primary,
+.native-app .btn-secondary {
+  touch-action: manipulation;
+}
+.native-app.keyboard-open .theme-topbar {
+  position: relative;
+}
+@media (max-width: 639px) {
+  .data-table {
+    min-width: 560px;
+  }
+  .data-table th,
+  .data-table td {
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+  }
+  .card-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.75rem;
+  }
+  .map-page-shell {
+    height: calc(100dvh - 3.5rem);
+    min-height: 280px;
+  }
+  .map-client-panel {
+    width: min(300px, calc(100% - 16px));
+    left: 8px;
+    bottom: max(8px, env(safe-area-inset-bottom));
+    max-height: 55%;
+  }
 }
 
 /* ── Sidebar (theme-aware base = light) ── */

@@ -8,17 +8,12 @@ import { CompanyProvider } from './context/CompanyContext';
 import { ThemeProvider } from './context/ThemeContext';
 import ServerSetup from './pages/ServerSetup';
 import { isNativeApp, needsServerSetup } from './config';
+import { initNativeShell } from './lib/nativeShell';
 import 'leaflet/dist/leaflet.css';
 import './index.css';
 
-async function initNativeShell() {
+async function hideNativeSplash() {
   if (!isNativeApp()) return;
-  try {
-    const { StatusBar, Style } = await import('@capacitor/status-bar');
-    await StatusBar.setStyle({ style: Style.Dark });
-  } catch {
-    /* optional plugin */
-  }
   try {
     const { SplashScreen } = await import('@capacitor/splash-screen');
     await SplashScreen.hide();
@@ -31,7 +26,8 @@ function Root() {
   const [ready, setReady] = useState(!needsServerSetup());
 
   useEffect(() => {
-    void initNativeShell();
+    if (isNativeApp()) initNativeShell();
+    void hideNativeSplash();
   }, []);
 
   if (!ready) {
