@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ShieldCheck, Plus, Pencil, Trash2, UserPlus, Users } from 'lucide-react';
+import { ShieldCheck, Plus, Pencil, Trash2, UserPlus } from 'lucide-react';
 import Layout from '../components/Layout';
 import { Card, Modal, ModalFooter, FormField, PageHeader } from '../components/ui';
 import { api } from '../api';
@@ -9,17 +9,6 @@ const PERMISSIONS = [
   'zerotier', 'super-router', 'files', 'sales', 'inventory', 'hotspot',
   'notifications', 'uptime', 'logs', 'company', 'settings', 'roles', 'updater', 'license',
 ];
-
-const DEFAULT_LOGINS = [
-  { role: 'Administrator', username: 'admin', password: 'admin123' },
-  { role: 'Technician', username: 'technician', password: 'tech123' },
-  { role: 'Cashier', username: 'cashier', password: 'cash123' },
-  { role: 'Read-only', username: 'viewer', password: 'view123' },
-];
-
-const ROLE_HINTS: Record<string, string> = {
-  'Read-only': 'Sees every menu; cannot save or change anything.',
-};
 
 export default function PanelRoles() {
   const [roles, setRoles] = useState<any[]>([]);
@@ -58,37 +47,6 @@ export default function PanelRoles() {
         description="Assign menu access by role. The Read-only role can view the entire system but cannot make changes."
         icon={ShieldCheck}
       />
-
-      <Card className="mb-5" title="Default logins" icon={Users}>
-        <p className="text-sm text-slate-500 mb-3">
-          Seeded accounts (change passwords after first login). <b>viewer</b> uses the Read-only role: full browse access, no edits.
-        </p>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-xs text-slate-400 border-b border-slate-100">
-                <th className="py-2 pr-3">Role</th>
-                <th className="py-2 pr-3">Username</th>
-                <th className="py-2">Default password</th>
-              </tr>
-            </thead>
-            <tbody>
-              {DEFAULT_LOGINS.map((d) => (
-                <tr key={d.role} className="border-b border-slate-50">
-                  <td className="py-2 pr-3 font-medium text-slate-700">
-                    {d.role}
-                    {ROLE_HINTS[d.role] ? (
-                      <div className="text-[11px] font-normal text-slate-400 mt-0.5">{ROLE_HINTS[d.role]}</div>
-                    ) : null}
-                  </td>
-                  <td className="py-2 pr-3 font-mono text-slate-600">{d.username}</td>
-                  <td className="py-2 font-mono text-slate-600">{d.password}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </Card>
 
       <div className="flex items-center justify-between mb-3">
         <h2 className="text-sm font-semibold text-slate-700">Panel users</h2>
