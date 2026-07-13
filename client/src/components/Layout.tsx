@@ -45,7 +45,7 @@ export default function Layout({
         toggleSidebar: () => setSidebarOpen((v) => !v),
       }}
     >
-      <div className="flex min-h-[100dvh] min-h-screen bg-slate-100 bg-mesh-light theme-main overflow-x-hidden">
+      <div className="flex h-[100dvh] max-h-[100dvh] bg-slate-100 bg-mesh-light theme-main overflow-hidden">
         {sidebarOpen && (
           <button
             type="button"
@@ -57,10 +57,10 @@ export default function Layout({
 
         <Sidebar />
 
-        <div className="flex-1 flex flex-col min-w-0 w-full lg:pl-0">
+        <div className="flex-1 flex flex-col min-h-0 min-w-0 w-full overflow-hidden lg:pl-0">
           <Topbar title={title} />
           {readOnly && (
-            <div className="shrink-0 border-b border-amber-200 bg-amber-50 px-3 sm:px-6 lg:px-8 py-2.5 flex flex-wrap items-center justify-between gap-2 pt-[max(0.625rem,env(safe-area-inset-top,0px))]">
+            <div className="shrink-0 border-b border-amber-200 bg-amber-50 px-3 sm:px-6 lg:px-8 py-2.5 flex flex-wrap items-center justify-between gap-2">
               {roleViewer ? (
                 <p className="text-sm text-amber-900">
                   <b>Viewer mode</b> — you can browse the entire system, but saving and edits are disabled.
@@ -81,7 +81,7 @@ export default function Layout({
             className={
               fullBleed
                 ? `flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden p-0 page-enter ${readOnly ? 'panel-readonly' : ''}`
-                : `flex-1 min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:p-6 lg:p-8 page-enter ${readOnly ? 'panel-readonly' : ''}`
+                : `flex-1 min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-y-contain p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:p-6 lg:p-8 page-enter ${readOnly ? 'panel-readonly' : ''}`
             }
             aria-readonly={readOnly || undefined}
           >

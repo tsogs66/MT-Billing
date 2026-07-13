@@ -55,9 +55,15 @@ body {
   font-family: 'Inter', system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  overflow-x: hidden;
+  /* Keep overflow on the app shell (#root > layout), not body — overflow-x:hidden here
+     can clip vertical scroll when height is locked to the viewport. */
+  overflow: hidden;
   touch-action: manipulation;
   transition: background-color 0.25s ease, color 0.25s ease;
+}
+
+#root {
+  overflow: hidden;
 }
 
 /* ── Sidebar (theme-aware base = light) ── */

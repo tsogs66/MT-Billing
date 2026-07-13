@@ -44,7 +44,7 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-[100dvh] flex bg-slate-950 relative overflow-x-hidden overflow-y-auto theme-login">
+    <div className="h-full min-h-[100dvh] flex bg-slate-950 relative overflow-x-hidden overflow-y-auto theme-login">
       <div className="absolute inset-0 bg-mesh-dark" />
       <div className="absolute inset-0 bg-login-grid bg-grid opacity-40" />
       <div className="absolute top-1/4 -left-32 w-96 h-96 bg-brand-500/20 rounded-full blur-3xl animate-float pointer-events-none" />
