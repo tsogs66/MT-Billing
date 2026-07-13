@@ -15,8 +15,8 @@ export default function Login() {
   const { login } = useAuth();
   const { company } = useCompany();
   const nav = useNavigate();
-  const [username, setUsername] = useState('admin');
-  const [password, setPassword] = useState('admin123');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [forgotOpen, setForgotOpen] = useState(false);
@@ -44,13 +44,13 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen flex bg-slate-950 relative overflow-hidden theme-login">
+    <div className="min-h-[100dvh] flex bg-slate-950 relative overflow-x-hidden overflow-y-auto theme-login">
       <div className="absolute inset-0 bg-mesh-dark" />
       <div className="absolute inset-0 bg-login-grid bg-grid opacity-40" />
-      <div className="absolute top-1/4 -left-32 w-96 h-96 bg-brand-500/20 rounded-full blur-3xl animate-float" />
-      <div className="absolute bottom-1/4 -right-32 w-96 h-96 bg-sky-500/15 rounded-full blur-3xl animate-float" style={{ animationDelay: '1.5s' }} />
+      <div className="absolute top-1/4 -left-32 w-96 h-96 bg-brand-500/20 rounded-full blur-3xl animate-float pointer-events-none" />
+      <div className="absolute bottom-1/4 -right-32 w-96 h-96 bg-sky-500/15 rounded-full blur-3xl animate-float pointer-events-none" style={{ animationDelay: '1.5s' }} />
 
-      <div className="relative z-10 flex flex-1 flex-col lg:flex-row min-h-screen">
+      <div className="relative z-10 flex flex-1 flex-col lg:flex-row min-h-[100dvh]">
         <div className="hidden lg:flex flex-1 flex-col justify-between p-12 xl:p-16">
           <Logo size="hero" brandMode variant="dark" className="items-center gap-4" />
           <div className="max-w-lg animate-fade-in-up">
@@ -78,16 +78,16 @@ export default function Login() {
           </div>
         </div>
 
-        <div className="flex flex-1 items-center justify-center p-6 sm:p-8">
+        <div className="flex flex-1 items-center justify-center p-4 sm:p-8 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-[max(1.5rem,env(safe-area-inset-top))]">
           <div className="w-full max-w-md animate-scale-in">
-            <div className="lg:hidden mb-8 flex justify-center">
+            <div className="lg:hidden mb-6 sm:mb-8 flex justify-center px-2">
               <Logo size="hero" brandMode variant="dark" className="items-center gap-3 max-w-full" />
             </div>
 
-            <div className="theme-modal bg-white/95 backdrop-blur-xl rounded-3xl shadow-2xl border border-white/20 p-8 sm:p-10">
+            <div className="theme-modal bg-white/95 backdrop-blur-xl rounded-2xl sm:rounded-3xl shadow-2xl border border-white/20 p-5 sm:p-8 md:p-10">
               {!forgotOpen ? (
                 <>
-                  <div className="mb-8 min-w-0">
+                  <div className="mb-6 sm:mb-8 min-w-0">
                     <h2
                       className="font-bold text-slate-900 tracking-tight leading-tight break-words [overflow-wrap:anywhere] text-[clamp(1.15rem,0.85rem+2.2vw,1.75rem)]"
                       title={businessName}
@@ -97,39 +97,53 @@ export default function Login() {
                     <p className="text-slate-500 text-sm mt-1">Sign in to continue</p>
                   </div>
 
-                  <form onSubmit={submit} className="space-y-5">
+                  <form onSubmit={submit} className="space-y-5" autoComplete="on">
                     <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1.5">Username</label>
+                      <label className="block text-sm font-medium text-slate-700 mb-1.5" htmlFor="login-username">
+                        Username
+                      </label>
                       <div className="relative">
-                        <User size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                        <User size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
                         <input
+                          id="login-username"
+                          name="username"
                           value={username}
                           onChange={(e) => setUsername(e.target.value)}
-                          className="input pl-10"
+                          className="input pl-10 text-base sm:text-sm"
                           autoFocus
-                          placeholder="admin"
+                          autoComplete="username"
+                          inputMode="text"
+                          autoCapitalize="none"
+                          autoCorrect="off"
+                          spellCheck={false}
+                          placeholder="Username"
                         />
                       </div>
                     </div>
                     <div>
-                      <div className="flex items-center justify-between mb-1.5">
-                        <label className="text-sm font-medium text-slate-700">Password</label>
+                      <div className="flex items-center justify-between mb-1.5 gap-2">
+                        <label className="text-sm font-medium text-slate-700" htmlFor="login-password">
+                          Password
+                        </label>
                         <button
                           type="button"
                           onClick={() => setForgotOpen(true)}
-                          className="text-xs font-medium text-brand-600 hover:text-brand-700"
+                          className="text-xs font-medium text-brand-600 hover:text-brand-700 shrink-0 py-1"
                         >
                           Forgot password?
                         </button>
                       </div>
                       <div className="relative">
-                        <Lock size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                        <Lock size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
                         <input
+                          id="login-password"
+                          name="password"
                           type="password"
                           value={password}
                           onChange={(e) => setPassword(e.target.value)}
-                          className="input pl-10"
-                          placeholder="••••••••"
+                          className="input pl-10 text-base sm:text-sm"
+                          autoComplete="current-password"
+                          placeholder="Password"
                         />
                       </div>
                     </div>
@@ -140,7 +154,7 @@ export default function Login() {
                       </div>
                     )}
 
-                    <button type="submit" disabled={loading} className="btn-primary w-full py-3 text-base">
+                    <button type="submit" disabled={loading || !username.trim() || !password} className="btn-primary w-full py-3 text-base min-h-12">
                       {loading ? (
                         <Loader2 size={18} className="animate-spin" />
                       ) : (
@@ -152,12 +166,20 @@ export default function Login() {
                     </button>
                   </form>
 
-                  <p className="text-xs text-slate-400 mt-8 text-center">
-                    Default credentials: <span className="font-medium text-slate-500">admin</span> / <span className="font-medium text-slate-500">admin123</span>
+                  <p className="text-xs text-slate-400 mt-6 sm:mt-8 text-center leading-relaxed">
+                    First install default: <span className="font-medium text-slate-500">admin</span> / <span className="font-medium text-slate-500">admin123</span>
+                    <span className="block mt-1 text-slate-400">Change the password after your first sign-in.</span>
                   </p>
                 </>
               ) : (
-                <ForgotPasswordForm onBack={() => setForgotOpen(false)} onSuccess={(u) => { setUsername(u); setPassword('admin123'); setForgotOpen(false); }} />
+                <ForgotPasswordForm
+                  onBack={() => setForgotOpen(false)}
+                  onSuccess={(u) => {
+                    setUsername(u);
+                    setPassword('');
+                    setForgotOpen(false);
+                  }}
+                />
               )}
             </div>
           </div>

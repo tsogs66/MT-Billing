@@ -108,8 +108,9 @@ export default function Sidebar() {
   return (
     <aside
       className={[
-        'theme-sidebar fixed lg:sticky top-0 z-50 h-screen w-[var(--sidebar-width)] shrink-0',
+        'theme-sidebar fixed lg:sticky top-0 z-50 h-[100dvh] h-screen w-[min(var(--sidebar-width),100vw)] max-w-[100vw] shrink-0',
         'flex flex-col shadow-sidebar transition-transform duration-300 ease-out',
+        'pb-[env(safe-area-inset-bottom)]',
         sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0',
       ].join(' ')}
     >

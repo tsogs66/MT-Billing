@@ -45,7 +45,7 @@ export default function Layout({
         toggleSidebar: () => setSidebarOpen((v) => !v),
       }}
     >
-      <div className="flex min-h-screen bg-slate-100 bg-mesh-light theme-main">
+      <div className="flex min-h-[100dvh] min-h-screen bg-slate-100 bg-mesh-light theme-main overflow-x-hidden">
         {sidebarOpen && (
           <button
             type="button"
@@ -57,10 +57,10 @@ export default function Layout({
 
         <Sidebar />
 
-        <div className="flex-1 flex flex-col min-w-0 lg:pl-0">
+        <div className="flex-1 flex flex-col min-w-0 w-full lg:pl-0">
           <Topbar title={title} />
           {readOnly && (
-            <div className="shrink-0 border-b border-amber-200 bg-amber-50 px-4 sm:px-6 lg:px-8 py-2.5 flex flex-wrap items-center justify-between gap-2">
+            <div className="shrink-0 border-b border-amber-200 bg-amber-50 px-3 sm:px-6 lg:px-8 py-2.5 flex flex-wrap items-center justify-between gap-2 pt-[max(0.625rem,env(safe-area-inset-top,0px))]">
               {roleViewer ? (
                 <p className="text-sm text-amber-900">
                   <b>Viewer mode</b> — you can browse the entire system, but saving and edits are disabled.
@@ -70,7 +70,7 @@ export default function Layout({
                   <p className="text-sm text-amber-900">
                     <b>Read-only mode</b> — license not activated. You can browse every menu, but saving and edits are disabled.
                   </p>
-                  <Link to="/license" className="inline-flex items-center gap-1.5 text-sm font-medium text-amber-800 hover:text-amber-950 underline underline-offset-2">
+                  <Link to="/license" className="inline-flex items-center gap-1.5 text-sm font-medium text-amber-800 hover:text-amber-950 underline underline-offset-2 min-h-10">
                     <KeyRound size={14} /> Activate license
                   </Link>
                 </>
@@ -80,15 +80,15 @@ export default function Layout({
           <main
             className={
               fullBleed
-                ? `flex-1 flex flex-col min-h-0 p-0 page-enter ${readOnly ? 'panel-readonly' : ''}`
-                : `flex-1 p-4 sm:p-6 lg:p-8 page-enter ${readOnly ? 'panel-readonly' : ''}`
+                ? `flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden p-0 page-enter ${readOnly ? 'panel-readonly' : ''}`
+                : `flex-1 min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:p-6 lg:p-8 page-enter ${readOnly ? 'panel-readonly' : ''}`
             }
             aria-readonly={readOnly || undefined}
           >
             {fullBleed ? (
-              <div className="flex-1 flex flex-col min-h-0 w-full">{children}</div>
+              <div className="flex-1 flex flex-col min-h-0 w-full min-w-0">{children}</div>
             ) : (
-              <div className="max-w-[1600px] mx-auto">{children}</div>
+              <div className="max-w-[1600px] mx-auto w-full min-w-0">{children}</div>
             )}
           </main>
         </div>

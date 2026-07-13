@@ -36,13 +36,14 @@ export default function Topbar({ title }: { title: string }) {
   const userRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const close = (e: MouseEvent) => {
-      if (routerRef.current && !routerRef.current.contains(e.target as Node)) setRouterOpen(false);
-      if (themeRef.current && !themeRef.current.contains(e.target as Node)) setThemeOpen(false);
-      if (userRef.current && !userRef.current.contains(e.target as Node)) setUserOpen(false);
+    const close = (e: Event) => {
+      const t = e.target as Node;
+      if (routerRef.current && !routerRef.current.contains(t)) setRouterOpen(false);
+      if (themeRef.current && !themeRef.current.contains(t)) setThemeOpen(false);
+      if (userRef.current && !userRef.current.contains(t)) setUserOpen(false);
     };
-    document.addEventListener('mousedown', close);
-    return () => document.removeEventListener('mousedown', close);
+    document.addEventListener('pointerdown', close);
+    return () => document.removeEventListener('pointerdown', close);
   }, []);
 
   const pickTheme = (key: ThemeId) => {
@@ -53,7 +54,7 @@ export default function Topbar({ title }: { title: string }) {
   };
 
   return (
-    <header className="theme-topbar sticky top-0 z-30 h-16 flex items-center justify-between px-4 sm:px-6 lg:px-8">
+    <header className="theme-topbar sticky top-0 z-30 min-h-16 h-16 flex items-center justify-between gap-2 px-3 sm:px-6 lg:px-8 pt-[env(safe-area-inset-top)]">
       <div className="flex items-center gap-3 min-w-0">
         <button
           type="button"
@@ -196,7 +197,7 @@ export default function Topbar({ title }: { title: string }) {
             <div className="theme-topbar-menu absolute right-0 mt-2 w-52 py-2 z-[600] animate-scale-in origin-top-right">
               <div className="px-4 py-3 border-b border-[var(--topbar-menu-border)]">
                 <div className="text-sm font-semibold">{user?.username}</div>
-                <div className="theme-topbar-menu-muted text-xs">Administrator</div>
+                <div className="theme-topbar-menu-muted text-xs">{user?.role || '—'}</div>
               </div>
               <button
                 type="button"
