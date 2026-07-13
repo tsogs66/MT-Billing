@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  Plus, RefreshCw, Radio, Satellite, Trash2, Wifi, Gauge,
+  Plus, RefreshCw, Radio, Satellite, Trash2, Wifi, 
   CheckCircle2, AlertTriangle, XCircle, Clock, Network, Gamepad2,
   Globe2, Server,
 } from 'lucide-react';
@@ -132,7 +132,6 @@ export default function StatusHub() {
   const [busy, setBusy] = useState(false);
   const [filter, setFilter] = useState('');
   const [addOpen, setAddOpen] = useState(false);
-  const [hostOpen, setHostOpen] = useState(false);
 
   const loadServices = async () => {
     const r = await api.get('/status-hub');
@@ -260,13 +259,13 @@ export default function StatusHub() {
             <div>
               <div className="inline-flex items-center gap-2 text-[11px] uppercase tracking-[0.28em] text-cyan-300/80 mb-3">
                 <Satellite size={14} className="text-cyan-400" />
-                Live telemetry grid
+                Internet status feeds
               </div>
               <h1 className="text-3xl sm:text-4xl lg:text-5xl font-bold text-white tracking-tight leading-none">
                 Status <span className="text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 to-sky-400">Hub</span>
               </h1>
               <p className="mt-3 text-slate-400 max-w-xl text-sm sm:text-base leading-relaxed">
-                Uptime-style monitoring for internet services, games, and your local uplink — probed from this panel against external reference servers.
+                Crowdsourced and official outage data from the internet — not probed through your panel network. Sources include global status feeds and vendor Statuspages.
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -292,17 +291,15 @@ export default function StatusHub() {
           </div>
 
           {/* Summary strip */}
-          {summary?.egressOk === false && (
-            <div className="mb-4 rounded-2xl border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">
-              Most probes failed from this panel host. Check outbound HTTPS/DNS on the server — Status Hub measures reachability from the panel, not from subscriber devices.
-            </div>
-          )}
+          <div className="mb-4 rounded-2xl border border-cyan-400/20 bg-cyan-400/5 px-4 py-3 text-sm text-cyan-100/90">
+            Status is read from public internet feeds (crowdsourced + official). Your ISP uplink is <b>not</b> used to test these services.
+          </div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
             {[
               { label: 'Online', value: summary?.up ?? '—', icon: CheckCircle2, tone: '#34d399' },
               { label: 'Degraded', value: summary?.degraded ?? '—', icon: AlertTriangle, tone: '#fbbf24' },
               { label: 'Offline', value: summary?.down ?? '—', icon: XCircle, tone: '#fb7185' },
-              { label: 'Avg latency', value: summary?.avgMs != null ? `${summary.avgMs} ms` : '—', icon: Gauge, tone: '#22d3ee' },
+              { label: 'Source', value: 'Internet', icon: Globe2, tone: '#22d3ee' },
             ].map((s) => (
               <div
                 key={s.label}
@@ -324,7 +321,7 @@ export default function StatusHub() {
             {(
               [
                 { id: 'services' as Tab, label: 'Services & Games', icon: Gamepad2 },
-                { id: 'uplink' as Tab, label: 'Uplink', icon: Wifi },
+                { id: 'uplink' as Tab, label: 'Backbone', icon: Wifi },
                 { id: 'manage' as Tab, label: 'Manage', icon: Server },
               ] as const
             ).map((t) => (
@@ -408,9 +405,7 @@ export default function StatusHub() {
                             <div className="flex items-end justify-between gap-2 mt-3">
                               <Spark history={m.history} />
                               <div className="text-right">
-                                <div className="text-sm font-mono text-cyan-200 tabular-nums">
-                                  {m.latencyMs != null ? `${Math.round(m.latencyMs)} ms` : '—'}
-                                </div>
+                                <div className="text-[10px] uppercase tracking-wider text-cyan-300/80">Feed</div>
                                 <div className="text-[10px] text-slate-500 font-mono">{m.uptimePct}% · {ago(m.lastChecked)}</div>
                               </div>
                             </div>
@@ -430,17 +425,17 @@ export default function StatusHub() {
           {tab === 'uplink' && (
             <UplinkPanel
               data={uplink}
-              canWrite={canWrite}
-              onAddHost={() => setHostOpen(true)}
-              onDeleteHost={async (id) => {
-                await api.delete(`/status-hub/uplink/hosts/${id}`);
-                await loadUplink();
-              }}
               onRefresh={async () => {
                 setBusy(true);
                 try {
                   const r = await api.get('/status-hub/uplink/check');
                   setUplink(r.data);
+                  for (let i = 0; i < 8; i++) {
+                    await new Promise((x) => setTimeout(x, 1200));
+                    const up = await api.get('/status-hub/uplink');
+                    setUplink(up.data);
+                    if (!up.data.summary?.scanning) break;
+                  }
                 } finally {
                   setBusy(false);
                 }
@@ -479,32 +474,16 @@ export default function StatusHub() {
           }}
         />
       )}
-      {hostOpen && (
-        <AddHostModal
-          onClose={() => setHostOpen(false)}
-          onSaved={async () => {
-            setHostOpen(false);
-            await triggerScan();
-            setTab('uplink');
-          }}
-        />
-      )}
     </Layout>
   );
 }
 
 function UplinkPanel({
   data,
-  canWrite,
-  onAddHost,
-  onDeleteHost,
   onRefresh,
   busy,
 }: {
   data: { targets: UplinkTarget[]; hosts: UplinkHost[]; summary: any } | null;
-  canWrite: boolean;
-  onAddHost: () => void;
-  onDeleteHost: (id: number) => Promise<void>;
   onRefresh: () => void;
   busy: boolean;
 }) {
@@ -516,41 +495,27 @@ function UplinkPanel({
         <div className="relative flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
             <div className="text-[11px] uppercase tracking-[0.25em] text-cyan-300/80 mb-2 flex items-center gap-2">
-              <Radio size={14} /> Egress identity
+              <Radio size={14} /> Global backbone
             </div>
-            <div className="text-3xl sm:text-4xl font-bold text-white font-mono tracking-tight">
-              {summary?.publicIp || 'Detecting…'}
-            </div>
+            <div className="text-2xl sm:text-3xl font-bold text-white tracking-tight">CDN & cloud health</div>
             <p className="text-sm text-slate-400 mt-2 max-w-lg">
-              Public IP seen by external echo servers. Latency below is measured from this panel host to worldwide reference endpoints — a live view of your uplink health.
+              Internet backbone and CDN status from public feeds — not latency tests from this panel.
             </p>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={onRefresh}
-              disabled={busy}
-              className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-sm text-cyan-100 border border-cyan-400/30 bg-black/30 hover:bg-cyan-400/10"
-            >
-              <RefreshCw size={14} className={busy ? 'animate-spin' : ''} /> Probe uplink
-            </button>
-            {canWrite && (
-              <button
-                type="button"
-                onClick={onAddHost}
-                className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-sm text-cyan-100 border border-cyan-400/30 bg-cyan-400/10 hover:bg-cyan-400/20"
-              >
-                <Plus size={14} /> Monitor IP / host
-              </button>
-            )}
-          </div>
+          <button
+            type="button"
+            onClick={onRefresh}
+            disabled={busy}
+            className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-sm text-cyan-100 border border-cyan-400/30 bg-black/30 hover:bg-cyan-400/10"
+          >
+            <RefreshCw size={14} className={busy ? 'animate-spin' : ''} /> Refresh feeds
+          </button>
         </div>
-        <div className="relative mt-5 grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="relative mt-5 grid grid-cols-2 sm:grid-cols-3 gap-3">
           {[
-            { label: 'Reachable', value: summary?.up ?? '—' },
-            { label: 'Slow', value: summary?.degraded ?? '—' },
-            { label: 'Unreachable', value: summary?.down ?? '—' },
-            { label: 'Avg RTT', value: summary?.avgMs != null ? `${summary.avgMs} ms` : '—' },
+            { label: 'Operational', value: summary?.up ?? '—' },
+            { label: 'Degraded', value: summary?.degraded ?? '—' },
+            { label: 'Outage', value: summary?.down ?? '—' },
           ].map((x) => (
             <div key={x.label} className="rounded-xl bg-black/25 border border-white/5 px-3 py-2">
               <div className="text-[10px] uppercase tracking-wider text-slate-500">{x.label}</div>
@@ -562,7 +527,7 @@ function UplinkPanel({
 
       <div>
         <h2 className="text-xs font-semibold uppercase tracking-[0.22em] text-cyan-200/90 mb-3 flex items-center gap-2">
-          <Network size={14} /> External reference servers
+          <Network size={14} /> Providers (internet status)
         </h2>
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
           {(data?.targets || []).map((t) => {
@@ -576,6 +541,7 @@ function UplinkPanel({
                       <h3 className="font-semibold text-slate-100 truncate">{t.name}</h3>
                     </div>
                     <div className="text-[11px] text-slate-500 mt-0.5">{t.region}</div>
+                    {t.bodySnip && <div className="text-[10px] text-slate-500 mt-1 line-clamp-2">{t.bodySnip}</div>}
                   </div>
                   <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: meta.color }}>
                     {meta.label}
@@ -583,9 +549,7 @@ function UplinkPanel({
                 </div>
                 <div className="flex items-end justify-between mt-3">
                   <Spark history={t.history || []} />
-                  <div className="text-right font-mono text-sm text-cyan-200">
-                    {t.latencyMs != null ? `${Math.round(t.latencyMs)} ms` : '—'}
-                  </div>
+                  <div className="text-[10px] text-slate-500 font-mono">{ago(t.lastChecked)}</div>
                 </div>
               </article>
             );
@@ -593,57 +557,8 @@ function UplinkPanel({
         </div>
       </div>
 
-      <div>
-        <h2 className="text-xs font-semibold uppercase tracking-[0.22em] text-cyan-200/90 mb-3 flex items-center gap-2">
-          <Wifi size={14} /> Custom IP / host probes
-        </h2>
-        {(data?.hosts || []).length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-white/10 px-4 py-10 text-center text-slate-500 text-sm">
-            No custom uplink hosts yet. Add a WAN IP, gateway, CDN edge, or game server to TCP-probe from this panel.
-          </div>
-        ) : (
-          <div className="overflow-x-auto rounded-2xl border border-white/10">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-[11px] uppercase tracking-wider text-slate-500 border-b border-white/10">
-                  <th className="px-4 py-3">Label</th>
-                  <th className="px-4 py-3">Host</th>
-                  <th className="px-4 py-3">Status</th>
-                  <th className="px-4 py-3">Latency</th>
-                  <th className="px-4 py-3" />
-                </tr>
-              </thead>
-              <tbody>
-                {(data?.hosts || []).map((h) => (
-                  <tr key={h.id} className="border-b border-white/5 text-slate-300">
-                    <td className="px-4 py-3 font-medium text-slate-100">{h.label}</td>
-                    <td className="px-4 py-3 font-mono text-xs text-cyan-200/80">
-                      {h.host}:{h.port}
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className="inline-flex items-center gap-2">
-                        <StatusDot status={h.status} />
-                        {STATUS_META[h.status]?.label || h.status}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 font-mono">{h.latencyMs != null ? `${Math.round(h.latencyMs)} ms` : '—'}</td>
-                    <td className="px-4 py-3 text-right">
-                      {canWrite && (
-                        <button type="button" className="text-rose-400 hover:text-rose-300" onClick={() => onDeleteHost(h.id)}>
-                          <Trash2 size={15} />
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-
       <p className="text-[11px] text-slate-500 font-mono">
-        Prometheus scrape: <span className="text-cyan-400/80">GET /api/status-hub/metrics</span> · Last uplink sweep {ago(summary?.lastRunAt ?? null)}
+        Prometheus scrape: <span className="text-cyan-400/80">GET /api/status-hub/metrics</span> · Last refresh {ago(summary?.lastRunAt ?? null)}
       </p>
     </div>
   );
@@ -669,7 +584,7 @@ function ManagePanel({
       <div className="flex items-center justify-between gap-3">
         <div>
           <h2 className="text-lg font-semibold text-white">Monitor catalog</h2>
-          <p className="text-sm text-slate-400">Enable, disable, or add HTTP/TCP targets. Heartbeats are stored in SQLite (Prometheus export available).</p>
+          <p className="text-sm text-slate-400">Enable or add monitors that read public internet status feeds. No local network probes.</p>
         </div>
         {canWrite && (
           <button
@@ -766,9 +681,10 @@ function AddMonitorModal({
   onSaved: () => void;
 }) {
   const [name, setName] = useState('');
+  const [feedSlug, setFeedSlug] = useState('');
+  const [statusPage, setStatusPage] = useState('');
   const [url, setUrl] = useState('');
   const [groupSlug, setGroupSlug] = useState('custom');
-  const [type, setType] = useState<'http' | 'tcp'>('http');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
 
@@ -776,7 +692,7 @@ function AddMonitorModal({
     setErr('');
     setBusy(true);
     try {
-      await api.post('/status-hub/monitors', { name, url, groupSlug, type });
+      await api.post('/status-hub/monitors', { name, feedSlug, statusPage, url, groupSlug, type: 'feed' });
       onSaved();
     } catch (e: any) {
       setErr(e?.response?.data?.error || 'Could not save');
@@ -787,22 +703,30 @@ function AddMonitorModal({
 
   return (
     <Modal
-      title="Add monitored service"
+      title="Add internet status monitor"
       onClose={onClose}
       footer={<ModalFooter onCancel={onClose} onConfirm={save} busy={busy} confirmLabel="Add monitor" />}
     >
       <div className="space-y-3">
+        <p className="text-sm text-slate-500">
+          Uses public feeds only (e.g. isitdownstatus slug and/or official Statuspage JSON). Nothing is probed through your network.
+        </p>
         <FormField label="Name" required>
-          <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="My game server" />
+          <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="My Service" />
         </FormField>
-        <FormField label="URL or host:port" required hint="HTTP URL (https://…) or host:port for TCP">
-          <input className="input font-mono text-sm" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://example.com or 8.8.8.8:53" />
+        <FormField label="Feed slug" hint="isitdownstatus.com slug, e.g. discord, steam, netflix">
+          <input className="input font-mono text-sm" value={feedSlug} onChange={(e) => setFeedSlug(e.target.value)} placeholder="discord" />
         </FormField>
-        <FormField label="Type">
-          <select className="input" value={type} onChange={(e) => setType(e.target.value as 'http' | 'tcp')}>
-            <option value="http">HTTP(S)</option>
-            <option value="tcp">TCP port</option>
-          </select>
+        <FormField label="Official status page JSON" hint="Optional Atlassian Statuspage …/api/v2/summary.json">
+          <input
+            className="input font-mono text-sm"
+            value={statusPage}
+            onChange={(e) => setStatusPage(e.target.value)}
+            placeholder="https://…/api/v2/summary.json"
+          />
+        </FormField>
+        <FormField label="Website (display only)">
+          <input className="input font-mono text-sm" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://example.com" />
         </FormField>
         <FormField label="Group">
           <select className="input" value={groupSlug} onChange={(e) => setGroupSlug(e.target.value)}>
@@ -812,51 +736,6 @@ function AddMonitorModal({
               </option>
             ))}
           </select>
-        </FormField>
-        {err && <div className="text-sm text-rose-600 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2">{err}</div>}
-      </div>
-    </Modal>
-  );
-}
-
-function AddHostModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
-  const [label, setLabel] = useState('');
-  const [host, setHost] = useState('');
-  const [port, setPort] = useState('443');
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState('');
-
-  const save = async () => {
-    setErr('');
-    setBusy(true);
-    try {
-      await api.post('/status-hub/uplink/hosts', { label, host, port: Number(port) || 443, type: 'tcp' });
-      onSaved();
-    } catch (e: any) {
-      setErr(e?.response?.data?.error || 'Could not save');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <Modal
-      title="Monitor uplink IP / host"
-      onClose={onClose}
-      footer={<ModalFooter onCancel={onClose} onConfirm={save} busy={busy} confirmLabel="Add probe" />}
-    >
-      <div className="space-y-3">
-        <p className="text-sm text-slate-500">
-          TCP-connect from this panel to an IP or hostname — useful for WAN IP checks, gateways, CDN edges, or game servers.
-        </p>
-        <FormField label="Label" required>
-          <input className="input" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Primary WAN" />
-        </FormField>
-        <FormField label="IP / hostname" required>
-          <input className="input font-mono" value={host} onChange={(e) => setHost(e.target.value)} placeholder="203.0.113.10 or edge.example.com" />
-        </FormField>
-        <FormField label="Port">
-          <input className="input font-mono" value={port} onChange={(e) => setPort(e.target.value)} />
         </FormField>
         {err && <div className="text-sm text-rose-600 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2">{err}</div>}
       </div>

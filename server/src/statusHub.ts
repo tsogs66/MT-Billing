@@ -1,27 +1,17 @@
 /**
- * Status Hub — Uptime-Kuma-style service monitoring with SQLite heartbeats,
- * grouped internet/gaming targets, manual monitors, and uplink probes via
- * external reference servers. Optional Prometheus text metrics export.
+ * Status Hub — internet status feeds only (no local network reachability probes).
+ * Sources: isitdownstatus.com crowdsourced/official indicators + Atlassian Statuspage JSON.
+ * Heartbeats stored in SQLite; optional Prometheus text export.
  */
-import dns from 'dns';
-import net from 'net';
-import { performance } from 'perf_hooks';
 import { db } from './db.js';
 
-try {
-  dns.setDefaultResultOrder('ipv4first');
-} catch {
-  /* Node < 17 */
-}
-
 const HEARTBEAT_KEEP = 120;
-const DEFAULT_INTERVAL_SEC = 60;
-const PROBE_TIMEOUT_MS = 8_000;
-const CONCURRENCY = 10;
-const UA =
-  'Mozilla/5.0 (compatible; MT-Billing-StatusHub/1.1; +https://github.com/tsogs66/MT-Billing) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
+const DEFAULT_INTERVAL_SEC = 90;
+const FEED_TIMEOUT_MS = 10_000;
+const CONCURRENCY = 8;
+const UA = 'MT-Billing-StatusHub/2.0';
 
-export type MonitorType = 'http' | 'tcp' | 'ping';
+export type MonitorType = 'feed' | 'statuspage';
 export type HeartbeatStatus = 'up' | 'down' | 'degraded' | 'pending';
 
 type GroupSeed = { slug: string; name: string; sort: number; icon: string };
@@ -29,8 +19,8 @@ type MonitorSeed = {
   group: string;
   name: string;
   url: string;
-  type?: MonitorType;
-  interval?: number;
+  feedSlug: string;
+  statusPage?: string;
 };
 
 const GROUP_SEEDS: GroupSeed[] = [
@@ -46,82 +36,165 @@ const GROUP_SEEDS: GroupSeed[] = [
 ];
 
 const MONITOR_SEEDS: MonitorSeed[] = [
-  // Web
-  { group: 'web', name: 'Google', url: 'https://www.google.com/generate_204' },
-  { group: 'web', name: 'Bing', url: 'https://www.bing.com' },
-  { group: 'web', name: 'Wikipedia', url: 'https://www.wikipedia.org' },
-  { group: 'web', name: 'DuckDuckGo', url: 'https://duckduckgo.com' },
-  // Social
-  { group: 'social', name: 'Facebook', url: 'https://www.facebook.com' },
-  { group: 'social', name: 'Instagram', url: 'https://www.instagram.com' },
-  { group: 'social', name: 'X (Twitter)', url: 'https://x.com' },
-  { group: 'social', name: 'TikTok', url: 'https://www.tiktok.com' },
-  { group: 'social', name: 'Reddit', url: 'https://www.reddit.com' },
-  { group: 'social', name: 'LinkedIn', url: 'https://www.linkedin.com' },
-  // Streaming
-  { group: 'streaming', name: 'YouTube', url: 'https://www.youtube.com' },
-  { group: 'streaming', name: 'Netflix', url: 'https://www.netflix.com' },
-  { group: 'streaming', name: 'Twitch', url: 'https://www.twitch.tv' },
-  { group: 'streaming', name: 'Spotify', url: 'https://www.spotify.com' },
-  { group: 'streaming', name: 'Disney+', url: 'https://www.disneyplus.com' },
-  { group: 'streaming', name: 'Apple Music', url: 'https://music.apple.com' },
-  // Games
-  { group: 'games', name: 'Steam', url: 'https://store.steampowered.com' },
-  { group: 'games', name: 'Epic Games', url: 'https://store.epicgames.com' },
-  { group: 'games', name: 'Xbox / Microsoft', url: 'https://www.xbox.com' },
-  { group: 'games', name: 'PlayStation Network', url: 'https://www.playstation.com' },
-  { group: 'games', name: 'Nintendo', url: 'https://www.nintendo.com' },
-  { group: 'games', name: 'Roblox', url: 'https://www.roblox.com' },
-  { group: 'games', name: 'Minecraft', url: 'https://www.minecraft.net' },
-  { group: 'games', name: 'Riot Games', url: 'https://www.riotgames.com' },
-  { group: 'games', name: 'Valorant', url: 'https://playvalorant.com' },
-  { group: 'games', name: 'League of Legends', url: 'https://www.leagueoflegends.com' },
-  { group: 'games', name: 'Fortnite', url: 'https://www.fortnite.com' },
-  { group: 'games', name: 'Mobile Legends', url: 'https://www.mobilelegends.com' },
-  { group: 'games', name: 'Genshin Impact', url: 'https://genshin.hoyoverse.com' },
-  { group: 'games', name: 'EA / Origin', url: 'https://www.ea.com' },
-  { group: 'games', name: 'Battle.net', url: 'https://battle.net' },
-  // Comms
-  { group: 'comms', name: 'Discord', url: 'https://discord.com' },
-  { group: 'comms', name: 'WhatsApp', url: 'https://www.whatsapp.com' },
-  { group: 'comms', name: 'Telegram', url: 'https://telegram.org' },
-  { group: 'comms', name: 'Zoom', url: 'https://zoom.us' },
-  { group: 'comms', name: 'Slack', url: 'https://slack.com' },
-  { group: 'comms', name: 'Gmail', url: 'https://mail.google.com' },
-  { group: 'comms', name: 'Microsoft Teams', url: 'https://teams.microsoft.com' },
-  // Cloud
-  { group: 'cloud', name: 'Cloudflare', url: 'https://www.cloudflare.com' },
-  { group: 'cloud', name: 'AWS Health', url: 'https://health.aws.amazon.com/health/status' },
-  { group: 'cloud', name: 'Google Cloud', url: 'https://cloud.google.com' },
-  { group: 'cloud', name: 'Azure', url: 'https://azure.microsoft.com' },
-  { group: 'cloud', name: 'GitHub', url: 'https://github.com' },
-  { group: 'cloud', name: 'GitLab', url: 'https://gitlab.com' },
-  { group: 'cloud', name: 'DigitalOcean', url: 'https://www.digitalocean.com' },
-  { group: 'cloud', name: 'Vercel', url: 'https://vercel.com' },
-  // DNS
-  { group: 'dns', name: 'Cloudflare DNS (1.1.1.1)', url: 'https://1.1.1.1/cdn-cgi/trace' },
-  { group: 'dns', name: 'Google DNS', url: 'https://dns.google/resolve?name=example.com&type=A' },
-  { group: 'dns', name: 'Quad9 DNS', url: 'https://dns.quad9.net:5053/dns-query?name=example.com&type=A' },
-  { group: 'dns', name: 'OpenDNS', url: 'https://www.opendns.com' },
-  // Finance
-  { group: 'finance', name: 'PayPal', url: 'https://www.paypal.com' },
-  { group: 'finance', name: 'Stripe', url: 'https://stripe.com' },
-  { group: 'finance', name: 'Amazon', url: 'https://www.amazon.com' },
-  { group: 'finance', name: 'eBay', url: 'https://www.ebay.com' },
+  { group: 'web', name: 'Google', url: 'https://www.google.com', feedSlug: 'google' },
+  { group: 'web', name: 'Bing', url: 'https://www.bing.com', feedSlug: 'bing' },
+  { group: 'web', name: 'Wikipedia', url: 'https://www.wikipedia.org', feedSlug: 'wikipedia' },
+  { group: 'web', name: 'DuckDuckGo', url: 'https://duckduckgo.com', feedSlug: 'duckduckgo' },
+  { group: 'social', name: 'Facebook', url: 'https://www.facebook.com', feedSlug: 'facebook' },
+  { group: 'social', name: 'Instagram', url: 'https://www.instagram.com', feedSlug: 'instagram' },
+  { group: 'social', name: 'X (Twitter)', url: 'https://x.com', feedSlug: 'twitter' },
+  { group: 'social', name: 'TikTok', url: 'https://www.tiktok.com', feedSlug: 'tiktok' },
+  { group: 'social', name: 'Reddit', url: 'https://www.reddit.com', feedSlug: 'reddit' },
+  { group: 'social', name: 'LinkedIn', url: 'https://www.linkedin.com', feedSlug: 'linkedin' },
+  { group: 'streaming', name: 'YouTube', url: 'https://www.youtube.com', feedSlug: 'youtube' },
+  { group: 'streaming', name: 'Netflix', url: 'https://www.netflix.com', feedSlug: 'netflix' },
+  { group: 'streaming', name: 'Twitch', url: 'https://www.twitch.tv', feedSlug: 'twitch' },
+  { group: 'streaming', name: 'Spotify', url: 'https://www.spotify.com', feedSlug: 'spotify' },
+  { group: 'streaming', name: 'Disney+', url: 'https://www.disneyplus.com', feedSlug: 'disney-plus' },
+  { group: 'streaming', name: 'Apple Music', url: 'https://music.apple.com', feedSlug: 'apple' },
+  { group: 'games', name: 'Steam', url: 'https://store.steampowered.com', feedSlug: 'steam' },
+  { group: 'games', name: 'Epic Games', url: 'https://store.epicgames.com', feedSlug: 'epic-games' },
+  { group: 'games', name: 'Xbox / Microsoft', url: 'https://www.xbox.com', feedSlug: 'xbox-live' },
+  { group: 'games', name: 'PlayStation Network', url: 'https://www.playstation.com', feedSlug: 'playstation-network' },
+  { group: 'games', name: 'Nintendo', url: 'https://www.nintendo.com', feedSlug: 'nintendo' },
+  { group: 'games', name: 'Roblox', url: 'https://www.roblox.com', feedSlug: 'roblox' },
+  { group: 'games', name: 'Minecraft', url: 'https://www.minecraft.net', feedSlug: 'minecraft' },
+  { group: 'games', name: 'Riot Games', url: 'https://www.riotgames.com', feedSlug: 'riot-games' },
+  { group: 'games', name: 'Valorant', url: 'https://playvalorant.com', feedSlug: 'valorant' },
+  { group: 'games', name: 'League of Legends', url: 'https://www.leagueoflegends.com', feedSlug: 'league-of-legends' },
+  { group: 'games', name: 'Fortnite', url: 'https://www.fortnite.com', feedSlug: 'fortnite' },
+  { group: 'games', name: 'Mobile Legends', url: 'https://www.mobilelegends.com', feedSlug: 'mobile-legends' },
+  { group: 'games', name: 'Genshin Impact', url: 'https://genshin.hoyoverse.com', feedSlug: 'genshin-impact' },
+  { group: 'games', name: 'EA / Origin', url: 'https://www.ea.com', feedSlug: 'ea' },
+  { group: 'games', name: 'Battle.net', url: 'https://battle.net', feedSlug: 'battle-net' },
+  {
+    group: 'comms',
+    name: 'Discord',
+    url: 'https://discord.com',
+    feedSlug: 'discord',
+    statusPage: 'https://discordstatus.com/api/v2/summary.json',
+  },
+  { group: 'comms', name: 'WhatsApp', url: 'https://www.whatsapp.com', feedSlug: 'whatsapp' },
+  { group: 'comms', name: 'Telegram', url: 'https://telegram.org', feedSlug: 'telegram' },
+  { group: 'comms', name: 'Zoom', url: 'https://zoom.us', feedSlug: 'zoom' },
+  {
+    group: 'comms',
+    name: 'Slack',
+    url: 'https://slack.com',
+    feedSlug: 'slack',
+    statusPage: 'https://status.slack.com/api/v2.0.0/current',
+  },
+  { group: 'comms', name: 'Gmail', url: 'https://mail.google.com', feedSlug: 'gmail' },
+  { group: 'comms', name: 'Microsoft Teams', url: 'https://teams.microsoft.com', feedSlug: 'microsoft-teams' },
+  {
+    group: 'cloud',
+    name: 'Cloudflare',
+    url: 'https://www.cloudflare.com',
+    feedSlug: 'cloudflare',
+    statusPage: 'https://www.cloudflarestatus.com/api/v2/summary.json',
+  },
+  { group: 'cloud', name: 'Amazon AWS', url: 'https://aws.amazon.com', feedSlug: 'aws' },
+  { group: 'cloud', name: 'Google Cloud', url: 'https://cloud.google.com', feedSlug: 'google-cloud' },
+  { group: 'cloud', name: 'Azure', url: 'https://azure.microsoft.com', feedSlug: 'azure' },
+  {
+    group: 'cloud',
+    name: 'GitHub',
+    url: 'https://github.com',
+    feedSlug: 'github',
+    statusPage: 'https://www.githubstatus.com/api/v2/summary.json',
+  },
+  {
+    group: 'cloud',
+    name: 'GitLab',
+    url: 'https://gitlab.com',
+    feedSlug: 'gitlab',
+    statusPage: 'https://status.gitlab.com/api/v2/summary.json',
+  },
+  {
+    group: 'cloud',
+    name: 'DigitalOcean',
+    url: 'https://www.digitalocean.com',
+    feedSlug: 'digitalocean',
+    statusPage: 'https://status.digitalocean.com/api/v2/summary.json',
+  },
+  {
+    group: 'cloud',
+    name: 'Vercel',
+    url: 'https://vercel.com',
+    feedSlug: 'vercel',
+    statusPage: 'https://www.vercel-status.com/api/v2/summary.json',
+  },
+  { group: 'dns', name: 'Cloudflare DNS', url: 'https://1.1.1.1', feedSlug: 'cloudflare' },
+  { group: 'dns', name: 'Google DNS', url: 'https://dns.google', feedSlug: 'google' },
+  { group: 'dns', name: 'OpenDNS', url: 'https://www.opendns.com', feedSlug: 'opendns' },
+  { group: 'finance', name: 'PayPal', url: 'https://www.paypal.com', feedSlug: 'paypal' },
+  { group: 'finance', name: 'Stripe', url: 'https://stripe.com', feedSlug: 'stripe', statusPage: 'https://status.stripe.com/current/index.json' },
+  { group: 'finance', name: 'Amazon', url: 'https://www.amazon.com', feedSlug: 'amazon' },
+  { group: 'finance', name: 'eBay', url: 'https://www.ebay.com', feedSlug: 'ebay' },
 ];
 
-/** External reference endpoints used to characterize local uplink quality. */
-const UPLINK_SEEDS: { slug: string; name: string; region: string; url: string; kind: string }[] = [
-  { slug: 'cf-trace-global', name: 'Cloudflare Trace', region: 'Global Anycast', url: 'https://1.1.1.1/cdn-cgi/trace', kind: 'http' },
-  { slug: 'cf-ok', name: 'Cloudflare Connectivity', region: 'Global Anycast', url: 'https://cloudflare.com/cdn-cgi/trace', kind: 'http' },
-  { slug: 'google-204', name: 'Google generate_204', region: 'Global Anycast', url: 'https://www.google.com/generate_204', kind: 'http' },
-  { slug: 'google-dns', name: 'Google Public DNS', region: 'Global Anycast', url: 'https://dns.google/resolve?name=cloudflare.com&type=A', kind: 'http' },
-  { slug: 'quad9', name: 'Quad9 DNS API', region: 'Global Anycast', url: 'https://dns.quad9.net:5053/dns-query?name=example.com&type=A', kind: 'http' },
-  { slug: 'apple-captive', name: 'Apple Captive Portal', region: 'Global', url: 'https://captive.apple.com/hotspot-detect.html', kind: 'http' },
-  { slug: 'msft-ncsi', name: 'Microsoft NCSI', region: 'Global', url: 'http://www.msftconnecttest.com/connecttest.txt', kind: 'http' },
-  { slug: 'ifconfig-me', name: 'ifconfig.me (egress IP)', region: 'External Echo', url: 'https://ifconfig.me/ip', kind: 'http' },
-  { slug: 'icanhazip', name: 'icanhazip.com', region: 'External Echo', url: 'https://icanhazip.com', kind: 'http' },
-  { slug: 'ipify', name: 'ipify.org', region: 'External Echo', url: 'https://api.ipify.org?format=text', kind: 'http' },
+/** Uplink / backbone view — also feed-based (no panel-origin RTT probes). */
+const UPLINK_SEEDS: { slug: string; name: string; region: string; feedSlug: string; statusPage?: string; url: string }[] = [
+  {
+    slug: 'cloudflare-net',
+    name: 'Cloudflare Network',
+    region: 'Global CDN / DNS',
+    feedSlug: 'cloudflare',
+    statusPage: 'https://www.cloudflarestatus.com/api/v2/summary.json',
+    url: 'https://www.cloudflarestatus.com',
+  },
+  {
+    slug: 'aws',
+    name: 'Amazon AWS',
+    region: 'Cloud backbone',
+    feedSlug: 'aws',
+    url: 'https://health.aws.amazon.com/health/status',
+  },
+  {
+    slug: 'google-cloud',
+    name: 'Google Cloud',
+    region: 'Cloud backbone',
+    feedSlug: 'google-cloud',
+    url: 'https://status.cloud.google.com',
+  },
+  {
+    slug: 'azure',
+    name: 'Microsoft Azure',
+    region: 'Cloud backbone',
+    feedSlug: 'azure',
+    url: 'https://status.azure.com',
+  },
+  {
+    slug: 'fastly',
+    name: 'Fastly',
+    region: 'CDN',
+    feedSlug: 'fastly',
+    statusPage: 'https://www.fastlystatus.com/api/v2/summary.json',
+    url: 'https://www.fastlystatus.com',
+  },
+  {
+    slug: 'akamai',
+    name: 'Akamai',
+    region: 'CDN',
+    feedSlug: 'akamai',
+    url: 'https://www.akamai.com',
+  },
+  {
+    slug: 'github',
+    name: 'GitHub',
+    region: 'Developer platform',
+    feedSlug: 'github',
+    statusPage: 'https://www.githubstatus.com/api/v2/summary.json',
+    url: 'https://www.githubstatus.com',
+  },
+  {
+    slug: 'discord',
+    name: 'Discord',
+    region: 'Realtime / voice',
+    feedSlug: 'discord',
+    statusPage: 'https://discordstatus.com/api/v2/summary.json',
+    url: 'https://discordstatus.com',
+  },
 ];
 
 let timer: ReturnType<typeof setInterval> | null = null;
@@ -149,8 +222,8 @@ export function initStatusHub() {
       group_id INTEGER NOT NULL,
       name TEXT NOT NULL,
       url TEXT NOT NULL,
-      type TEXT DEFAULT 'http',
-      interval_sec INTEGER DEFAULT 60,
+      type TEXT DEFAULT 'feed',
+      interval_sec INTEGER DEFAULT 90,
       enabled INTEGER DEFAULT 1,
       builtin INTEGER DEFAULT 0,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -173,7 +246,7 @@ export function initStatusHub() {
       name TEXT NOT NULL,
       region TEXT,
       url TEXT NOT NULL,
-      kind TEXT DEFAULT 'http',
+      kind TEXT DEFAULT 'feed',
       enabled INTEGER DEFAULT 1,
       builtin INTEGER DEFAULT 1
     );
@@ -209,8 +282,22 @@ export function initStatusHub() {
     );
   `);
 
+  if (!columnExists('status_monitors', 'feed_slug')) {
+    db.exec(`ALTER TABLE status_monitors ADD COLUMN feed_slug TEXT`);
+  }
+  if (!columnExists('status_monitors', 'status_page')) {
+    db.exec(`ALTER TABLE status_monitors ADD COLUMN status_page TEXT`);
+  }
+  if (!columnExists('status_uplink_targets', 'feed_slug')) {
+    db.exec(`ALTER TABLE status_uplink_targets ADD COLUMN feed_slug TEXT`);
+  }
+  if (!columnExists('status_uplink_targets', 'status_page')) {
+    db.exec(`ALTER TABLE status_uplink_targets ADD COLUMN status_page TEXT`);
+  }
+
   seedGroupsAndMonitors();
   seedUplinkTargets();
+  migrateBuiltinsToFeeds();
 }
 
 function seedGroupsAndMonitors() {
@@ -224,162 +311,205 @@ function seedGroupsAndMonitors() {
   const groupId = (slug: string) =>
     (db.prepare('SELECT id FROM status_groups WHERE slug = ?').get(slug) as { id: number } | undefined)?.id;
 
-  const exists = db.prepare(
-    'SELECT id FROM status_monitors WHERE builtin = 1 AND name = ? AND url = ?'
-  );
-  const ins = db.prepare(`
-    INSERT INTO status_monitors (group_id, name, url, type, interval_sec, enabled, builtin)
-    VALUES (?, ?, ?, ?, ?, 1, 1)
-  `);
-
   const countBuiltin = (db.prepare('SELECT COUNT(*) AS c FROM status_monitors WHERE builtin = 1').get() as { c: number }).c;
   if (countBuiltin > 0) return;
 
+  const ins = db.prepare(`
+    INSERT INTO status_monitors (group_id, name, url, type, interval_sec, enabled, builtin, feed_slug, status_page)
+    VALUES (?, ?, ?, 'feed', ?, 1, 1, ?, ?)
+  `);
   for (const m of MONITOR_SEEDS) {
     const gid = groupId(m.group);
     if (!gid) continue;
-    if (exists.get(m.name, m.url)) continue;
-    ins.run(gid, m.name, m.url, m.type || 'http', m.interval || DEFAULT_INTERVAL_SEC);
+    ins.run(gid, m.name, m.url, DEFAULT_INTERVAL_SEC, m.feedSlug, m.statusPage || null);
   }
 }
 
-function seedUplinkTargets() {
+/** Existing installs: attach feed slugs / status pages; stop treating type as http/tcp. */
+function migrateBuiltinsToFeeds() {
+  const byName = new Map(MONITOR_SEEDS.map((m) => [m.name, m]));
+  const rows = db.prepare('SELECT id, name, feed_slug AS feedSlug FROM status_monitors WHERE builtin = 1').all() as any[];
+  const upd = db.prepare(`
+    UPDATE status_monitors
+    SET type = 'feed', feed_slug = ?, status_page = ?, url = COALESCE(?, url)
+    WHERE id = ?
+  `);
+  for (const row of rows) {
+    const seed = byName.get(row.name);
+    if (!seed) {
+      if (!row.feedSlug) {
+        db.prepare(`UPDATE status_monitors SET type = 'feed' WHERE id = ?`).run(row.id);
+      }
+      continue;
+    }
+    upd.run(seed.feedSlug, seed.statusPage || null, seed.url, row.id);
+  }
+
+  // Drop legacy local-probe uplink targets once; reseed feed-based backbone list
+  const legacy = db
+    .prepare(
+      `SELECT id FROM status_uplink_targets WHERE slug IN ('ifconfig-me','icanhazip','ipify','google-204','msft-ncsi','apple-captive','cf-trace-global') LIMIT 1`
+    )
+    .get();
+  const missingFeed = db
+    .prepare(`SELECT COUNT(*) AS c FROM status_uplink_targets WHERE feed_slug IS NULL OR feed_slug = ''`)
+    .get() as { c: number };
+  if (legacy || (missingFeed.c > 0 && (db.prepare('SELECT COUNT(*) AS c FROM status_uplink_targets').get() as { c: number }).c > 0)) {
+    db.prepare('DELETE FROM status_uplink_results').run();
+    db.prepare('DELETE FROM status_uplink_targets').run();
+    seedUplinkTargets(true);
+  }
+}
+
+function seedUplinkTargets(force = false) {
   const count = (db.prepare('SELECT COUNT(*) AS c FROM status_uplink_targets').get() as { c: number }).c;
-  if (count > 0) return;
+  if (count > 0 && !force) return;
   const ins = db.prepare(`
-    INSERT INTO status_uplink_targets (slug, name, region, url, kind, enabled, builtin)
-    VALUES (?, ?, ?, ?, ?, 1, 1)
+    INSERT OR IGNORE INTO status_uplink_targets (slug, name, region, url, kind, enabled, builtin, feed_slug, status_page)
+    VALUES (?, ?, ?, ?, 'feed', 1, 1, ?, ?)
   `);
   for (const t of UPLINK_SEEDS) {
-    ins.run(t.slug, t.name, t.region, t.url, t.kind);
+    ins.run(t.slug, t.name, t.region, t.url, t.feedSlug, t.statusPage || null);
   }
 }
 
-async function probeHttp(
-  url: string,
-  opts?: { readBody?: boolean }
-): Promise<{ status: HeartbeatStatus; ms: number; code: number; error?: string; body?: string }> {
-  // Reachability probe: any HTTP response means the path works.
-  // Do NOT download full pages (Netflix/YouTube/etc.) — that caused mass timeouts → "all down".
-  const tryOnce = async (method: 'HEAD' | 'GET') => {
-    const ac = new AbortController();
-    const to = setTimeout(() => ac.abort(), PROBE_TIMEOUT_MS);
-    const t0 = performance.now();
-    try {
-      const res = await fetch(url, {
-        method,
-        redirect: 'follow',
-        signal: ac.signal,
-        headers: {
-          'User-Agent': UA,
-          Accept: '*/*',
-          'Cache-Control': 'no-cache',
-        },
-      });
-      const ms = Math.round(performance.now() - t0);
-      let body = '';
-      if (opts?.readBody) {
-        try {
-          body = (await res.text()).slice(0, 200).trim();
-        } catch {
-          /* ignore */
-        }
-      } else {
-        try {
-          await res.body?.cancel();
-        } catch {
-          /* ignore */
-        }
-      }
-      return { ok: true as const, ms, code: res.status, body };
-    } catch (e: any) {
-      const msg = e?.name === 'AbortError' ? 'timeout' : String(e?.message || e || 'network error');
-      return { ok: false as const, error: msg, ms: Math.round(performance.now() - t0) };
-    } finally {
-      clearTimeout(to);
-    }
+function worse(a: HeartbeatStatus, b: HeartbeatStatus): HeartbeatStatus {
+  const rank = { pending: -1, up: 0, degraded: 1, down: 2 };
+  return rank[b] > rank[a] ? b : a;
+}
+
+function mapDownStatus(s: string | undefined): HeartbeatStatus {
+  const v = (s || '').toLowerCase();
+  if (v === 'down' || v === 'major_outage' || v === 'critical') return 'down';
+  if (v === 'degraded' || v === 'partial_outage' || v === 'minor' || v === 'major') return 'degraded';
+  return 'up';
+}
+
+function mapOfficialIndicator(ind: string | null | undefined): HeartbeatStatus | null {
+  if (ind == null || ind === '' || ind === 'none') return null;
+  const v = ind.toLowerCase();
+  if (v === 'critical' || v === 'major') return 'down';
+  if (v === 'minor' || v === 'maintenance') return 'degraded';
+  return null;
+}
+
+function mapStatuspageIndicator(ind: string | undefined): HeartbeatStatus {
+  const v = (ind || '').toLowerCase();
+  if (v === 'major' || v === 'critical') return 'down';
+  if (v === 'minor' || v === 'maintenance') return 'degraded';
+  return 'up';
+}
+
+async function fetchJson(url: string): Promise<any | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FEED_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      signal: controller.signal,
+      headers: { Accept: 'application/json', 'User-Agent': UA },
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchCrowdsourcedStatus(feedSlug: string): Promise<{
+  status: HeartbeatStatus;
+  detail: string;
+  ok: boolean;
+  reports1h: number;
+  reports24h: number;
+}> {
+  if (!feedSlug) {
+    return { status: 'pending', detail: 'No feed slug', ok: false, reports1h: 0, reports24h: 0 };
+  }
+  const data = await fetchJson(`https://isitdownstatus.com/api/v1/status/${encodeURIComponent(feedSlug)}`);
+  if (!data?.ok || !data?.data) {
+    return { status: 'up', detail: 'Crowdsourced feed unavailable', ok: false, reports1h: 0, reports24h: 0 };
+  }
+  const d = data.data;
+  const fromReports = mapDownStatus(d.status);
+  const fromOfficial = mapOfficialIndicator(d.official_indicator);
+  const status = fromOfficial ? worse(fromReports, fromOfficial) : fromReports;
+  const parts: string[] = ['Internet status'];
+  if (d.official_indicator && d.official_indicator !== 'none') parts.push(`official: ${d.official_indicator}`);
+  if (Number(d.report_count_1h) > 0) parts.push(`${d.report_count_1h} reports/1h`);
+  if (Number(d.report_count_24h) > 0) parts.push(`${d.report_count_24h} reports/24h`);
+  return {
+    status,
+    detail: parts.join(' · '),
+    ok: true,
+    reports1h: Number(d.report_count_1h) || 0,
+    reports24h: Number(d.report_count_24h) || 0,
   };
+}
 
-  let result = await tryOnce('HEAD');
-  if (!result.ok) result = await tryOnce('GET');
-  else if (result.code >= 500) {
-    const get = await tryOnce('GET');
-    if (get.ok) result = get;
-  }
-
-  if (!result.ok) {
-    // Last resort: TCP connect to the host (proves DNS + route even when HTTP is filtered)
-    try {
-      const u = new URL(url);
-      const port = Number(u.port || (u.protocol === 'https:' ? 443 : 80));
-      const tcp = await probeTcp(u.hostname, port);
-      if (tcp.status === 'up' || tcp.status === 'degraded') {
-        return {
-          status: 'degraded',
-          ms: tcp.ms,
-          code: 0,
-          error: `HTTP failed (${result.error}); TCP ${port} open`,
-        };
-      }
-    } catch {
-      /* ignore */
-    }
-    return { status: 'down', ms: result.ms || 0, code: 0, error: result.error };
-  }
-
-  if (result.code >= 500) {
+async function fetchStatuspage(url: string): Promise<{ status: HeartbeatStatus; detail: string; ok: boolean }> {
+  if (!url) return { status: 'up', detail: '', ok: false };
+  const data = await fetchJson(url);
+  // Atlassian Statuspage summary
+  if (data?.status?.indicator) {
+    const status = mapStatuspageIndicator(data.status.indicator);
     return {
-      status: 'degraded',
-      ms: result.ms,
-      code: result.code,
-      error: `HTTP ${result.code}`,
-      body: result.body,
+      status,
+      detail: data.status.description || `Statuspage: ${data.status.indicator}`,
+      ok: true,
+    };
+  }
+  // Slack-style
+  if (data?.status && typeof data.status === 'string') {
+    const status = mapDownStatus(data.status);
+    return { status, detail: `Official: ${data.status}`, ok: true };
+  }
+  // Stripe-like
+  if (data?.largeststatus || data?.message) {
+    return { status: 'up', detail: String(data.message || 'OK'), ok: true };
+  }
+  return { status: 'up', detail: '', ok: false };
+}
+
+async function resolveFeedStatus(feedSlug: string | null, statusPage: string | null) {
+  const crowd = feedSlug
+    ? await fetchCrowdsourcedStatus(feedSlug)
+    : { status: 'pending' as HeartbeatStatus, detail: '', ok: false, reports1h: 0, reports24h: 0 };
+  const official = statusPage ? await fetchStatuspage(statusPage) : { status: 'up' as HeartbeatStatus, detail: '', ok: false };
+
+  let status: HeartbeatStatus = 'pending';
+  const details: string[] = [];
+
+  if (crowd.ok) {
+    status = crowd.status;
+    details.push(crowd.detail);
+  }
+  if (official.ok) {
+    status = crowd.ok ? worse(status, official.status) : official.status;
+    if (official.detail) details.push(official.detail);
+  }
+
+  if (!crowd.ok && !official.ok) {
+    return {
+      status: 'degraded' as HeartbeatStatus,
+      detail: 'Status feeds unreachable (not a local outage check)',
+      error: 'feed unavailable',
     };
   }
 
-  const status: HeartbeatStatus = result.ms > 2500 ? 'degraded' : 'up';
-  return { status, ms: result.ms, code: result.code, body: result.body };
-}
-
-function probeTcp(host: string, port: number): Promise<{ status: HeartbeatStatus; ms: number; error?: string }> {
-  return new Promise((resolve) => {
-    const t0 = performance.now();
-    const socket = net.connect({ host, port }, () => {
-      const ms = Math.round(performance.now() - t0);
-      socket.destroy();
-      resolve({ status: ms > 2500 ? 'degraded' : 'up', ms });
-    });
-    socket.setTimeout(PROBE_TIMEOUT_MS);
-    socket.on('timeout', () => {
-      socket.destroy();
-      resolve({ status: 'down', ms: Math.round(performance.now() - t0), error: 'timeout' });
-    });
-    socket.on('error', (err) => {
-      resolve({ status: 'down', ms: Math.round(performance.now() - t0), error: err.message });
-    });
-  });
-}
-
-function parseTarget(url: string, type: MonitorType): { kind: 'http' | 'tcp'; host?: string; port?: number; url?: string } {
-  if (type === 'tcp' || type === 'ping') {
-    try {
-      if (url.includes('://')) {
-        const u = new URL(url);
-        return { kind: 'tcp', host: u.hostname, port: Number(u.port || (u.protocol === 'https:' ? 443 : 80)) };
-      }
-      const [host, portStr] = url.split(':');
-      return { kind: 'tcp', host, port: Number(portStr || 443) };
-    } catch {
-      return { kind: 'tcp', host: url, port: 443 };
-    }
-  }
-  return { kind: 'http', url };
+  return {
+    status: status === 'pending' ? ('up' as HeartbeatStatus) : status,
+    detail: details.filter(Boolean).join(' · ') || 'Operational',
+    error: status === 'up' ? null : details.join(' · '),
+  };
 }
 
 async function mapPool<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(items.length);
   let i = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+  const workers = Array.from({ length: Math.min(limit, items.length || 1) }, async () => {
     while (i < items.length) {
       const idx = i++;
       out[idx] = await fn(items[idx]);
@@ -400,12 +530,11 @@ function pruneHeartbeats(monitorId: number) {
   db.prepare('DELETE FROM status_heartbeats WHERE monitor_id = ? AND checked_at < ?').run(monitorId, cutoff);
 }
 
-function recordHeartbeat(monitorId: number, status: HeartbeatStatus, latencyMs: number | null, code: number | null, error?: string) {
-  const now = Date.now();
+function recordHeartbeat(monitorId: number, status: HeartbeatStatus, detail?: string | null) {
   db.prepare(`
     INSERT INTO status_heartbeats (monitor_id, status, latency_ms, code, error, checked_at)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(monitorId, status, latencyMs, code, error || null, now);
+    VALUES (?, ?, NULL, NULL, ?, ?)
+  `).run(monitorId, status, detail || null, Date.now());
   pruneHeartbeats(monitorId);
 }
 
@@ -416,23 +545,25 @@ export async function runStatusChecks(monitorIds?: number[]) {
     let rows: any[];
     if (monitorIds?.length) {
       const placeholders = monitorIds.map(() => '?').join(',');
-      rows = db.prepare(`SELECT * FROM status_monitors WHERE enabled = 1 AND id IN (${placeholders})`).all(...monitorIds);
+      rows = db
+        .prepare(
+          `SELECT id, feed_slug AS feedSlug, status_page AS statusPage FROM status_monitors WHERE enabled = 1 AND id IN (${placeholders})`
+        )
+        .all(...monitorIds);
     } else {
-      rows = db.prepare('SELECT * FROM status_monitors WHERE enabled = 1').all();
+      rows = db
+        .prepare(
+          `SELECT id, feed_slug AS feedSlug, status_page AS statusPage FROM status_monitors WHERE enabled = 1`
+        )
+        .all();
     }
 
     await mapPool(rows, CONCURRENCY, async (m) => {
-      const parsed = parseTarget(m.url, m.type as MonitorType);
-      if (parsed.kind === 'tcp' && parsed.host) {
-        const r = await probeTcp(parsed.host, parsed.port || 443);
-        recordHeartbeat(m.id, r.status, r.ms, null, r.error);
-      } else {
-        const r = await probeHttp(parsed.url || m.url);
-        recordHeartbeat(m.id, r.status, r.ms, r.code, r.error);
-      }
+      const r = await resolveFeedStatus(m.feedSlug || null, m.statusPage || null);
+      recordHeartbeat(m.id, r.status, r.error || r.detail);
     });
     lastRunAt = Date.now();
-    return { ok: true, checked: rows.length, at: lastRunAt };
+    return { ok: true, checked: rows.length, at: lastRunAt, mode: 'internet-feeds' };
   } finally {
     running = false;
   }
@@ -449,80 +580,81 @@ function pruneUplinkResults(targetId: number) {
   db.prepare('DELETE FROM status_uplink_results WHERE target_id = ? AND checked_at < ?').run(targetId, cutoff);
 }
 
-const ECHO_SLUGS = new Set(['ifconfig-me', 'icanhazip', 'ipify']);
-
 export async function runUplinkChecks() {
   if (uplinkRunning) return { skipped: true, running: true };
   uplinkRunning = true;
   try {
-    const targets = db.prepare('SELECT * FROM status_uplink_targets WHERE enabled = 1').all() as any[];
+    const targets = db
+      .prepare(
+        `SELECT id, feed_slug AS feedSlug, status_page AS statusPage FROM status_uplink_targets WHERE enabled = 1`
+      )
+      .all() as any[];
+
     await mapPool(targets, CONCURRENCY, async (t) => {
-      const r = await probeHttp(t.url, { readBody: ECHO_SLUGS.has(String(t.slug)) });
+      const r = await resolveFeedStatus(t.feedSlug || null, t.statusPage || null);
       db.prepare(`
         INSERT INTO status_uplink_results (target_id, status, latency_ms, code, body_snip, error, checked_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `).run(t.id, r.status, r.ms, r.code, r.body || null, r.error || null, Date.now());
+        VALUES (?, ?, NULL, NULL, ?, ?, ?)
+      `).run(t.id, r.status, r.detail || null, r.error || null, Date.now());
       pruneUplinkResults(t.id);
     });
 
-    const hosts = db.prepare('SELECT * FROM status_uplink_hosts WHERE enabled = 1').all() as any[];
-    await mapPool(hosts, CONCURRENCY, async (h) => {
-      const r = await probeTcp(h.host, h.port || 443);
-      db.prepare(`
-        INSERT INTO status_uplink_host_results (host_id, status, latency_ms, error, checked_at)
-        VALUES (?, ?, ?, ?, ?)
-      `).run(h.id, r.status, r.ms, r.error || null, Date.now());
-      const hostRows = db
-        .prepare(
-          'SELECT checked_at AS checkedAt FROM status_uplink_host_results WHERE host_id = ? ORDER BY checked_at DESC LIMIT 60'
-        )
-        .all(h.id) as { checkedAt: number }[];
-      if (hostRows.length >= 60) {
-        const cutoff = hostRows[hostRows.length - 1].checkedAt;
-        db.prepare('DELETE FROM status_uplink_host_results WHERE host_id = ? AND checked_at < ?').run(h.id, cutoff);
-      }
-    });
-
     lastUplinkRunAt = Date.now();
-    return { ok: true, targets: targets.length, hosts: hosts.length, at: lastUplinkRunAt };
+    return { ok: true, targets: targets.length, hosts: 0, at: lastUplinkRunAt, mode: 'internet-feeds' };
   } finally {
     uplinkRunning = false;
   }
 }
 
 function latestHeartbeat(monitorId: number) {
-  return db.prepare(`
+  return db
+    .prepare(
+      `
     SELECT status, latency_ms AS latencyMs, code, error, checked_at AS checkedAt
     FROM status_heartbeats WHERE monitor_id = ? ORDER BY checked_at DESC LIMIT 1
-  `).get(monitorId) as any;
+  `
+    )
+    .get(monitorId) as any;
 }
 
 function heartbeatHistory(monitorId: number, limit = 48) {
-  return db.prepare(`
+  return db
+    .prepare(
+      `
     SELECT status, latency_ms AS latencyMs, code, checked_at AS t
     FROM status_heartbeats WHERE monitor_id = ?
     ORDER BY checked_at DESC LIMIT ?
-  `).all(monitorId, limit).reverse() as any[];
+  `
+    )
+    .all(monitorId, limit)
+    .reverse() as any[];
 }
 
 function uptimePct(monitorId: number): number {
-  const rows = db.prepare(`
-    SELECT status FROM status_heartbeats WHERE monitor_id = ? ORDER BY checked_at DESC LIMIT 100
-  `).all(monitorId) as { status: string }[];
+  const rows = db
+    .prepare(`SELECT status FROM status_heartbeats WHERE monitor_id = ? ORDER BY checked_at DESC LIMIT 100`)
+    .all(monitorId) as { status: string }[];
   if (!rows.length) return 100;
   const up = rows.filter((r) => r.status === 'up' || r.status === 'degraded').length;
   return Math.round((up / rows.length) * 1000) / 10;
 }
 
 export function listStatusOverview() {
-  const groups = db.prepare('SELECT id, slug, name, sort_order AS sortOrder, icon FROM status_groups ORDER BY sort_order, name').all() as any[];
-  const monitors = db.prepare(`
+  const groups = db
+    .prepare('SELECT id, slug, name, sort_order AS sortOrder, icon FROM status_groups ORDER BY sort_order, name')
+    .all() as any[];
+  const monitors = db
+    .prepare(
+      `
     SELECT m.id, m.group_id AS groupId, m.name, m.url, m.type, m.interval_sec AS intervalSec,
-           m.enabled, m.builtin, g.slug AS groupSlug, g.name AS groupName
+           m.enabled, m.builtin, m.feed_slug AS feedSlug, m.status_page AS statusPage,
+           g.slug AS groupSlug, g.name AS groupName
     FROM status_monitors m
     JOIN status_groups g ON g.id = m.group_id
     ORDER BY g.sort_order, m.name
-  `).all() as any[];
+  `
+    )
+    .all() as any[];
 
   const enriched = monitors.map((m) => {
     const last = latestHeartbeat(m.id);
@@ -532,16 +664,18 @@ export function listStatusOverview() {
       enabled: !!m.enabled,
       builtin: !!m.builtin,
       status: (last?.status as HeartbeatStatus) || 'pending',
-      latencyMs: last?.latencyMs ?? null,
+      latencyMs: null,
       code: last?.code ?? null,
       lastError: last?.error ?? null,
+      detail: last?.error ?? null,
       lastChecked: last?.checkedAt ?? null,
       uptimePct: uptimePct(m.id),
+      source: 'internet',
       history: history.map((h) => ({
         t: h.t,
         up: h.status === 'up' || h.status === 'degraded',
         status: h.status,
-        ms: h.latencyMs,
+        ms: null,
       })),
     };
   });
@@ -552,105 +686,96 @@ export function listStatusOverview() {
     degraded: enriched.filter((m) => m.status === 'degraded').length,
     down: enriched.filter((m) => m.status === 'down').length,
     pending: enriched.filter((m) => m.status === 'pending').length,
-    avgMs: (() => {
-      const vals = enriched.map((m) => m.latencyMs).filter((v): v is number => typeof v === 'number');
-      if (!vals.length) return null;
-      return Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
-    })(),
+    avgMs: null as number | null,
     lastRunAt,
     scanning: running,
-    egressOk: (() => {
-      const settled = enriched.filter((m) => m.status !== 'pending');
-      if (settled.length < 5) return null as boolean | null;
-      const reachable = settled.filter((m) => m.status === 'up' || m.status === 'degraded').length;
-      return reachable / settled.length >= 0.2;
-    })(),
+    mode: 'internet-feeds' as const,
+    egressOk: true as boolean | null,
   };
 
   return { groups, monitors: enriched, summary };
 }
 
 export function listUplinkOverview() {
-  const targets = db.prepare(`
-    SELECT id, slug, name, region, url, kind, enabled, builtin FROM status_uplink_targets ORDER BY name
-  `).all() as any[];
+  const targets = db
+    .prepare(
+      `
+    SELECT id, slug, name, region, url, kind, enabled, builtin,
+           feed_slug AS feedSlug, status_page AS statusPage
+    FROM status_uplink_targets ORDER BY name
+  `
+    )
+    .all() as any[];
 
   const enrichedTargets = targets.map((t) => {
-    const last = db.prepare(`
+    const last = db
+      .prepare(
+        `
       SELECT status, latency_ms AS latencyMs, code, body_snip AS bodySnip, error, checked_at AS checkedAt
       FROM status_uplink_results WHERE target_id = ? ORDER BY checked_at DESC LIMIT 1
-    `).get(t.id) as any;
-    const history = db.prepare(`
+    `
+      )
+      .get(t.id) as any;
+    const history = db
+      .prepare(
+        `
       SELECT status, latency_ms AS latencyMs, checked_at AS t
       FROM status_uplink_results WHERE target_id = ? ORDER BY checked_at DESC LIMIT 30
-    `).all(t.id).reverse() as any[];
+    `
+      )
+      .all(t.id)
+      .reverse() as any[];
     return {
       ...t,
       enabled: !!t.enabled,
       builtin: !!t.builtin,
       status: last?.status || 'pending',
-      latencyMs: last?.latencyMs ?? null,
+      latencyMs: null,
       code: last?.code ?? null,
       bodySnip: last?.bodySnip ?? null,
       lastError: last?.error ?? null,
       lastChecked: last?.checkedAt ?? null,
-      history: history.map((h) => ({ t: h.t, up: h.status === 'up' || h.status === 'degraded', ms: h.latencyMs, status: h.status })),
+      history: history.map((h) => ({
+        t: h.t,
+        up: h.status === 'up' || h.status === 'degraded',
+        ms: null,
+        status: h.status,
+      })),
     };
   });
 
-  const hosts = db.prepare('SELECT id, label, host, port, type, enabled FROM status_uplink_hosts ORDER BY id DESC').all() as any[];
-  const enrichedHosts = hosts.map((h) => {
-    const last = db.prepare(`
-      SELECT status, latency_ms AS latencyMs, error, checked_at AS checkedAt
-      FROM status_uplink_host_results WHERE host_id = ? ORDER BY checked_at DESC LIMIT 1
-    `).get(h.id) as any;
-    return {
-      ...h,
-      enabled: !!h.enabled,
-      status: last?.status || 'pending',
-      latencyMs: last?.latencyMs ?? null,
-      lastError: last?.error ?? null,
-      lastChecked: last?.checkedAt ?? null,
-    };
-  });
-
-  // Best-effort public egress IP from echo services
-  let publicIp: string | null = null;
-  for (const t of enrichedTargets) {
-    if (!t.bodySnip) continue;
-    if (['ifconfig-me', 'icanhazip', 'ipify'].includes(t.slug)) {
-      const ip = String(t.bodySnip).trim().split(/\s+/)[0];
-      if (/^\d{1,3}(\.\d{1,3}){3}$/.test(ip) || ip.includes(':')) {
-        publicIp = ip;
-        break;
-      }
-    }
-  }
-
-  const latencies = enrichedTargets.map((t) => t.latencyMs).filter((v): v is number => typeof v === 'number');
   const summary = {
-    publicIp,
+    publicIp: null as string | null,
     total: enrichedTargets.length,
     up: enrichedTargets.filter((t) => t.status === 'up').length,
     degraded: enrichedTargets.filter((t) => t.status === 'degraded').length,
     down: enrichedTargets.filter((t) => t.status === 'down').length,
-    avgMs: latencies.length ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length) : null,
+    avgMs: null as number | null,
     lastRunAt: lastUplinkRunAt,
+    mode: 'internet-feeds' as const,
   };
 
-  return { targets: enrichedTargets, hosts: enrichedHosts, summary };
+  // Local IP/host probes intentionally unused — status is internet-feed only
+  return { targets: enrichedTargets, hosts: [], summary };
 }
 
 export function createMonitor(input: {
   name: string;
-  url: string;
+  url?: string;
+  feedSlug?: string;
+  statusPage?: string;
   groupSlug?: string;
   type?: MonitorType;
   intervalSec?: number;
 }) {
   const name = String(input.name || '').trim();
-  const url = String(input.url || '').trim();
-  if (!name || !url) throw new Error('Name and URL are required');
+  const feedSlug = String(input.feedSlug || '').trim().toLowerCase().replace(/\s+/g, '-');
+  const statusPage = String(input.statusPage || '').trim() || null;
+  const url = String(input.url || '').trim() || (feedSlug ? `https://isitdownstatus.com/${feedSlug}` : '');
+  if (!name) throw new Error('Name is required');
+  if (!feedSlug && !statusPage) {
+    throw new Error('Provide an internet feed slug (isitdownstatus) and/or official status page JSON URL — local probing is disabled');
+  }
   const slug = input.groupSlug || 'custom';
   let group = db.prepare('SELECT id FROM status_groups WHERE slug = ?').get(slug) as { id: number } | undefined;
   if (!group) {
@@ -662,12 +787,15 @@ export function createMonitor(input: {
     );
     group = db.prepare('SELECT id FROM status_groups WHERE slug = ?').get('custom') as { id: number };
   }
-  const type = (input.type || 'http') as MonitorType;
-  const interval = Math.max(30, Number(input.intervalSec) || DEFAULT_INTERVAL_SEC);
-  const info = db.prepare(`
-    INSERT INTO status_monitors (group_id, name, url, type, interval_sec, enabled, builtin)
-    VALUES (?, ?, ?, ?, ?, 1, 0)
-  `).run(group.id, name, url, type, interval);
+  const interval = Math.max(60, Number(input.intervalSec) || DEFAULT_INTERVAL_SEC);
+  const info = db
+    .prepare(
+      `
+    INSERT INTO status_monitors (group_id, name, url, type, interval_sec, enabled, builtin, feed_slug, status_page)
+    VALUES (?, ?, ?, 'feed', ?, 1, 0, ?, ?)
+  `
+    )
+    .run(group.id, name, url || 'https://isitdownstatus.com', interval, feedSlug || null, statusPage);
   return db.prepare('SELECT * FROM status_monitors WHERE id = ?').get(info.lastInsertRowid);
 }
 
@@ -684,53 +812,37 @@ export function setMonitorEnabled(id: number, enabled: boolean) {
   if (!info.changes) throw new Error('Monitor not found');
 }
 
-export function createUplinkHost(input: { label: string; host: string; port?: number; type?: string }) {
-  const label = String(input.label || '').trim();
-  const host = String(input.host || '').trim().replace(/^https?:\/\//, '').split('/')[0];
-  if (!label || !host) throw new Error('Label and host/IP are required');
-  let port = Number(input.port);
-  let hostname = host;
-  if (host.includes(':') && !host.includes('::')) {
-    const parts = host.split(':');
-    hostname = parts[0];
-    if (!port) port = Number(parts[1]);
-  }
-  if (!port || Number.isNaN(port)) port = 443;
-  const info = db.prepare(`
-    INSERT INTO status_uplink_hosts (label, host, port, type, enabled)
-    VALUES (?, ?, ?, ?, 1)
-  `).run(label, hostname, port, input.type || 'tcp');
-  return db.prepare('SELECT * FROM status_uplink_hosts WHERE id = ?').get(info.lastInsertRowid);
+/** @deprecated Local IP probes disabled — kept for API compatibility. */
+export function createUplinkHost(_input: { label: string; host: string; port?: number; type?: string }) {
+  throw new Error('Local IP/host probing is disabled. Status Hub uses internet status feeds only.');
 }
 
+/** @deprecated */
 export function deleteUplinkHost(id: number) {
   db.prepare('DELETE FROM status_uplink_host_results WHERE host_id = ?').run(id);
   const info = db.prepare('DELETE FROM status_uplink_hosts WHERE id = ?').run(id);
   if (!info.changes) throw new Error('Host not found');
 }
 
-/** Prometheus / OpenMetrics text exposition for optional Grafana scraping. */
 export function prometheusMetrics(): string {
   const overview = listStatusOverview();
   const uplink = listUplinkOverview();
   const lines: string[] = [
-    '# HELP status_hub_monitor_up 1 if monitor is up',
+    '# HELP status_hub_monitor_up 1 if internet status feed reports up',
     '# TYPE status_hub_monitor_up gauge',
   ];
   for (const m of overview.monitors) {
     const labels = `id="${m.id}",name="${escapeLabel(m.name)}",group="${escapeLabel(m.groupSlug)}"`;
     lines.push(`status_hub_monitor_up{${labels}} ${m.status === 'up' || m.status === 'degraded' ? 1 : 0}`);
-    if (m.latencyMs != null) {
-      lines.push(`status_hub_monitor_latency_ms{${labels}} ${m.latencyMs}`);
-    }
     lines.push(`status_hub_monitor_uptime_pct{${labels}} ${m.uptimePct}`);
   }
-  lines.push('# HELP status_hub_uplink_latency_ms Latency to external uplink probe');
-  lines.push('# TYPE status_hub_uplink_latency_ms gauge');
+  lines.push('# HELP status_hub_backbone_up Internet backbone / CDN feed status');
+  lines.push('# TYPE status_hub_backbone_up gauge');
   for (const t of uplink.targets) {
-    if (t.latencyMs == null) continue;
     lines.push(
-      `status_hub_uplink_latency_ms{slug="${escapeLabel(t.slug)}",name="${escapeLabel(t.name)}",region="${escapeLabel(t.region || '')}"} ${t.latencyMs}`
+      `status_hub_backbone_up{slug="${escapeLabel(t.slug)}",name="${escapeLabel(t.name)}"} ${
+        t.status === 'up' || t.status === 'degraded' ? 1 : 0
+      }`
     );
   }
   lines.push(`status_hub_last_run_timestamp ${lastRunAt ? Math.floor(lastRunAt / 1000) : 0}`);
@@ -742,9 +854,8 @@ function escapeLabel(s: string) {
   return String(s || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, ' ');
 }
 
-export function startStatusHub(intervalMs = 60_000) {
+export function startStatusHub(intervalMs = 90_000) {
   initStatusHub();
-  // Warm caches without blocking listen
   setTimeout(() => {
     runStatusChecks().catch(() => undefined);
     runUplinkChecks().catch(() => undefined);
@@ -756,6 +867,3 @@ export function startStatusHub(intervalMs = 60_000) {
   }, intervalMs);
   if (typeof timer.unref === 'function') timer.unref();
 }
-
-// silence unused helper warning in strict builds
-void columnExists;
