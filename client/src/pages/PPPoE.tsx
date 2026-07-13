@@ -1,4 +1,4 @@
-import { startTransition, useEffect, useRef, useState } from 'react';
+import { startTransition, useEffect, useMemo, useRef, useState } from 'react';
 import { Users, WifiOff, Activity, Layers, Server, ReceiptText, Plus, Pencil, Trash2, KeyRound, Eye, EyeOff, MapPin, DownloadCloud, RefreshCw, Link2, ShieldOff, ShieldCheck, Loader2, ClipboardCheck } from 'lucide-react';
 import Layout from '../components/Layout';
 import {
@@ -160,22 +160,46 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
             setUsers(next);
             return;
           }
-          // Silent polls: merge into existing rows so the table doesn't remount/freeze.
+          // Silent polls: merge into existing rows; keep previous refs when nothing meaningful changed
+          // so the table doesn't re-render every few seconds.
           setUsers((prev) => {
             if (!prev.length) return next;
             const nextById = new Map(next.map((u: PUser) => [u.id, u]));
+            let changed = prev.length !== next.length;
             const merged = prev.map((old) => {
               const u = nextById.get(old.id);
-              if (!u) return old;
+              if (!u) {
+                changed = true;
+                return old;
+              }
               nextById.delete(old.id);
+              const same =
+                old.username === u.username &&
+                old.customer === u.customer &&
+                old.account === u.account &&
+                old.profile === u.profile &&
+                old.mikrotikProfile === u.mikrotikProfile &&
+                old.status === u.status &&
+                old.subscriptionDue === u.subscriptionDue &&
+                !!old.sessionOnline === !!u.sessionOnline &&
+                Number(old.usage24hRx || 0) === Number(u.usage24hRx || 0) &&
+                Number(old.usage24hTx || 0) === Number(u.usage24hTx || 0) &&
+                (!includeTraffic ||
+                  (Number(old.downloadBps || 0) === Number(u.downloadBps || 0) &&
+                    Number(old.uploadBps || 0) === Number(u.uploadBps || 0)));
+              if (same) return old;
+              changed = true;
               return {
                 ...u,
                 downloadBps: includeTraffic ? u.downloadBps : old.downloadBps,
                 uploadBps: includeTraffic ? u.uploadBps : old.uploadBps,
               };
             });
-            for (const u of nextById.values()) merged.push(u);
-            return merged;
+            if (nextById.size) {
+              changed = true;
+              for (const u of nextById.values()) merged.push(u);
+            }
+            return changed ? merged : prev;
           });
         };
         if (opts?.silent) startTransition(apply);
@@ -215,7 +239,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
         },
       })
       .then((r) => {
-        const next = r.data.sessions || (Array.isArray(r.data) ? r.data : []);
+        const next: any[] = r.data.sessions || (Array.isArray(r.data) ? r.data : []);
         const apply = () => {
           if (!opts?.silent) {
             setActive(next);
@@ -223,27 +247,48 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
           }
           setActive((prev) => {
             if (!prev.length) return next;
-            const nextByName = new Map(next.map((s: any) => [String(s.username || '').toLowerCase(), s]));
+            const nextByName = new Map<string, any>(
+              next.map((s: any) => [String(s.username || '').toLowerCase(), s])
+            );
+            let changed = prev.length !== next.length;
             const merged = prev.map((old: any) => {
-              const s = nextByName.get(String(old.username || '').toLowerCase());
-              if (!s) return old;
-              nextByName.delete(String(old.username || '').toLowerCase());
-              if (!includeTraffic) {
-                return { ...s, downloadBps: old.downloadBps, uploadBps: old.uploadBps };
+              const key = String(old.username || '').toLowerCase();
+              const s = nextByName.get(key);
+              if (!s) {
+                changed = true;
+                return old;
               }
-              const hasDl = Object.prototype.hasOwnProperty.call(s, 'downloadBps');
-              const hasUl = Object.prototype.hasOwnProperty.call(s, 'uploadBps');
+              nextByName.delete(key);
+              const nextDl = includeTraffic && Object.prototype.hasOwnProperty.call(s, 'downloadBps')
+                ? Number(s.downloadBps) || 0
+                : old.downloadBps;
+              const nextUl = includeTraffic && Object.prototype.hasOwnProperty.call(s, 'uploadBps')
+                ? Number(s.uploadBps) || 0
+                : old.uploadBps;
+              const same =
+                String(old.username) === String(s.username) &&
+                String(old.customer || '') === String(s.customer || '') &&
+                String(old.profile || '') === String(s.profile || '') &&
+                String(old.address || '') === String(s.address || '') &&
+                String(old.uptime || '') === String(s.uptime || '') &&
+                String(old.caller || '') === String(s.caller || '') &&
+                Number(old.downloadBps || 0) === Number(nextDl || 0) &&
+                Number(old.uploadBps || 0) === Number(nextUl || 0);
+              if (same) return old;
+              changed = true;
               return {
                 ...s,
-                downloadBps: hasDl ? Number((s as any).downloadBps) || 0 : old.downloadBps,
-                uploadBps: hasUl ? Number((s as any).uploadBps) || 0 : old.uploadBps,
+                downloadBps: nextDl,
+                uploadBps: nextUl,
               };
             });
-            for (const s of nextByName.values()) merged.push(s);
-            return merged;
+            if (nextByName.size) {
+              changed = true;
+              for (const s of nextByName.values()) merged.push(s);
+            }
+            return changed ? merged : prev;
           });
         };
-        // Don't defer traffic updates — keep the Active table live.
         apply();
         if (r.data.error) setTabError(r.data.error);
       })
@@ -421,15 +466,20 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
   }, [tab, current?.id]);
 
   // Live status on Users / Offline; live traffic only on Active Connections.
-  // Active: refresh every 2s while visible; stop completely when tab is hidden.
+  // Pause completely when the browser tab is hidden. Busy flags use refs so the
+  // poll loop isn't torn down/restarted on every toggle (that was causing bursts).
   const usersPollInFlight = useRef(false);
+  const pausePollRef = useRef(false);
+  pausePollRef.current = !!(toggleBusy || bulkBusy || fetching || toggleFor);
+
   useEffect(() => {
     if (!current?.id) return;
     if (tab !== 'users' && tab !== 'offline' && tab !== 'active') return;
 
     let cancelled = false;
     let timer: number | null = null;
-    const POLL_MS = 2000;
+    // Active needs ~2s for live rates; Users/Offline only need occasional status.
+    const POLL_MS = tab === 'active' ? 2000 : 12_000;
 
     const clearTimer = () => {
       if (timer != null) {
@@ -449,13 +499,12 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
     const tick = async () => {
       if (cancelled) return;
       if (document.visibilityState !== 'visible') return;
-      if (toggleBusy || bulkBusy || fetching || toggleFor) {
+      if (pausePollRef.current) {
         schedule(POLL_MS);
         return;
       }
       if (usersPollInFlight.current) {
-        // Don't drop the loop if a tick overlaps — retry shortly after.
-        schedule(400);
+        schedule(Math.min(1000, POLL_MS));
         return;
       }
       usersPollInFlight.current = true;
@@ -469,8 +518,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
       } finally {
         usersPollInFlight.current = false;
         if (!cancelled && document.visibilityState === 'visible') {
-          // Aim for ~2s between poll starts (not 2s after slow requests finish).
-          const wait = Math.max(250, POLL_MS - (Date.now() - started));
+          const wait = Math.max(400, POLL_MS - (Date.now() - started));
           schedule(wait);
         }
       }
@@ -485,7 +533,8 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
     };
 
     document.addEventListener('visibilitychange', onVisibility);
-    void tick();
+    // First silent poll after a short delay so the initial load isn't doubled.
+    schedule(tab === 'active' ? 2000 : 4000);
 
     return () => {
       cancelled = true;
@@ -493,15 +542,26 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
       document.removeEventListener('visibilitychange', onVisibility);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, current?.id, service, toggleBusy, bulkBusy, fetching, toggleFor]);
+  }, [tab, current?.id, service]);
 
-  const filtered = users.filter(
-    (u) =>
-      u.username.toLowerCase().includes(search.toLowerCase()) ||
-      (u.customer || '').toLowerCase().includes(search.toLowerCase()) ||
-      (u.account || '').includes(search)
+  const searchLower = search.toLowerCase();
+  const filtered = useMemo(
+    () =>
+      users.filter(
+        (u) =>
+          u.username.toLowerCase().includes(searchLower) ||
+          (u.customer || '').toLowerCase().includes(searchLower) ||
+          (u.account || '').includes(search)
+      ),
+    [users, search, searchLower]
   );
-  const offline = filtered.filter((u) => !(u.sessionOnline || u.online === 1 || u.online === true) || u.status === 'disabled');
+  const offline = useMemo(
+    () =>
+      filtered.filter(
+        (u) => !(u.sessionOnline || u.online === 1 || u.online === true) || u.status === 'disabled'
+      ),
+    [filtered]
+  );
   const listUsers = tab === 'offline' ? offline : filtered;
   const allSelected = listUsers.length > 0 && listUsers.every((u) => selected.has(u.id));
   const someSelected = listUsers.some((u) => selected.has(u.id));
@@ -646,6 +706,165 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
     loadUsers();
   };
 
+  const userTableColumns = useMemo(
+    () => [
+      {
+        key: 'sel',
+        label: (
+          <input
+            type="checkbox"
+            className="w-4 h-4 accent-brand-500 rounded"
+            checked={allSelected}
+            ref={(el) => {
+              if (el) el.indeterminate = someSelected && !allSelected;
+            }}
+            onChange={toggleSelectAll}
+            aria-label="Select all users"
+          />
+        ),
+        className: 'w-10',
+        sortable: false,
+      },
+      { key: 'user', label: 'Username / Customer' },
+      { key: 'account', label: 'Account #' },
+      { key: 'plan', label: 'Plan' },
+      { key: 'mtProfile', label: 'Profile' },
+      { key: 'status', label: 'Status' },
+      {
+        key: 'usage',
+        label: (
+          <span title="Rolling usage over the last 24 hours">
+            Usage 24h <span className="text-emerald-600">↓</span>/<span className="text-sky-600">↑</span>
+          </span>
+        ),
+      },
+      { key: 'due', label: 'Subscription Due' },
+      { key: 'actions', label: 'Actions', align: 'right' as const, sortable: false },
+    ],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [allSelected, someSelected]
+  );
+
+  const userTableRows = useMemo(
+    () =>
+      listUsers.map((u) => ({
+        key: u.id,
+        sortValues: {
+          user: u.username,
+          account: u.account,
+          plan: u.profile,
+          mtProfile: u.mikrotikProfile || '',
+          status: isDisabledForNonPayment(u)
+            ? `${userStatusLabel(u)} non-payment`
+            : userStatusLabel(u),
+          usage: (Number(u.usage24hRx) || 0) + (Number(u.usage24hTx) || 0),
+          due: u.subscriptionDue,
+        },
+        cells: [
+          <input
+            key="cb"
+            type="checkbox"
+            className="w-4 h-4 accent-brand-500 rounded"
+            checked={selected.has(u.id)}
+            onChange={() => toggleSelect(u.id)}
+            aria-label={`Select ${u.username}`}
+          />,
+          <div key="u">
+            <div className="font-semibold text-slate-800">{u.username}</div>
+            <div className="text-xs text-slate-400">{u.customer}</div>
+          </div>,
+          <span key="acc" className="text-slate-500">{u.account}</span>,
+          <span key="plan" className="text-slate-600 font-medium" title="Billing plan (from comment / panel)">
+            {u.profile || '—'}
+          </span>,
+          <span key="mtp" className="font-mono text-xs text-slate-700" title="MikroTik /ppp/secret profile">
+            {u.mikrotikProfile || '—'}
+          </span>,
+          <UserStatusCell key="st" u={u} />,
+          <UsagePair key="us" rxBytes={u.usage24hRx} txBytes={u.usage24hTx} />,
+          <span key="due" className="text-slate-500">{u.subscriptionDue}</span>,
+          <div key="a" className="flex items-center justify-end gap-1">
+            <IconAction icon={Link2} title="Copy pay link" tone="sky" onClick={() => copyPayLink(u)} />
+            <IconAction icon={ReceiptText} title="Process Payment" tone="emerald" onClick={() => setPayFor(u)} />
+            <IconAction icon={Pencil} title="Edit user" tone="sky" onClick={() => setEditFor(u)} />
+            <IconAction
+              icon={KeyRound}
+              title={u.status === 'disabled' ? 'Enable in MikroTik' : 'Disable in MikroTik'}
+              tone={u.status === 'disabled' ? 'emerald' : 'rose'}
+              onClick={() => setToggleFor(u)}
+            />
+            <IconAction icon={Trash2} title="Delete" tone="rose" onClick={() => remove(u.id)} />
+          </div>,
+        ],
+      })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [listUsers, selected]
+  );
+
+  const activeTableColumns = useMemo(
+    () => [
+      { key: 'user', label: 'Username' },
+      { key: 'customer', label: 'Customer' },
+      { key: 'profile', label: 'Profile' },
+      { key: 'addr', label: 'Address' },
+      {
+        key: 'traffic',
+        label: (
+          <span>
+            Traffic <span className="text-emerald-600">↓</span>/<span className="text-sky-600">↑</span>
+          </span>
+        ),
+      },
+      { key: 'uptime', label: 'Uptime' },
+      { key: 'caller', label: 'Caller ID (MAC)' },
+    ],
+    []
+  );
+
+  const activeSearch = search.trim().toLowerCase();
+  const activeTableRows = useMemo(
+    () =>
+      active
+        .filter((a) => {
+          if (!activeSearch) return true;
+          return (
+            String(a.username || '').toLowerCase().includes(activeSearch) ||
+            String(a.customer || '').toLowerCase().includes(activeSearch) ||
+            String(a.address || '').toLowerCase().includes(activeSearch) ||
+            String(a.caller || '').toLowerCase().includes(activeSearch) ||
+            String(a.profile || '').toLowerCase().includes(activeSearch)
+          );
+        })
+        .map((a, i) => {
+          const down = Number(a.downloadBps) || 0;
+          const up = Number(a.uploadBps) || 0;
+          return {
+            key: String(a.username || a.address || i),
+            sortValues: {
+              user: a.username,
+              customer: a.customer,
+              profile: a.profile,
+              addr: a.address,
+              traffic: down + up,
+              uptime: a.uptime,
+              caller: a.caller,
+            },
+            cells: [
+              <span key="u" className="font-semibold text-slate-800">{a.username}</span>,
+              a.customer,
+              <span key="p" className="font-mono text-xs text-slate-700" title="MikroTik /ppp/secret profile">
+                {a.profile || '—'}
+              </span>,
+              <span key="addr" className="font-mono text-xs">{a.address}</span>,
+              <TrafficPair key="tr" downloadBps={down} uploadBps={up} />,
+              a.uptime,
+              <span key="c" className="font-mono text-sm text-sky-700">{a.caller}</span>,
+            ],
+          };
+        }),
+    [active, activeSearch]
+  );
+
   const deleteProfile = async (p: any) => {
     if (!confirm(`Delete profile "${p.name}"?`)) return;
     try {
@@ -746,86 +965,8 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
 
             <div className="p-4 pt-0">
               <DataTable
-                columns={[
-                  {
-                    key: 'sel',
-                    label: (
-                      <input
-                        type="checkbox"
-                        className="w-4 h-4 accent-brand-500 rounded"
-                        checked={allSelected}
-                        ref={(el) => {
-                          if (el) el.indeterminate = someSelected && !allSelected;
-                        }}
-                        onChange={toggleSelectAll}
-                        aria-label="Select all users"
-                      />
-                    ),
-                    className: 'w-10',
-                  },
-                  { key: 'user', label: 'Username / Customer' },
-                  { key: 'account', label: 'Account #' },
-                  { key: 'plan', label: 'Plan' },
-                  { key: 'mtProfile', label: 'Profile' },
-                  { key: 'status', label: 'Status' },
-                  { key: 'usage', label: (
-                    <span title="Rolling usage over the last 24 hours">
-                      Usage 24h <span className="text-emerald-600">↓</span>/<span className="text-sky-600">↑</span>
-                    </span>
-                  ) },
-                  { key: 'due', label: 'Subscription Due' },
-                  { key: 'actions', label: 'Actions', align: 'right' },
-                ]}
-                rows={listUsers.map((u) => ({
-                  key: u.id,
-                  sortValues: {
-                    user: u.username,
-                    account: u.account,
-                    plan: u.profile,
-                    mtProfile: u.mikrotikProfile || '',
-                    status: isDisabledForNonPayment(u)
-                      ? `${userStatusLabel(u)} non-payment`
-                      : userStatusLabel(u),
-                    usage: (Number(u.usage24hRx) || 0) + (Number(u.usage24hTx) || 0),
-                    due: u.subscriptionDue,
-                  },
-                  cells: [
-                    <input
-                      key="cb"
-                      type="checkbox"
-                      className="w-4 h-4 accent-brand-500 rounded"
-                      checked={selected.has(u.id)}
-                      onChange={() => toggleSelect(u.id)}
-                      aria-label={`Select ${u.username}`}
-                    />,
-                    <div key="u">
-                      <div className="font-semibold text-slate-800">{u.username}</div>
-                      <div className="text-xs text-slate-400">{u.customer}</div>
-                    </div>,
-                    <span className="text-slate-500">{u.account}</span>,
-                    <span className="text-slate-600 font-medium" title="Billing plan (from comment / panel)">
-                      {u.profile || '—'}
-                    </span>,
-                    <span className="font-mono text-xs text-slate-700" title="MikroTik /ppp/secret profile">
-                      {u.mikrotikProfile || '—'}
-                    </span>,
-                    <UserStatusCell u={u} />,
-                    <UsagePair rxBytes={u.usage24hRx} txBytes={u.usage24hTx} />,
-                    <span className="text-slate-500">{u.subscriptionDue}</span>,
-                    <div key="a" className="flex items-center justify-end gap-1">
-                      <IconAction icon={Link2} title="Copy pay link" tone="sky" onClick={() => copyPayLink(u)} />
-                      <IconAction icon={ReceiptText} title="Process Payment" tone="emerald" onClick={() => setPayFor(u)} />
-                      <IconAction icon={Pencil} title="Edit user" tone="sky" onClick={() => setEditFor(u)} />
-                      <IconAction
-                        icon={KeyRound}
-                        title={u.status === 'disabled' ? 'Enable in MikroTik' : 'Disable in MikroTik'}
-                        tone={u.status === 'disabled' ? 'emerald' : 'rose'}
-                        onClick={() => setToggleFor(u)}
-                      />
-                      <IconAction icon={Trash2} title="Delete" tone="rose" onClick={() => remove(u.id)} />
-                    </div>,
-                  ],
-                }))}
+                columns={userTableColumns}
+                rows={userTableRows}
                 emptyMessage="No users found."
               />
             </div>
@@ -858,58 +999,8 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
               )}
               {tabError && <div className="text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">{tabError}</div>}
               <DataTable
-                columns={[
-                  { key: 'user', label: 'Username' },
-                  { key: 'customer', label: 'Customer' },
-                  { key: 'profile', label: 'Profile' },
-                  { key: 'addr', label: 'Address' },
-                  { key: 'traffic', label: (
-                    <span>
-                      Traffic <span className="text-emerald-600">↓</span>/<span className="text-sky-600">↑</span>
-                    </span>
-                  ) },
-                  { key: 'uptime', label: 'Uptime' },
-                  { key: 'caller', label: 'Caller ID (MAC)' },
-                ]}
-                rows={active
-                  .filter((a) => {
-                    const q = search.trim().toLowerCase();
-                    if (!q) return true;
-                    return (
-                      String(a.username || '').toLowerCase().includes(q) ||
-                      String(a.customer || '').toLowerCase().includes(q) ||
-                      String(a.address || '').toLowerCase().includes(q) ||
-                      String(a.caller || '').toLowerCase().includes(q) ||
-                      String(a.profile || '').toLowerCase().includes(q)
-                    );
-                  })
-                  .map((a, i) => {
-                    const down = Number(a.downloadBps) || 0;
-                    const up = Number(a.uploadBps) || 0;
-                    return {
-                      key: String(a.username || a.address || i),
-                      sortValues: {
-                        user: a.username,
-                        customer: a.customer,
-                        profile: a.profile,
-                        addr: a.address,
-                        traffic: down + up,
-                        uptime: a.uptime,
-                        caller: a.caller,
-                      },
-                      cells: [
-                        <span className="font-semibold text-slate-800">{a.username}</span>,
-                        a.customer,
-                        <span className="font-mono text-xs text-slate-700" title="MikroTik /ppp/secret profile">
-                          {a.profile || '—'}
-                        </span>,
-                        <span className="font-mono text-xs">{a.address}</span>,
-                        <TrafficPair downloadBps={down} uploadBps={up} />,
-                        a.uptime,
-                        <span className="font-mono text-sm text-sky-700">{a.caller}</span>,
-                      ],
-                    };
-                  })}
+                columns={activeTableColumns}
+                rows={activeTableRows}
                 emptyMessage={current ? 'No active PPP sessions on this router.' : 'Select a router to view active connections.'}
               />
             </div>

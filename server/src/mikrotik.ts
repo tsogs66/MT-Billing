@@ -1301,11 +1301,13 @@ export async function fetchPppActiveTraffic(
 
     // ---- 1) Interface byte counters → bps via previous poll snapshot (no sleep) ----
     let ifaceMap = new Map<string, { down: number; up: number; iface: string }>();
+    let hadPriorSnap = false;
     try {
       ifaceMap = await readPppIfaceByteCounters(api);
       const snapKey = routerSnapKey(conn);
       const now = Date.now();
       const prev = lastPppIfaceSnap.get(snapKey);
+      hadPriorSnap = !!(prev && prev.byKey.size);
       lastPppIfaceSnap.set(snapKey, { t: now, byKey: ifaceMap });
 
       if (prev && prev.byKey.size) {
@@ -1350,43 +1352,50 @@ export async function fetchPppActiveTraffic(
     }
 
     // ---- 2) Overlay simple-queue live rates when present ----
-    try {
-      let simple = (await api.write('/queue/simple/print')) as Record<string, string>[];
-      if (!(simple || []).some((q) => q.rate != null && String(q.rate) !== '' && String(q.rate) !== '0/0')) {
-        try {
-          const withStats = (await api.write('/queue/simple/print', ['=stats='])) as Record<string, string>[];
-          if (withStats?.length) simple = withStats;
-        } catch {
-          /* keep first */
+    // Fast polls with a prior counter snapshot already have usable rates; skip the
+    // extra queue print so 2s Active refreshes stay cheap.
+    if (!fast || !hadPriorSnap) {
+      try {
+        let simple = (await api.write('/queue/simple/print')) as Record<string, string>[];
+        if (!(simple || []).some((q) => q.rate != null && String(q.rate) !== '' && String(q.rate) !== '0/0')) {
+          try {
+            const withStats = (await api.write('/queue/simple/print', ['=stats='])) as Record<string, string>[];
+            if (withStats?.length) simple = withStats;
+          } catch {
+            /* keep first */
+          }
         }
-      }
-      for (const q of simple || []) {
-        const qName = String(q.name || '');
-        let key = pppIfaceUserKey(qName) || '';
-        if (!key && wantKeys.has(pppNameKey(qName))) key = pppNameKey(qName);
-        if (!key) {
-          const target = String(q.target || q['dst-address'] || '');
-          const ipMatch = target.match(/(\d{1,3}(?:\.\d{1,3}){3})/);
-          if (ipMatch?.[1] && addrToUser.has(ipMatch[1])) key = addrToUser.get(ipMatch[1])!;
+        for (const q of simple || []) {
+          const qName = String(q.name || '');
+          let key = pppIfaceUserKey(qName) || '';
+          if (!key && wantKeys.has(pppNameKey(qName))) key = pppNameKey(qName);
+          if (!key) {
+            const target = String(q.target || q['dst-address'] || '');
+            const ipMatch = target.match(/(\d{1,3}(?:\.\d{1,3}){3})/);
+            if (ipMatch?.[1] && addrToUser.has(ipMatch[1])) key = addrToUser.get(ipMatch[1])!;
+          }
+          if (!key || !wantKeys.has(key)) continue;
+          const raw = String(q.rate || '');
+          if (!raw || raw === '0' || raw === '0/0') continue;
+          const parts = raw.split('/');
+          const upload = parseRosRate(parts[0]);
+          const download = parseRosRate(parts[1] || parts[0]);
+          if (download > 0 || upload > 0) setRate(key, download, upload);
         }
-        if (!key || !wantKeys.has(key)) continue;
-        const raw = String(q.rate || '');
-        if (!raw || raw === '0' || raw === '0/0') continue;
-        const parts = raw.split('/');
-        const upload = parseRosRate(parts[0]);
-        const download = parseRosRate(parts[1] || parts[0]);
-        if (download > 0 || upload > 0) setRate(key, download, upload);
+      } catch {
+        /* optional */
       }
-    } catch {
-      /* optional */
     }
 
     // ---- 3) monitor-traffic for users still at 0 (batched). Cap work on fast polls. ----
-    const needProbe = [...wantKeys].filter((k) => {
-      const u = nameByKey.get(k)!;
-      const t = out[u];
-      return !t || (t.download === 0 && t.upload === 0);
-    });
+    // With a prior snap, 0 from counter deltas means idle — don't probe every 2s.
+    const needProbe = hadPriorSnap && fast
+      ? []
+      : [...wantKeys].filter((k) => {
+          const u = nameByKey.get(k)!;
+          const t = out[u];
+          return !t || (t.download === 0 && t.upload === 0);
+        });
     if (needProbe.length) {
       try {
         const ifaceByKey = new Map<string, string>();
