@@ -157,7 +157,12 @@ fi
 
 echo "[3/7] Cloning MT-Billing (${REPO_BRANCH})…"
 mkdir -p "$(dirname "$INSTALL_DIR")"
+# Root runs git against a tree later owned by the service user — mark safe.
+git config --global --add safe.directory "$INSTALL_DIR" 2>/dev/null || true
+git config --system --add safe.directory "$INSTALL_DIR" 2>/dev/null || true
 if [[ -d "$INSTALL_DIR/.git" ]]; then
+  # Fix ownership from a previous partial first-boot, then update.
+  chown -R root:root "$INSTALL_DIR" 2>/dev/null || true
   git -C "$INSTALL_DIR" fetch origin
   git -C "$INSTALL_DIR" checkout "$REPO_BRANCH"
   git -C "$INSTALL_DIR" pull --ff-only origin "$REPO_BRANCH" || true
@@ -166,9 +171,12 @@ else
   git clone --branch "$REPO_BRANCH" --depth 1 "$REPO_URL" "$INSTALL_DIR"
 fi
 chown -R "${SERVICE_USER}:${SERVICE_USER}" "$INSTALL_DIR"
+# Service user also needs safe.directory when running git later (updates).
+sudo -u "$SERVICE_USER" git config --global --add safe.directory "$INSTALL_DIR" 2>/dev/null || true
 
 echo "[4/7] Building application…"
-sudo -u "$SERVICE_USER" bash -c "cd '$INSTALL_DIR' && npm install && npm run build && npm --prefix server run build"
+# Cap Node heap on small boards so the Vite/tsc build survives 1 GB RAM + swap.
+sudo -u "$SERVICE_USER" bash -c "cd '$INSTALL_DIR' && NODE_OPTIONS='--max-old-space-size=768' npm install && NODE_OPTIONS='--max-old-space-size=768' npm run build && NODE_OPTIONS='--max-old-space-size=768' npm --prefix server run build"
 
 echo "[5/7] Writing environment…"
 JWT_SECRET="$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | xxd -p -c 64)"
