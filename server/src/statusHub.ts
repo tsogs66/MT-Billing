@@ -199,7 +199,7 @@ const UPLINK_SEEDS: { slug: string; name: string; region: string; feedSlug: stri
   },
 ];
 
-let timer: ReturnType<typeof setInterval> | null = null;
+let timer: ReturnType<typeof setTimeout> | null = null;
 let running = false;
 let uplinkRunning = false;
 let lastRunAt: number | null = null;
@@ -207,6 +207,8 @@ let lastUplinkRunAt: number | null = null;
 let activeRouterId: number | null = null;
 let lastProbeMode: 'internet-feeds' | 'router-probe' = 'internet-feeds';
 let lastRouterProbeUnavailable = false;
+/** Default background interval between full sweeps (router probes are slow). */
+const BG_INTERVAL_MS = 5 * 60_000;
 
 function columnExists(table: string, col: string): boolean {
   const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
@@ -555,14 +557,77 @@ function recordHeartbeat(
   pruneHeartbeats(monitorId);
 }
 
+function ensureStatusHubRouterSetting() {
+  if (!columnExists('app_settings', 'status_hub_router_id')) {
+    db.exec('ALTER TABLE app_settings ADD COLUMN status_hub_router_id INTEGER');
+  }
+}
+
+function persistStatusHubRouterId(id: number | null) {
+  try {
+    ensureStatusHubRouterSetting();
+    db.prepare('UPDATE app_settings SET status_hub_router_id = ? WHERE id = 1').run(id);
+  } catch {
+    /* ignore */
+  }
+}
+
+function loadPersistedStatusHubRouterId(): number | null {
+  try {
+    ensureStatusHubRouterSetting();
+    const row = db.prepare('SELECT status_hub_router_id AS id FROM app_settings WHERE id = 1').get() as
+      | { id?: number | null }
+      | undefined;
+    const n = Number(row?.id);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  } catch {
+    return null;
+  }
+}
+
 export function setStatusHubRouterId(routerId: number | null | undefined) {
   const id = routerId != null && Number(routerId) > 0 ? Number(routerId) : null;
   activeRouterId = id;
+  if (id) persistStatusHubRouterId(id);
   return activeRouterId;
 }
 
 export function getStatusHubRouterId() {
   return activeRouterId;
+}
+
+function resolveBackgroundRouter(): { id: number; conn: RouterConn } | null {
+  const preferred = activeRouterId || loadPersistedStatusHubRouterId();
+  const pick = (id: number) => {
+    const r = db.prepare('SELECT id, host, port, api_user, api_pass FROM routers WHERE id = ?').get(id) as
+      | { id: number; host?: string; port?: number; api_user?: string; api_pass?: string }
+      | undefined;
+    if (!r?.host || !r?.api_user) return null;
+    return {
+      id: r.id,
+      conn: {
+        host: r.host,
+        port: Number(r.port) || 8728,
+        api_user: r.api_user,
+        api_pass: r.api_pass,
+      },
+    };
+  };
+  if (preferred) {
+    const hit = pick(preferred);
+    if (hit) {
+      activeRouterId = hit.id;
+      return hit;
+    }
+  }
+  const row = db
+    .prepare(
+      `SELECT id FROM routers
+       WHERE host IS NOT NULL AND TRIM(host) != '' AND api_user IS NOT NULL AND TRIM(api_user) != ''
+       ORDER BY id LIMIT 1`
+    )
+    .get() as { id: number } | undefined;
+  return row ? pick(row.id) : null;
 }
 
 export async function runStatusChecks(
@@ -1018,16 +1083,43 @@ function escapeLabel(s: string) {
   return String(s || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, ' ');
 }
 
-export function startStatusHub(intervalMs = 90_000) {
+async function runBackgroundStatusSweep() {
+  const bg = resolveBackgroundRouter();
+  if (bg) {
+    activeRouterId = bg.id;
+    await runStatusChecks(undefined, bg.conn, bg.id);
+    await runUplinkChecks(bg.conn, bg.id);
+  } else {
+    await runStatusChecks(undefined, null, null);
+    await runUplinkChecks(null, null);
+  }
+}
+
+/**
+ * Continuously refresh Status Hub in the background so the UI does not require
+ * manual "Scan now". Uses the last selected / first API-configured router when available.
+ * Chains runs (wait until finished + interval) because router sweeps can take minutes.
+ */
+export function startStatusHub(intervalMs = BG_INTERVAL_MS) {
   initStatusHub();
-  setTimeout(() => {
-    runStatusChecks().catch(() => undefined);
-    runUplinkChecks().catch(() => undefined);
-  }, 2500);
-  if (timer) clearInterval(timer);
-  timer = setInterval(() => {
-    runStatusChecks().catch(() => undefined);
-    runUplinkChecks().catch(() => undefined);
-  }, intervalMs);
-  if (typeof timer.unref === 'function') timer.unref();
+  const persisted = loadPersistedStatusHubRouterId();
+  if (persisted) activeRouterId = persisted;
+
+  const scheduleNext = (delay: number) => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      void (async () => {
+        try {
+          await runBackgroundStatusSweep();
+        } catch {
+          /* ignore */
+        }
+        scheduleNext(intervalMs);
+      })();
+    }, delay);
+    if (timer && typeof timer.unref === 'function') timer.unref();
+  };
+
+  // First sweep shortly after boot, then every intervalMs after each finish.
+  scheduleNext(8_000);
 }

@@ -3668,7 +3668,7 @@ process.on('mt-billing-restart' as any, () => {
 server.listen(PORT, () => {
   console.log(`MT-Billing API listening on http://localhost:${PORT}`);
   startUptime(90000);
-  startStatusHub(60_000);
+  startStatusHub(5 * 60_000);
   startNotifyScheduler(5 * 60 * 1000);
   startUsageScheduler(60_000);
 });

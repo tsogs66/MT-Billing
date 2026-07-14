@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Bot, TerminalSquare, Network, Users, Share2, Map,
@@ -69,26 +69,54 @@ const NAV_SECTIONS: NavSection[] = [
   },
 ];
 
+/** Survives Layout remounts (each page wraps its own <Layout>). */
+let savedSidebarScroll = 0;
+const SIDEBAR_SCROLL_KEY = 'mt-sidebar-nav-scroll';
+
+function readSavedScroll() {
+  if (savedSidebarScroll > 0) return savedSidebarScroll;
+  const n = Number(sessionStorage.getItem(SIDEBAR_SCROLL_KEY) || 0);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function writeSavedScroll(y: number) {
+  savedSidebarScroll = y;
+  try {
+    sessionStorage.setItem(SIDEBAR_SCROLL_KEY, String(y));
+  } catch {
+    /* ignore */
+  }
+}
+
 export default function Sidebar() {
   const { sidebarOpen, setSidebarOpen } = useLayout();
   const { canAccess, canWrite, user } = useAuth();
   const { theme } = useTheme();
   const location = useLocation();
   const navRef = useRef<HTMLElement>(null);
-  const scrollPos = useRef(0);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const logoVariant = theme === 'light' ? 'light' : 'dark';
   const viewerMode = !!user && !canWrite && !!user.licenseActivated;
 
-  // Preserve sidebar scroll — do not jump when a menu is selected
-  useEffect(() => {
+  // Restore scroll before paint — Layout remounts on every route change.
+  useLayoutEffect(() => {
     const el = navRef.current;
     if (!el) return;
-    el.scrollTop = scrollPos.current;
+    const y = readSavedScroll();
+    el.scrollTop = y;
+    // Focus/layout can still nudge scroll after paint — re-apply once.
+    const id = requestAnimationFrame(() => {
+      if (navRef.current) navRef.current.scrollTop = y;
+    });
+    return () => cancelAnimationFrame(id);
   }, [location.pathname]);
 
   const onNavScroll = () => {
-    if (navRef.current) scrollPos.current = navRef.current.scrollTop;
+    if (navRef.current) writeSavedScroll(navRef.current.scrollTop);
+  };
+
+  const rememberScroll = () => {
+    if (navRef.current) writeSavedScroll(navRef.current.scrollTop);
   };
 
   const toggleSection = (title: string) => {
@@ -168,9 +196,14 @@ export default function Sidebar() {
                         key={item.to}
                         to={item.to}
                         end={item.end}
+                        onMouseDown={rememberScroll}
                         onClick={() => {
-                          if (navRef.current) scrollPos.current = navRef.current.scrollTop;
+                          rememberScroll();
                           setSidebarOpen(false);
+                          const y = readSavedScroll();
+                          requestAnimationFrame(() => {
+                            if (navRef.current) navRef.current.scrollTop = y;
+                          });
                         }}
                         className={({ isActive }) =>
                           [

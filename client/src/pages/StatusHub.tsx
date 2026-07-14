@@ -199,23 +199,14 @@ export default function StatusHub() {
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        await Promise.all([loadServices(), loadUplink()]);
-      } catch {
-        /* ignore */
-      }
-      if (!cancelled) void triggerScan();
-    })();
+    // Load latest background results — do not force a full scan on every visit.
+    loadServices().catch(() => undefined);
+    loadUplink().catch(() => undefined);
     const id = setInterval(() => {
       loadServices().catch(() => undefined);
       loadUplink().catch(() => undefined);
     }, 30_000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
+    return () => clearInterval(id);
   }, [routerId]);
 
   const grouped = useMemo(() => {
@@ -317,11 +308,11 @@ export default function StatusHub() {
               </>
             ) : viaRouter ? (
               <>
-                Probing via <b>{current?.name}</b> — HTTP/HTTPS checks originate from the selected router.
+                Probing via <b>{current?.name}</b> — checks run automatically in the background about every 5 minutes. Use <b>Scan now</b> only for an immediate refresh.
               </>
             ) : (
               <>
-                No router selected — showing <b>internet status feeds</b>. Pick a router in the top bar to run live probes from your network.
+                No router selected — showing <b>internet status feeds</b> (also auto-refreshed in the background). Pick a router in the top bar for live probes from your network.
               </>
             )}
           </div>
