@@ -1707,15 +1707,23 @@ async function waitForRouterFetch(
   return { ok: false, message: message || (st === 'failed' ? 'fetch failed' : 'fetch timeout') };
 }
 
+function extractImmediateFetchResult(rows: Record<string, string>[] | undefined) {
+  for (const row of rows || []) {
+    const st = String(row.status || '').toLowerCase();
+    if (st === 'finished' || st === 'ok') return { ok: true as const, message: null };
+    if (st === 'failed') return { ok: false as const, message: row.message || row.ret || 'fetch failed' };
+  }
+  return null;
+}
+
 /** RouterOS v7 needs as-value + output=none; keep-result=no triggers "please use output option". */
 async function attemptRouterFetch(api: RouterOSAPI, fetchUrl: string): Promise<{ ok: boolean; message: string | null }> {
   const variants: string[][] = [
-    // Matches RouterOS 7.20+ CLI: /tool fetch url=... as-value output=none check-certificate=no
+    // RouterOS 7.20+ CLI: /tool fetch url=... as-value output=none check-certificate=no
     [`=url=${fetchUrl}`, '=as-value=', '=output=none', '=check-certificate=no'],
-    [`=url=${fetchUrl}`, '=as-value', '=output=none', '=check-certificate=no'],
-    [`=url=${fetchUrl}`, '=as-value=', '=output=none', '=check-certificate=no', '=http-method=get'],
-    [`=url=${fetchUrl}`, '=output=none', '=check-certificate=no', '=http-method=get'],
     [`=url=${fetchUrl}`, '=as-value=', '=output=user', '=check-certificate=no', '=http-method=head'],
+    [`=url=${fetchUrl}`, '=as-value=', '=output=none'],
+    [`=url=${fetchUrl}`, '=output=none', '=check-certificate=no'],
   ];
 
   await removeStaleFetches(api);
@@ -1726,7 +1734,8 @@ async function attemptRouterFetch(api: RouterOSAPI, fetchUrl: string): Promise<{
     await cancelFetchTool(api);
     try {
       const rows = (await api.write('/tool/fetch', args)) as Record<string, string>[];
-      const result = await waitForRouterFetch(api, rows);
+      const immediate = extractImmediateFetchResult(rows);
+      const result = immediate ?? (await waitForRouterFetch(api, rows));
       if (result.ok) {
         await cancelFetchTool(api);
         await removeStaleFetches(api);
@@ -1773,15 +1782,16 @@ async function probeHttpUrlWithApi(
 ): Promise<RouterHttpProbeResult> {
   const { host, fetchUrl } = parseProbeUrl(url);
 
+  // Ping is reliable via API on RouterOS 7 when /tool fetch syntax differs from CLI.
+  const pinged = await probePingHost(api, host, start);
+  if (pinged) return pinged;
+
   const fetched = await attemptRouterFetch(api, fetchUrl);
   if (fetched.ok) {
     const ms = Math.round(performance.now() - start);
     const degraded = ms > 2500;
     return { up: true, status: degraded ? 'degraded' : 'up', ms, code: 200, error: null };
   }
-
-  const pinged = await probePingHost(api, host, start);
-  if (pinged) return pinged;
 
   return {
     up: false,
