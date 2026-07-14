@@ -1,5 +1,7 @@
 import dns from 'dns';
 import { performance } from 'perf_hooks';
+import type { RouterConn } from './mikrotik.js';
+import { probeHttpUrlFromRouter } from './mikrotik.js';
 
 /**
  * Uptime monitor with three scopes:
@@ -199,8 +201,29 @@ const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
 
 const SCOPES: UptimeScope[] = ['global', 'regional', 'local'];
-const stateByScope = new Map<UptimeScope, Map<string, MonitorState>>();
+const stateByKey = new Map<string, Map<string, MonitorState>>();
 let activeScope: UptimeScope = 'global';
+let activeRouterId: number | null = null;
+
+function stateKey(scope: UptimeScope, routerId?: number | null): string {
+  if (scope !== 'local') return scope;
+  return routerId && routerId > 0 ? `local:r${routerId}` : 'local:panel';
+}
+
+function getScopeMap(scope: UptimeScope, routerId?: number | null): Map<string, MonitorState> {
+  const key = stateKey(scope, routerId);
+  let map = stateByKey.get(key);
+  if (!map) {
+    map = new Map<string, MonitorState>();
+    if (scope === 'local') {
+      for (const t of LOCAL_TARGETS) map.set(t.id, emptyMonitor(t.id, t.name, t.category, t.url, scope));
+    } else {
+      for (const t of FEED_TARGETS) map.set(t.id, emptyMonitor(t.id, t.name, t.category, t.url, scope));
+    }
+    stateByKey.set(key, map);
+  }
+  return map;
+}
 
 function emptyMonitor(
   id: string,
@@ -234,13 +257,8 @@ function emptyMonitor(
 }
 
 function initScope(scope: UptimeScope) {
-  const map = new Map<string, MonitorState>();
-  if (scope === 'local') {
-    for (const t of LOCAL_TARGETS) map.set(t.id, emptyMonitor(t.id, t.name, t.category, t.url, scope));
-  } else {
-    for (const t of FEED_TARGETS) map.set(t.id, emptyMonitor(t.id, t.name, t.category, t.url, scope));
-  }
-  stateByScope.set(scope, map);
+  getScopeMap(scope, null);
+  getScopeMap(scope, activeRouterId);
 }
 
 for (const s of SCOPES) initScope(s);
@@ -260,7 +278,7 @@ export function getUptimeScopes() {
     {
       id: 'local' as const,
       label: 'Local (Philippines)',
-      description: 'HTTPS reachability from this panel host to PH & popular services',
+      description: 'HTTPS reachability from the active MikroTik router (or panel host if none selected)',
     },
   ];
 }
@@ -273,6 +291,19 @@ export function setActiveScope(scope: string): UptimeScope {
   const next = (SCOPES.includes(scope as UptimeScope) ? scope : 'global') as UptimeScope;
   activeScope = next;
   return activeScope;
+}
+
+export function setActiveRouterId(routerId: number | null | undefined) {
+  const id = routerId != null && Number(routerId) > 0 ? Number(routerId) : null;
+  if (id !== activeRouterId) {
+    activeRouterId = id;
+    if (activeScope === 'local') getScopeMap('local', id);
+  }
+  return activeRouterId;
+}
+
+export function getActiveRouterId() {
+  return activeRouterId;
 }
 
 function worse(a: StatusLevel, b: StatusLevel): StatusLevel {
@@ -545,24 +576,29 @@ function applyResult(
   s.avgMs = lat.length ? Math.round(lat.reduce((a, b) => a + b, 0) / lat.length) : null;
 }
 
-const runningByScope = new Map<UptimeScope, Promise<void>>();
+const runningByKey = new Map<string, Promise<void>>();
 
-export async function runUptimeChecks(scope?: UptimeScope) {
+export async function runUptimeChecks(scope?: UptimeScope, routerConn?: RouterConn | null, routerId?: number | null) {
   const sc = scope || activeScope;
-  if (runningByScope.has(sc)) return runningByScope.get(sc)!;
+  const rid = sc === 'local' ? (routerId ?? activeRouterId) : null;
+  const key = stateKey(sc, rid);
+  if (runningByKey.has(key)) return runningByKey.get(key)!;
 
   const job = (async () => {
-    const map = stateByScope.get(sc)!;
+    const map = getScopeMap(sc, rid);
     if (sc === 'local') {
+      const viaRouter = !!(routerConn?.host && routerConn?.api_user);
       await mapPool(LOCAL_TARGETS, CONCURRENCY, async (t) => {
-        const r = await probeLocal(t.url);
+        const r = viaRouter
+          ? await probeHttpUrlFromRouter(routerConn!, t.url)
+          : await probeLocal(t.url);
         applyResult(map.get(t.id)!, {
           status: r.status,
           up: r.up,
           latencyMs: r.ms,
           code: r.code,
           lastError: r.error,
-          detail: r.error || (r.code ? `Reachable · HTTP ${r.code}` : 'Reachable'),
+          detail: r.error || (r.code ? `Reachable via ${viaRouter ? 'router' : 'panel'} · HTTP ${r.code}` : `Reachable via ${viaRouter ? 'router' : 'panel'}`),
           source: 'local',
         });
       });
@@ -587,21 +623,23 @@ export async function runUptimeChecks(scope?: UptimeScope) {
       });
     });
   })().finally(() => {
-    runningByScope.delete(sc);
+    runningByKey.delete(key);
   });
 
-  runningByScope.set(sc, job);
+  runningByKey.set(key, job);
   return job;
 }
 
-export function getUptime(scope?: UptimeScope): MonitorState[] {
+export function getUptime(scope?: UptimeScope, routerId?: number | null): MonitorState[] {
   const sc = scope || activeScope;
-  return Array.from(stateByScope.get(sc)!.values());
+  const rid = sc === 'local' ? (routerId ?? activeRouterId) : null;
+  return Array.from(getScopeMap(sc, rid).values());
 }
 
-export function getUptimeSummary(scope?: UptimeScope) {
+export function getUptimeSummary(scope?: UptimeScope, routerId?: number | null) {
   const sc = scope || activeScope;
-  const all = getUptime(sc);
+  const rid = sc === 'local' ? (routerId ?? activeRouterId) : null;
+  const all = getUptime(sc, rid);
   const checked = all.filter((m) => m.status !== 'pending');
   const up = checked.filter((m) => m.status === 'up').length;
   const degraded = checked.filter((m) => m.status === 'degraded').length;
@@ -618,6 +656,8 @@ export function getUptimeSummary(scope?: UptimeScope) {
     reports1h,
     scope: sc,
     mode: sc,
+    routerId: rid,
+    probeSource: sc === 'local' ? (rid ? 'router' : 'panel') : sc,
     lastRun: Math.max(0, ...all.map((m) => m.lastChecked || 0)) || null,
   };
 }

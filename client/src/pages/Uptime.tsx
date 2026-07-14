@@ -3,6 +3,7 @@ import { RefreshCw, Activity, CheckCircle2, AlertTriangle, XCircle, Gauge, Globe
 import Layout from '../components/Layout';
 import { Card, StatTile } from '../components/ui';
 import { api } from '../api';
+import { useRouterDevice } from '../context/RouterContext';
 
 type ScopeId = 'global' | 'regional' | 'local';
 
@@ -123,6 +124,8 @@ const DEFAULT_SCOPES: ScopeMeta[] = [
 ];
 
 export default function Uptime() {
+  const { current } = useRouterDevice();
+  const routerId = current?.id ?? null;
   const [scope, setScope] = useState<ScopeId>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
@@ -138,9 +141,9 @@ export default function Uptime() {
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState('');
 
-  const load = (sc = scope) =>
+  const load = (sc = scope, rid = routerId) =>
     api
-      .get('/uptime', { params: { scope: sc } })
+      .get('/uptime', { params: { scope: sc, ...(rid ? { routerId: rid } : {}) } })
       .then((r) => {
         setMonitors(r.data.monitors || []);
         setSummary(r.data.summary);
@@ -160,7 +163,7 @@ export default function Uptime() {
     let cancelled = false;
     setChecking(true);
     api
-      .post('/uptime/check', { scope })
+      .post('/uptime/check', { scope, ...(routerId ? { routerId } : {}) })
       .then((r) => {
         if (cancelled) return;
         setMonitors(r.data.monitors || []);
@@ -177,13 +180,13 @@ export default function Uptime() {
         if (!cancelled) setChecking(false);
       });
 
-    const t = setInterval(() => load(scope), 30000);
+    const t = setInterval(() => load(scope, routerId), 30000);
     return () => {
       cancelled = true;
       clearInterval(t);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scope]);
+  }, [scope, routerId]);
 
   const changeScope = (next: ScopeId) => {
     if (next === scope) return;
@@ -196,7 +199,7 @@ export default function Uptime() {
     setChecking(true);
     setError('');
     try {
-      const r = await api.post('/uptime/check', { scope });
+      const r = await api.post('/uptime/check', { scope, ...(routerId ? { routerId } : {}) });
       setMonitors(r.data.monitors || []);
       setSummary(r.data.summary);
       if (Array.isArray(r.data.scopes) && r.data.scopes.length) setScopes(r.data.scopes);
@@ -242,6 +245,14 @@ export default function Uptime() {
       <div className="mb-5 rounded-xl border border-slate-200 bg-slate-50/80 px-4 py-3 text-sm text-slate-700 max-w-4xl">
         <div className="font-semibold text-slate-800">{activeMeta?.label}</div>
         <div className="text-slate-500 mt-0.5">{activeMeta?.description}</div>
+        {scope === 'local' && (
+          <div className="mt-2 text-xs text-slate-600">
+            Probe source:{' '}
+            <span className="font-semibold text-slate-800">
+              {current?.name ? `MikroTik router “${current.name}”` : 'Panel server (no router selected)'}
+            </span>
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">

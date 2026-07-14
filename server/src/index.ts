@@ -47,7 +47,7 @@ import {
   fetchLeaseTrafficByIp,
 } from './mikrotik.js';
 import { probeOlt } from './olt.js';
-import { getUptime, getUptimeSummary, runUptimeChecks, startUptime, getUptimeScopes, getActiveScope, setActiveScope, type UptimeScope } from './uptime.js';
+import { getUptime, getUptimeSummary, runUptimeChecks, startUptime, getUptimeScopes, getActiveScope, setActiveScope, setActiveRouterId, type UptimeScope } from './uptime.js';
 import {
   startStatusHub,
   listStatusOverview,
@@ -60,6 +60,7 @@ import {
   createUplinkHost,
   deleteUplinkHost,
   prometheusMetrics,
+  setStatusHubRouterId,
 } from './statusHub.js';
 import {
   recordPppoePayment,
@@ -319,6 +320,23 @@ app.get('/api/routers', async (_req, res) => {
 
 function getRouter(id: number) {
   return db.prepare('SELECT * FROM routers WHERE id = ?').get(id) as any;
+}
+
+function parseRouterId(raw: unknown): number | null {
+  const n = raw != null && raw !== '' ? Number(raw) : null;
+  return n != null && Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function routerConnForId(routerId: number | null) {
+  if (!routerId) return null;
+  const r = getRouter(routerId);
+  if (!r?.host || !r?.api_user) return null;
+  return {
+    host: r.host,
+    port: r.api_port || 8728,
+    api_user: r.api_user,
+    api_pass: r.api_pass,
+  };
 }
 
 // ---- Dashboard ----
@@ -3347,35 +3365,69 @@ app.get('/api/uptime/scopes', (_req, res) => {
 
 app.get('/api/uptime', (req, res) => {
   const scope = setActiveScope(String(req.query.scope || getActiveScope())) as UptimeScope;
-  res.json({ summary: getUptimeSummary(scope), monitors: getUptime(scope), scopes: getUptimeScopes() });
+  const routerId = parseRouterId(req.query.routerId);
+  setActiveRouterId(routerId);
+  const router = routerId ? getRouter(routerId) : null;
+  res.json({
+    summary: getUptimeSummary(scope, routerId),
+    monitors: getUptime(scope, routerId),
+    scopes: getUptimeScopes(),
+    routerId,
+    routerName: router?.name ?? null,
+  });
 });
 
 app.post('/api/uptime/check', async (req, res) => {
   const scope = setActiveScope(String(req.body?.scope || req.query.scope || getActiveScope())) as UptimeScope;
-  await runUptimeChecks(scope);
-  res.json({ summary: getUptimeSummary(scope), monitors: getUptime(scope), scopes: getUptimeScopes() });
+  const routerId = parseRouterId(req.body?.routerId ?? req.query.routerId);
+  setActiveRouterId(routerId);
+  const conn = scope === 'local' ? routerConnForId(routerId) : null;
+  await runUptimeChecks(scope, conn, routerId);
+  const router = routerId ? getRouter(routerId) : null;
+  res.json({
+    summary: getUptimeSummary(scope, routerId),
+    monitors: getUptime(scope, routerId),
+    scopes: getUptimeScopes(),
+    routerId,
+    routerName: router?.name ?? null,
+  });
 });
 
 // ---- Status Hub (Uptime-Kuma style + uplink probes) ----
-app.get('/api/status-hub', (_req, res) => {
-  res.json(listStatusOverview());
+app.get('/api/status-hub', (req, res) => {
+  const routerId = parseRouterId(req.query.routerId);
+  setStatusHubRouterId(routerId);
+  const router = routerId ? getRouter(routerId) : null;
+  res.json({ ...listStatusOverview(routerId), routerId, routerName: router?.name ?? null });
 });
 
-app.get('/api/status-hub/uplink', (_req, res) => {
-  res.json(listUplinkOverview());
+app.get('/api/status-hub/uplink', (req, res) => {
+  const routerId = parseRouterId(req.query.routerId);
+  setStatusHubRouterId(routerId);
+  const router = routerId ? getRouter(routerId) : null;
+  res.json({ ...listUplinkOverview(routerId), routerId, routerName: router?.name ?? null });
 });
 
 app.get('/api/status-hub/check', async (req, res) => {
   try {
+    const routerId = parseRouterId(req.query.routerId);
+    setStatusHubRouterId(routerId);
+    const conn = routerConnForId(routerId);
     const wait = String(req.query.wait || '') === '1';
     if (wait) {
-      await runStatusChecks();
-      return res.json(listStatusOverview());
+      await runStatusChecks(undefined, conn, routerId);
+      const router = routerId ? getRouter(routerId) : null;
+      return res.json({ ...listStatusOverview(routerId), routerId, routerName: router?.name ?? null });
     }
-    // Non-blocking: kick a scan and return cached snapshot immediately (avoids proxy timeouts).
-    void runStatusChecks().catch(() => undefined);
-    const overview = listStatusOverview();
-    res.json({ ...overview, summary: { ...overview.summary, scanning: true } });
+    void runStatusChecks(undefined, conn, routerId).catch(() => undefined);
+    const overview = listStatusOverview(routerId);
+    const router = routerId ? getRouter(routerId) : null;
+    res.json({
+      ...overview,
+      routerId,
+      routerName: router?.name ?? null,
+      summary: { ...overview.summary, scanning: true },
+    });
   } catch (e: any) {
     res.status(500).json({ error: e?.message || 'Check failed' });
   }
@@ -3383,14 +3435,24 @@ app.get('/api/status-hub/check', async (req, res) => {
 
 app.get('/api/status-hub/uplink/check', async (req, res) => {
   try {
+    const routerId = parseRouterId(req.query.routerId);
+    setStatusHubRouterId(routerId);
+    const conn = routerConnForId(routerId);
     const wait = String(req.query.wait || '') === '1';
     if (wait) {
-      await runUplinkChecks();
-      return res.json(listUplinkOverview());
+      await runUplinkChecks(conn, routerId);
+      const router = routerId ? getRouter(routerId) : null;
+      return res.json({ ...listUplinkOverview(routerId), routerId, routerName: router?.name ?? null });
     }
-    void runUplinkChecks().catch(() => undefined);
-    const overview = listUplinkOverview();
-    res.json({ ...overview, summary: { ...overview.summary, scanning: true } });
+    void runUplinkChecks(conn, routerId).catch(() => undefined);
+    const overview = listUplinkOverview(routerId);
+    const router = routerId ? getRouter(routerId) : null;
+    res.json({
+      ...overview,
+      routerId,
+      routerName: router?.name ?? null,
+      summary: { ...overview.summary, scanning: true },
+    });
   } catch (e: any) {
     res.status(500).json({ error: e?.message || 'Uplink check failed' });
   }
