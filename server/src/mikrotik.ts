@@ -1682,6 +1682,70 @@ function terminalFetchStatus(rows: Record<string, string>[] | undefined) {
   return { st: String(last.status || '').toLowerCase(), message: last.message || null };
 }
 
+function rosErrorMessage(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  const any = e as { message?: string; errno?: string };
+  return String(any?.message || any?.errno || e || 'router error');
+}
+
+async function waitForRouterFetch(
+  api: RouterOSAPI,
+  rows: Record<string, string>[]
+): Promise<{ ok: boolean; message: string | null }> {
+  let { st, message } = terminalFetchStatus(rows);
+  const deadline = Date.now() + 12_000;
+
+  while (!['finished', 'ok', 'failed'].includes(st) && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 250));
+    const pending = (await api.write('/tool/fetch/print', ['=.proplist=status,message'])) as Record<string, string>[];
+    const next = terminalFetchStatus(pending);
+    st = next.st;
+    if (next.message) message = next.message;
+  }
+
+  if (st === 'finished' || st === 'ok') return { ok: true, message: null };
+  return { ok: false, message: message || (st === 'failed' ? 'fetch failed' : 'fetch timeout') };
+}
+
+/** RouterOS v7 needs as-value + output=none; keep-result=no triggers "please use output option". */
+async function attemptRouterFetch(api: RouterOSAPI, fetchUrl: string): Promise<{ ok: boolean; message: string | null }> {
+  const variants: string[][] = [
+    [`=url=${fetchUrl}`, '=as-value', '=output=none', '=check-certificate=no'],
+    [`=url=${fetchUrl}`, '=as-value', '=output=none', '=check-certificate=no', '=http-method=get'],
+    [`=url=${fetchUrl}`, '=output=none', '=check-certificate=no', '=http-method=get'],
+    [`=url=${fetchUrl}`, '=as-value', '=output=user', '=check-certificate=no', '=http-method=head'],
+  ];
+
+  await removeStaleFetches(api);
+  await cancelFetchTool(api);
+
+  let lastError: string | null = null;
+  for (const args of variants) {
+    await cancelFetchTool(api);
+    try {
+      const rows = (await api.write('/tool/fetch', args)) as Record<string, string>[];
+      const result = await waitForRouterFetch(api, rows);
+      if (result.ok) {
+        await cancelFetchTool(api);
+        await removeStaleFetches(api);
+        return result;
+      }
+      lastError = result.message;
+      const retry = lastError?.toLowerCase().includes('output') || lastError?.toLowerCase().includes('keep-result');
+      if (!retry) break;
+    } catch (e: unknown) {
+      lastError = rosErrorMessage(e);
+      const retry = lastError.toLowerCase().includes('output') || lastError.toLowerCase().includes('keep-result');
+      if (!retry) break;
+    } finally {
+      await cancelFetchTool(api);
+    }
+  }
+
+  await removeStaleFetches(api);
+  return { ok: false, message: lastError };
+}
+
 async function probePingHost(
   api: RouterOSAPI,
   host: string,
@@ -1706,48 +1770,12 @@ async function probeHttpUrlWithApi(
   start = performance.now()
 ): Promise<RouterHttpProbeResult> {
   const { host, fetchUrl } = parseProbeUrl(url);
-  let fetchError: string | null = null;
 
-  await removeStaleFetches(api);
-  await cancelFetchTool(api);
-
-  try {
-    // RouterOS v7 rejects keep-result=no together with output=none ("please use output option").
-    const fetchArgs = [
-      `=url=${fetchUrl}`,
-      '=check-certificate=no',
-      '=http-method=get',
-      '=output=none',
-    ];
-    let rows = (await api.write('/tool/fetch', fetchArgs)) as Record<string, string>[];
-
-    let { st, message } = terminalFetchStatus(rows);
-    if (st === 'failed' && message?.toLowerCase().includes('output')) {
-      rows = (await api.write('/tool/fetch', [...fetchArgs, '=as-value'])) as Record<string, string>[];
-      ({ st, message } = terminalFetchStatus(rows));
-    }
-    const deadline = Date.now() + 12_000;
-
-    while (!['finished', 'ok', 'failed'].includes(st) && Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 250));
-      const pending = (await api.write('/tool/fetch/print', ['=.proplist=status,message'])) as Record<string, string>[];
-      const next = terminalFetchStatus(pending);
-      st = next.st;
-      if (next.message) message = next.message;
-    }
-
-    if (st === 'finished' || st === 'ok') {
-      const ms = Math.round(performance.now() - start);
-      const degraded = ms > 2500;
-      return { up: true, status: degraded ? 'degraded' : 'up', ms, code: 200, error: null };
-    }
-
-    fetchError = message || (st === 'failed' ? 'fetch failed' : 'fetch timeout');
-  } catch (e: unknown) {
-    fetchError = e instanceof Error ? e.message : String(e);
-  } finally {
-    await cancelFetchTool(api);
-    await removeStaleFetches(api);
+  const fetched = await attemptRouterFetch(api, fetchUrl);
+  if (fetched.ok) {
+    const ms = Math.round(performance.now() - start);
+    const degraded = ms > 2500;
+    return { up: true, status: degraded ? 'degraded' : 'up', ms, code: 200, error: null };
   }
 
   const pinged = await probePingHost(api, host, start);
@@ -1758,7 +1786,7 @@ async function probeHttpUrlWithApi(
     status: 'down',
     ms: null,
     code: 0,
-    error: fetchError || 'unreachable from router',
+    error: fetched.message || 'unreachable from router',
   };
 }
 
