@@ -1,20 +1,23 @@
 # Flash images (Raspberry Pi, Orange Pi & PC)
 
-Three **separate** disk images — one per platform. Download from the
+Separate disk images — **one per board/platform**. Download from the
 [flash images release](https://github.com/tsogs66/MT-Billing/releases/tag/sbc-flash-images)
 or build locally, then flash with **Balena Etcher** or **Rufus** (DD Image mode).
 
 | Platform | Build command | Output files |
 |----------|---------------|--------------|
 | **Raspberry Pi** 3/4/5 | `sudo bash scripts/build-rpi-img.sh` | `mt-billing-rpi-arm64.img` (+ `.img.xz`) |
-| **Orange Pi** 5 | `sudo bash scripts/build-opi-img.sh` | `mt-billing-opi-arm64.img` (+ `.img.xz`) |
+| **Orange Pi 5** | `sudo bash scripts/build-opi-img.sh` | `mt-billing-opi-arm64.img` (+ `.img.xz`) |
+| **Orange Pi One** (H3) | `sudo bash scripts/build-opi-one-img.sh` | `mt-billing-opi-one-armhf.img` (+ `.img.xz`) |
 | **PC** (UEFI amd64) | `sudo bash scripts/build-pc-img.sh` | `mt-billing-pc-amd64.img` (+ `.img.xz`) |
 
-Build all three:
+**Do not mix Orange Pi images.** `mt-billing-opi-arm64*` is for Orange Pi **5** only.
+Orange Pi **One** must use `mt-billing-opi-one-armhf*`.
+
+Build all:
 
 ```bash
 sudo bash scripts/build-all-flash-images.sh
-# or: sudo bash scripts/build-sbc-flash-image.sh --board all
 ```
 
 Host build deps: `curl`, `xz`, `losetup`, `python3`, and for PC images `qemu-utils` (`qemu-img`).
@@ -29,3 +32,9 @@ See **[SYSTEM_REQUIREMENTS.md](../SYSTEM_REQUIREMENTS.md)** for hardware minimum
 4. **PC only:** console SSH user from the cloud seed is `mtadmin` / `mtbilling` (change immediately).
 
 First-boot log on device: `/var/log/mt-billing-firstboot.log`.
+
+### Orange Pi One notes
+
+- 512 MB RAM — first-boot creates a 1G swapfile; expect a slow first install.
+- Prefer a Class 10 / UHS microSD **≥ 16 GB**.
+- Use the **`.img.xz`** file directly in Etcher (do not extract into a folder).

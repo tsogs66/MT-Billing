@@ -34,6 +34,8 @@ detect_board() {
   echo "Board model: ${model:-unknown} (${arch})"
   if echo "$model" | grep -qiE 'raspberry|bcm27|bcm28'; then
     echo "Detected: Raspberry Pi"
+  elif echo "$model" | grep -qiE 'orange.?pi.?one|sun8i|h3'; then
+    echo "Detected: Orange Pi One (H3)"
   elif echo "$model" | grep -qiE 'orange|sun|rockchip|xunlong'; then
     echo "Detected: Orange Pi / Armbian SBC"
   elif [[ "$arch" == "x86_64" || "$arch" == "amd64" ]]; then
@@ -43,7 +45,66 @@ detect_board() {
   fi
 }
 
+ensure_swap_if_low_ram() {
+  # Orange Pi One has 512 MB RAM — builds will OOM without swap.
+  local mem_kb
+  mem_kb="$(awk '/MemTotal/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)"
+  if [[ "${mem_kb:-0}" -ge 900000 ]]; then
+    return 0
+  fi
+  if swapon --show 2>/dev/null | grep -q .; then
+    echo "Low RAM (${mem_kb} kB); swap already active."
+    return 0
+  fi
+  echo "Low RAM (${mem_kb} kB); creating 1G swapfile…"
+  if [[ ! -f /swapfile ]]; then
+    fallocate -l 1G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=1024 status=none
+    chmod 600 /swapfile
+    mkswap /swapfile
+  fi
+  swapon /swapfile || true
+  grep -q '^/swapfile' /etc/fstab 2>/dev/null || echo '/swapfile none swap sw 0 0' >>/etc/fstab
+}
+
+install_nodejs() {
+  local major arch
+  if command -v node >/dev/null 2>&1; then
+    major="$(node -v 2>/dev/null | tr -d v | cut -d. -f1 || echo 0)"
+    if [[ "${major:-0}" -ge 20 ]]; then
+      echo "[2/7] Node.js already present: $(node -v)"
+      return 0
+    fi
+  fi
+
+  arch="$(dpkg --print-architecture 2>/dev/null || uname -m)"
+  echo "[2/7] Installing Node.js (arch=${arch})…"
+
+  # Prefer distro packages on armhf (NodeSource armhf support is unreliable).
+  if [[ "$arch" == "armhf" || "$arch" == "armel" || "$arch" == "armv7l" ]]; then
+    apt-get install -y nodejs npm || true
+    major="$(node -v 2>/dev/null | tr -d v | cut -d. -f1 || echo 0)"
+    if [[ "${major:-0}" -ge 20 ]]; then
+      echo "Using distro Node.js: $(node -v)"
+      return 0
+    fi
+    echo "Distro Node.js too old or missing; trying NodeSource 20.x…"
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - || true
+    apt-get install -y nodejs || true
+  else
+    curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+    apt-get install -y nodejs
+  fi
+
+  major="$(node -v 2>/dev/null | tr -d v | cut -d. -f1 || echo 0)"
+  if [[ "${major:-0}" -lt 20 ]]; then
+    echo "ERROR: Node.js 20+ is required (found: $(node -v 2>/dev/null || echo none))" >&2
+    exit 1
+  fi
+  echo "Node.js ready: $(node -v)"
+}
+
 detect_board
+ensure_swap_if_low_ram
 
 # Wait briefly for DHCP / cloud-init networking on appliance images.
 for _i in $(seq 1 30); do
@@ -68,13 +129,7 @@ apt-get install -y \
   curl git ca-certificates openssl build-essential python3 \
   libsqlite3-dev nginx xz-utils
 
-if ! command -v node >/dev/null 2>&1 || [[ "$(node -v 2>/dev/null | tr -d v | cut -d. -f1)" -lt 20 ]]; then
-  echo "[2/7] Installing Node.js 22…"
-  curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-  apt-get install -y nodejs
-else
-  echo "[2/7] Node.js already present: $(node -v)"
-fi
+install_nodejs
 
 if ! id "$SERVICE_USER" &>/dev/null; then
   useradd --system --home "$INSTALL_DIR" --shell /usr/sbin/nologin "$SERVICE_USER"

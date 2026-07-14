@@ -48,7 +48,8 @@ See **[SYSTEM_REQUIREMENTS.md](./SYSTEM_REQUIREMENTS.md)** for full hardware and
 | **App (any host)** | 2 CPU · 2 GB RAM · 16 GB disk · Node.js 20+ · Ubuntu 22.04/24.04 or Debian 12 |
 | **Proxmox LXC** | Proxmox VE 7.4+ · **2 vCPU · 4 GB RAM · 32 GB disk** (script defaults) |
 | **Raspberry Pi** | Pi 3/4/5 64-bit · 16 GB+ microSD · flash `mt-billing-rpi-arm64.img.xz` |
-| **Orange Pi** | OPi 5 (or Armbian board image) · 16 GB+ storage · flash `mt-billing-opi-arm64.img.xz` |
+| **Orange Pi 5** | OPi 5 · 16 GB+ storage · flash `mt-billing-opi-arm64.img.xz` |
+| **Orange Pi One** | OPi One (H3) · 16 GB+ microSD · flash `mt-billing-opi-one-armhf.img.xz` |
 | **PC (amd64)** | UEFI x86_64 · 16 GB+ USB/SSD · flash `mt-billing-pc-amd64.img.xz` |
 
 ## Getting started (development)
@@ -117,10 +118,11 @@ data otherwise).
 | `install/mt-billing-grant-updater-root.sh` | Allow panel UI to start root update / restart API |
 | `install/mt-billing-reinstall.sh` | Guest reinstall script (wipe + reclone + optional DB reset) |
 | `scripts/build-rpi-img.sh` | Build Raspberry Pi `.img` (+ `.img.xz`) for Etcher/Rufus |
-| `scripts/build-opi-img.sh` | Build Orange Pi `.img` (+ `.img.xz`) for Etcher/Rufus |
+| `scripts/build-opi-img.sh` | Build Orange Pi **5** `.img` (+ `.img.xz`) for Etcher/Rufus |
+| `scripts/build-opi-one-img.sh` | Build Orange Pi **One** `.img` (+ `.img.xz`) for Etcher/Rufus |
 | `scripts/build-pc-img.sh` | Build PC amd64 `.img` (+ `.img.xz`) for Etcher/Rufus |
-| `scripts/build-all-flash-images.sh` | Build RPi + OPi + PC flash images |
-| `scripts/build-sbc-flash-image.sh` | Shared builder (`--board rpi\|opi\|pc\|all`) |
+| `scripts/build-all-flash-images.sh` | Build RPi + OPi 5 + OPi One + PC flash images |
+| `scripts/build-sbc-flash-image.sh` | Shared builder (`--board rpi\|opi\|opi-one\|pc\|all`) |
 | `scripts/sync-proxmox-embed.sh` | Sync `install/` into embedded Proxmox guest script |
 
 ## Deploying on Ubuntu (Proxmox)
@@ -331,9 +333,9 @@ Build one disk image **per platform**, then flash with **Balena Etcher** or **Ru
 
 ```bash
 sudo bash scripts/build-rpi-img.sh              # → dist/flash/mt-billing-rpi-arm64.img
-sudo bash scripts/build-opi-img.sh              # → dist/flash/mt-billing-opi-arm64.img
+sudo bash scripts/build-opi-img.sh              # → Orange Pi 5
+sudo bash scripts/build-opi-one-img.sh          # → Orange Pi One
 sudo bash scripts/build-pc-img.sh               # → dist/flash/mt-billing-pc-amd64.img
-# or all three:
 sudo bash scripts/build-all-flash-images.sh
 ```
 

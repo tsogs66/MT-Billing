@@ -54,14 +54,14 @@ Guest install script: `install/mt-billing-install.sh` (also embedded in `ct/mt-b
 
 Build **one flashable `.img` (and `.img.xz`) per platform**, then write it with **Balena Etcher** or **Rufus** (DD Image mode).
 
-| Item | Raspberry Pi | Orange Pi | PC (amd64) |
-|------|--------------|-----------|------------|
-| Target | Pi 3 / 4 / 5 (64-bit) | Orange Pi 5 (default); other boards via `OPI_IMAGE_URL` | UEFI x86_64 PC / mini-PC / NUC |
-| Base OS | Raspberry Pi OS Lite 64-bit | Armbian Bookworm minimal | Ubuntu 24.04 server cloud image |
-| Storage | microSD **≥ 16 GB** (32 GB recommended) | microSD / eMMC **≥ 16 GB** | USB / SSD / NVMe **≥ 16 GB** (32 GB+) |
-| Power | Official PSU for your board | Adequate 5V supply for the board | Standard ATX / adapter |
-| Network | Ethernet preferred (Wi‑Fi OK) | Ethernet preferred | Ethernet preferred |
-| First boot | Online install of MT-Billing | Same | Same (+ cloud-init NoCloud seed) |
+| Item | Raspberry Pi | Orange Pi 5 | Orange Pi One | PC (amd64) |
+|------|--------------|-------------|---------------|------------|
+| Target | Pi 3 / 4 / 5 (64-bit) | OPi 5 (RK3588S arm64) | OPi One (H3 armhf) | UEFI x86_64 PC / mini-PC / NUC |
+| Base OS | Raspberry Pi OS Lite 64-bit | Armbian minimal | Armbian Orangepione minimal | Ubuntu 24.04 server cloud image |
+| Storage | microSD **≥ 16 GB** | microSD / eMMC **≥ 16 GB** | microSD **≥ 16 GB** | USB / SSD / NVMe **≥ 16 GB** |
+| RAM | 2 GB+ recommended | 2 GB+ | 512 MB (swap enabled; slow) | 2 GB+ |
+| Network | Ethernet preferred | Ethernet preferred | Ethernet preferred | Ethernet preferred |
+| Flash file | `mt-billing-rpi-arm64*` | `mt-billing-opi-arm64*` | `mt-billing-opi-one-armhf*` | `mt-billing-pc-amd64*` |
 
 ### Build the flash files (Linux)
 
@@ -75,22 +75,25 @@ sudo bash scripts/build-rpi-img.sh
 # Orange Pi 5 → dist/flash/mt-billing-opi-arm64.img (+ .img.xz)
 sudo bash scripts/build-opi-img.sh
 
+# Orange Pi One → dist/flash/mt-billing-opi-one-armhf.img (+ .img.xz)
+sudo bash scripts/build-opi-one-img.sh
+
 # PC amd64 → dist/flash/mt-billing-pc-amd64.img (+ .img.xz)
 # requires: sudo apt install qemu-utils
 sudo bash scripts/build-pc-img.sh
 
-# All three
+# All platforms
 sudo bash scripts/build-all-flash-images.sh
 ```
 
-Other Orange Pi boards: set `OPI_IMAGE_URL` to the matching Armbian `.img.xz` URL, then run `build-opi-img.sh`.
-Override PC base with `PC_IMAGE_URL` if needed.
+Override bases with `OPI_IMAGE_URL`, `OPI_ONE_IMAGE_URL`, or `PC_IMAGE_URL` if needed.
 
 ### Flash with Balena Etcher or Rufus
 
-1. Pick the matching file — **do not mix platforms**:
+1. Pick the matching file — **do not mix platforms / Orange Pi models**:
    - Raspberry Pi → `mt-billing-rpi-arm64.img` (or `.img.xz`)
-   - Orange Pi → `mt-billing-opi-arm64.img` (or `.img.xz`)
+   - Orange Pi **5** → `mt-billing-opi-arm64.img` (or `.img.xz`)
+   - Orange Pi **One** → `mt-billing-opi-one-armhf.img` (or `.img.xz`)
    - PC → `mt-billing-pc-amd64.img` (or `.img.xz`)
 2. **Balena Etcher**: Flash from file → select the `.img` or `.img.xz` → select SD/USB → Flash.
 3. **Rufus** (Windows): select the `.img` / `.img.xz`, use **DD Image** mode, write to the media.

@@ -13,23 +13,31 @@
 #       → dist/flash/mt-billing-rpi-arm64.img.xz
 #
 #   sudo bash scripts/build-opi-img.sh
-#       → dist/flash/mt-billing-opi-arm64.img
+#       → dist/flash/mt-billing-opi-arm64.img       (Orange Pi 5)
 #       → dist/flash/mt-billing-opi-arm64.img.xz
+#
+#   sudo bash scripts/build-opi-one-img.sh
+#       → dist/flash/mt-billing-opi-one-armhf.img   (Orange Pi One / H3)
+#       → dist/flash/mt-billing-opi-one-armhf.img.xz
 #
 #   sudo bash scripts/build-pc-img.sh
 #       → dist/flash/mt-billing-pc-amd64.img
 #       → dist/flash/mt-billing-pc-amd64.img.xz
 #
 #   sudo bash scripts/build-all-flash-images.sh
-#       → all three boards
+#       → rpi + opi5 + opi-one + pc
 #
 # Or via this script:
-#   sudo bash scripts/build-sbc-flash-image.sh --board rpi|opi|pc|all
+#   sudo bash scripts/build-sbc-flash-image.sh --board rpi|opi|opi-one|pc|all
 #
 # Flash either the .img or .img.xz with Balena Etcher or Rufus (DD Image mode).
 # After first boot (needs internet), open http://<device-ip>/
 # Default panel login: admin / admin123
 # PC console SSH (Ubuntu cloud image): mtadmin / mtbilling
+#
+# IMPORTANT: Orange Pi boards are NOT interchangeable.
+#   mt-billing-opi-arm64*     → Orange Pi 5 only
+#   mt-billing-opi-one-armhf* → Orange Pi One only
 #
 # System requirements: see SYSTEM_REQUIREMENTS.md
 
@@ -48,29 +56,38 @@ KEEP_RAW=1
 # Default base images. Override with env if mirrors move.
 # Raspberry Pi OS Lite 64-bit — works on Pi 3 / 4 / 5.
 RPI_IMAGE_URL="${RPI_IMAGE_URL:-https://downloads.raspberrypi.com/raspios_lite_arm64/images/raspios_lite_arm64-2026-06-19/2026-06-18-raspios-trixie-arm64-lite.img.xz}"
-# Orange Pi 5 Armbian minimal — resolved from GitHub releases unless overridden.
-OPI_IMAGE_URL="${OPI_IMAGE_URL:-}"
+# Orange Pi Armbian minimal images — resolved from GitHub releases unless overridden.
+OPI_IMAGE_URL="${OPI_IMAGE_URL:-}"           # Orange Pi 5 (arm64)
+OPI_ONE_IMAGE_URL="${OPI_ONE_IMAGE_URL:-}"   # Orange Pi One (armhf / H3)
 # PC / x86_64 — Ubuntu 24.04 server cloud image (qcow2 .img → converted to raw).
 PC_IMAGE_URL="${PC_IMAGE_URL:-https://cloud-images.ubuntu.com/releases/noble/release/ubuntu-24.04-server-cloudimg-amd64.img}"
 
-resolve_opi_image_url() {
-  if [[ -n "${OPI_IMAGE_URL:-}" ]]; then
-    printf '%s' "$OPI_IMAGE_URL"
+# resolve_armbian_minimal <board-token> <override-url-env-value>
+# board-token examples: orangepi5, orangepione
+resolve_armbian_minimal() {
+  local board_token="$1"
+  local override_url="${2:-}"
+  if [[ -n "$override_url" ]]; then
+    printf '%s' "$override_url"
     return
   fi
   local url
   url="$(
-    python3 -c '
-import json, urllib.request
-raw = urllib.request.urlopen("https://api.github.com/repos/armbian/os/releases?per_page=8", timeout=60).read()
+    BOARD_TOKEN="$board_token" python3 -c '
+import json, os, urllib.request
+token = os.environ["BOARD_TOKEN"].lower()
+raw = urllib.request.urlopen("https://api.github.com/repos/armbian/os/releases?per_page=10", timeout=60).read()
 rels = json.loads(raw)
 for r in rels:
   for a in r.get("assets") or []:
     n = a.get("name") or ""
     nl = n.lower()
-    if "orangepi5" not in nl:
+    if token not in nl:
       continue
-    if any(x in nl for x in ("plus", "max", "ultra")):
+    # Avoid sibling boards (orangepi5-plus, orangepioneplus, etc.)
+    if token == "orangepi5" and any(x in nl for x in ("plus", "max", "ultra", "pro")):
+      continue
+    if token == "orangepione" and any(x in nl for x in ("plus", "max", "ultra", "pro", "64")):
       continue
     if not nl.endswith(".img.xz"):
       continue
@@ -81,10 +98,18 @@ for r in rels:
 ' 2>/dev/null || true
   )"
   if [[ -z "$url" ]]; then
-    echo "Could not auto-resolve Orange Pi 5 Armbian image. Set OPI_IMAGE_URL=https://..." >&2
+    echo "Could not auto-resolve Armbian ${board_token} minimal image. Set override URL env var." >&2
     exit 1
   fi
   printf '%s' "$url"
+}
+
+resolve_opi_image_url() {
+  resolve_armbian_minimal "orangepi5" "${OPI_IMAGE_URL:-}"
+}
+
+resolve_opi_one_image_url() {
+  resolve_armbian_minimal "orangepione" "${OPI_ONE_IMAGE_URL:-}"
 }
 
 usage() {
@@ -107,10 +132,13 @@ done
 BOARD="$(echo "$BOARD" | tr '[:upper:]' '[:lower:]')"
 case "$BOARD" in
   rpi|raspberry|raspberrypi) BOARD=rpi ;;
+  opi5|orangepi5|opi-5) BOARD=opi ;;
+  opi-one|opione|orangepione|orangepi-one|one) BOARD=opi-one ;;
+  # Legacy alias: "opi" means Orange Pi 5 (arm64). Orange Pi One is opi-one.
   opi|orangepi|orange) BOARD=opi ;;
   pc|x86|x86_64|amd64|intel|desktop) BOARD=pc ;;
   all) ;;
-  *) echo "Unsupported --board $BOARD (use rpi, opi, pc, or all)" >&2; exit 1 ;;
+  *) echo "Unsupported --board $BOARD (use rpi, opi, opi-one, pc, or all)" >&2; exit 1 ;;
 esac
 
 if [[ "$(id -u)" -ne 0 ]]; then
@@ -444,10 +472,17 @@ build_one() {
       ;;
     opi)
       url="$(resolve_opi_image_url)"
-      echo "Orange Pi base image: $url"
-      cache_name="opi-base.img.xz"
+      echo "Orange Pi 5 base image: $url"
+      cache_name="opi5-base.img.xz"
       out_base="mt-billing-opi-arm64"
-      board_name="orange-pi"
+      board_name="orange-pi-5"
+      ;;
+    opi-one)
+      url="$(resolve_opi_one_image_url)"
+      echo "Orange Pi One base image: $url"
+      cache_name="opi-one-base.img.xz"
+      out_base="mt-billing-opi-one-armhf"
+      board_name="orange-pi-one"
       ;;
     pc)
       url="$PC_IMAGE_URL"
@@ -508,6 +543,7 @@ case "$BOARD" in
   all)
     build_one rpi
     build_one opi
+    build_one opi-one
     build_one pc
     ;;
   *)
