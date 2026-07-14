@@ -708,12 +708,28 @@ function latestHeartbeat(monitorId: number, routerId = 0) {
     .get(monitorId, routerId || 0) as any;
 }
 
-function heartbeatView(monitorId: number, requestedRouterId = 0) {
+function isRouterApiConfigured(routerId: number) {
+  if (routerId <= 0) return false;
+  const r = db.prepare('SELECT host, api_user FROM routers WHERE id = ?').get(routerId) as
+    | { host?: string | null; api_user?: string | null }
+    | undefined;
+  return !!(String(r?.host || '').trim() && String(r?.api_user || '').trim());
+}
+
+function heartbeatView(monitorId: number, requestedRouterId = 0, routerApiConfigured = true) {
   if (requestedRouterId > 0) {
-    const fromRouter = latestHeartbeat(monitorId, requestedRouterId);
-    if (fromRouter) return { hb: fromRouter, source: 'router' as const, readRouterId: requestedRouterId };
+    if (routerApiConfigured) {
+      const fromRouter = latestHeartbeat(monitorId, requestedRouterId);
+      if (fromRouter) return { hb: fromRouter, source: 'router' as const, readRouterId: requestedRouterId };
+    }
     const fromFeed = latestHeartbeat(monitorId, 0);
-    if (fromFeed) return { hb: fromFeed, source: 'internet-fallback' as const, readRouterId: 0 };
+    if (fromFeed) {
+      return {
+        hb: fromFeed,
+        source: routerApiConfigured ? ('internet-fallback' as const) : ('internet' as const),
+        readRouterId: 0,
+      };
+    }
     return { hb: null as any, source: 'pending' as const, readRouterId: requestedRouterId };
   }
   const fromFeed = latestHeartbeat(monitorId, 0);
@@ -780,6 +796,8 @@ function uplinkHistory(targetId: number, routerId = 0, limit = 30) {
 
 export function listStatusOverview(routerId?: number | null) {
   const rid = routerId ?? activeRouterId ?? 0;
+  const routerApiConfigured = isRouterApiConfigured(rid);
+  const routerProbeUnavailable = rid > 0 && !routerApiConfigured;
   const groups = db
     .prepare('SELECT id, slug, name, sort_order AS sortOrder, icon FROM status_groups ORDER BY sort_order, name')
     .all() as any[];
@@ -797,7 +815,7 @@ export function listStatusOverview(routerId?: number | null) {
     .all() as any[];
 
   const enriched = monitors.map((m) => {
-    const view = heartbeatView(m.id, rid);
+    const view = heartbeatView(m.id, rid, routerApiConfigured);
     const last = view.hb;
     const history = heartbeatHistory(m.id, view.readRouterId, 40);
     return {
@@ -837,7 +855,7 @@ export function listStatusOverview(routerId?: number | null) {
     scanning: running,
     mode: routerProbeActive ? ('router-probe' as const) : ('internet-feeds' as const),
     routerId: routerProbeActive ? rid : null,
-    routerProbeUnavailable: lastRouterProbeUnavailable,
+    routerProbeUnavailable,
     feedFallback,
     egressOk: true as boolean | null,
   };

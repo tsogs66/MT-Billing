@@ -305,7 +305,7 @@ export default function StatusHub() {
           <div className="mb-4 rounded-2xl border border-cyan-400/20 bg-cyan-400/5 px-4 py-3 text-sm text-cyan-100/90">
             {summary?.routerProbeUnavailable ? (
               <>
-                Router API is not configured for the selected device — showing <b>internet status feeds</b> until host/API credentials are set in System Settings.
+                <b>{current?.name}</b> is missing <b>Host</b> and/or <b>API user</b> — open <b>System Settings → Routers → Edit</b>, enter the MikroTik API address (reachable from this panel), API user/password, run <b>Test connection</b>, then <b>Save</b>. Showing <b>internet feeds</b> until then.
               </>
             ) : summary?.feedFallback ? (
               <>
