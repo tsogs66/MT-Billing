@@ -80,36 +80,60 @@ function ago(ts: number | null) {
   return `${Math.round(s / 3600)}h ago`;
 }
 
-function Spark({ history }: { history: { up: boolean; ms: number | null }[] }) {
-  const pts = history.slice(-28);
+function Spark({ history }: { history: { up: boolean; ms: number | null; status?: string }[] }) {
+  // Skip "pending/scanning" filler samples so charts show real up/down history.
+  const pts = history.filter((p) => p.status !== 'pending').slice(-28);
   if (pts.length < 2) {
     return <div className="h-7 text-[10px] text-cyan-500/40 font-mono tracking-wider">SYNC…</div>;
   }
-  const vals = pts.map((p) => (p.up ? p.ms ?? 1 : 0));
-  const max = Math.max(1, ...vals);
   const w = 112;
   const h = 28;
-  const step = w / (pts.length - 1);
+  const gap = 1.5;
+  const barW = Math.max(2, (w - gap * (pts.length - 1)) / pts.length);
+
+  // Latency line only when we have real RTT samples (router probes).
+  const latencyPts = pts
+    .map((p, i) => ({ i, ms: p.ms }))
+    .filter((p): p is { i: number; ms: number } => p.ms != null && p.ms > 0 && pts[p.i].up);
+  const latMin = latencyPts.length ? Math.min(...latencyPts.map((p) => p.ms)) : 0;
+  const latMax = latencyPts.length ? Math.max(...latencyPts.map((p) => p.ms)) : 1;
+  const latSpan = Math.max(1, latMax - latMin);
+  const xFor = (i: number) => i * (barW + gap) + barW / 2;
+  const yForMs = (ms: number) => {
+    // Invert: lower RTT near top. Keep a small pad.
+    const t = (ms - latMin) / latSpan;
+    return 3 + (1 - t) * (h - 8);
+  };
+
   return (
     <svg width={w} height={h} className="overflow-visible opacity-90" aria-hidden>
       {pts.map((p, i) => {
-        const next = pts[i + 1];
-        if (!next) return null;
-        const y = (sample: typeof p) =>
-          sample.up ? h - ((sample.ms ?? 0) / max) * (h - 4) - 2 : h - 2;
-        return (
-          <line
-            key={i}
-            x1={i * step}
-            y1={y(p)}
-            x2={(i + 1) * step}
-            y2={y(next)}
-            stroke={p.up && next.up ? '#22d3ee' : '#fb7185'}
-            strokeWidth={1.6}
-            strokeLinecap="round"
-          />
-        );
+        const st = p.status || (p.up ? 'up' : 'down');
+        const fill =
+          st === 'up' ? '#22d3ee' : st === 'degraded' ? '#fbbf24' : st === 'pending' ? '#64748b' : '#fb7185';
+        // Status bars: up tall, degraded mid, down/pending short — avoids null-ms diagonal artifact.
+        const barH = st === 'up' ? h - 4 : st === 'degraded' ? h * 0.55 : h * 0.22;
+        const x = i * (barW + gap);
+        const y = h - barH;
+        return <rect key={i} x={x} y={y} width={barW} height={barH} rx={1} fill={fill} opacity={0.85} />;
       })}
+      {latencyPts.length >= 2 &&
+        latencyPts.slice(0, -1).map((p, idx) => {
+          const next = latencyPts[idx + 1];
+          return (
+            <line
+              key={`lat-${p.i}`}
+              x1={xFor(p.i)}
+              y1={yForMs(p.ms)}
+              x2={xFor(next.i)}
+              y2={yForMs(next.ms)}
+              stroke="#e0f2fe"
+              strokeWidth={1.2}
+              strokeLinecap="round"
+              opacity={0.9}
+            />
+          );
+        })}
     </svg>
   );
 }
