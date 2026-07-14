@@ -311,6 +311,10 @@ export default function StatusHub() {
               <>
                 Router scan still warming up — showing <b>internet feeds</b> until probes from <b>{current?.name}</b> are available.
               </>
+            ) : viaRouter && summary && summary.total > 0 && summary.down === summary.total ? (
+              <>
+                All services show <b>offline</b> from <b>{current?.name}</b>. Check WAN/DNS on the router, API user permissions (read, ping, tool), and firewall rules for outbound HTTPS. Tap <b>Scan now</b> after fixing — a full sweep takes a few minutes.
+              </>
             ) : viaRouter ? (
               <>
                 Probing via <b>{current?.name}</b> — HTTP/HTTPS checks originate from the selected router.
@@ -431,6 +435,11 @@ export default function StatusHub() {
                                 >
                                   {m.url.replace(/^https?:\/\//, '')}
                                 </a>
+                                {m.status === 'down' && m.lastError && (
+                                  <p className="text-[10px] text-rose-300/80 truncate mt-1" title={m.lastError}>
+                                    {m.lastError}
+                                  </p>
+                                )}
                               </div>
                               <span
                                 className="text-[10px] uppercase tracking-wider font-semibold px-2 py-1 rounded-lg shrink-0"

@@ -596,7 +596,7 @@ export async function runStatusChecks(
 
     if (viaRouter) {
       const urls = rows.map((m) => String(m.url || ''));
-      const results = await probeHttpUrlsFromRouter(routerConn!, urls, { concurrency: 4 });
+      const results = await probeHttpUrlsFromRouter(routerConn!, urls);
       for (let i = 0; i < rows.length; i++) {
         const m = rows[i];
         const r = results[i];
@@ -654,7 +654,7 @@ export async function runUplinkChecks(routerConn?: RouterConn | null, routerId?:
 
     if (viaRouter) {
       const urls = targets.map((t) => String(t.url || ''));
-      const results = await probeHttpUrlsFromRouter(routerConn!, urls, { concurrency: 4 });
+      const results = await probeHttpUrlsFromRouter(routerConn!, urls);
       for (let i = 0; i < targets.length; i++) {
         const t = targets[i];
         const r = results[i];
