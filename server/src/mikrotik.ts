@@ -1641,6 +1641,70 @@ function parsePingAvgMs(rows: Record<string, string>[]): number | null {
   return Math.round(times.reduce((a, b) => a + b, 0) / times.length);
 }
 
+export type RouterHttpProbeResult = {
+  up: boolean;
+  status: 'up' | 'down' | 'degraded';
+  ms: number | null;
+  code: number;
+  error: string | null;
+};
+
+async function probeHttpUrlWithApi(
+  api: RouterOSAPI,
+  url: string,
+  start = performance.now()
+): Promise<RouterHttpProbeResult> {
+  const { host, fetchUrl } = parseProbeUrl(url);
+  const mode = fetchUrl.startsWith('http://') ? 'http' : 'https';
+  try {
+    const rows = (await api.write('/tool/fetch', [
+      `=url=${fetchUrl}`,
+      `=mode=${mode}`,
+      '=check-certificate=no',
+      '=http-method=head',
+      '=output=none',
+    ])) as Record<string, string>[];
+
+    const waitForFetch = async (): Promise<{ up: boolean; status: 'up' | 'down' | 'degraded'; error: string | null }> => {
+      const first = rows?.[0] || {};
+      const st0 = String(first.status || '').toLowerCase();
+      if (st0 === 'finished' || st0 === 'ok') return { up: true, status: 'up', error: null };
+      if (st0 === 'failed') return { up: false, status: 'down', error: first.message || 'fetch failed' };
+
+      for (let i = 0; i < 16; i++) {
+        await new Promise((r) => setTimeout(r, 200));
+        const pending = (await api.write('/tool/fetch/print', ['=.proplist=status,message'])) as Record<string, string>[];
+        const row = pending?.[0];
+        if (!row) continue;
+        const st = String(row.status || '').toLowerCase();
+        if (st === 'finished' || st === 'ok') return { up: true, status: 'up', error: null };
+        if (st === 'failed') return { up: false, status: 'down', error: row.message || 'fetch failed' };
+      }
+      return { up: false, status: 'down', error: 'fetch timeout' };
+    };
+
+    const fetched = await waitForFetch();
+    const ms = Math.round(performance.now() - start);
+    if (!fetched.up) {
+      return { up: false, status: fetched.status, ms: null, code: 0, error: fetched.error };
+    }
+    const degraded = ms > 2500;
+    return { up: true, status: degraded ? 'degraded' : 'up', ms, code: 200, error: null };
+  } catch {
+    const pingRows = (await api.write('/ping', [`=address=${host}`, '=count=3', '=interval=100ms'])) as Record<
+      string,
+      string
+    >[];
+    const ms = parsePingAvgMs(pingRows);
+    const received = pingRows?.filter((p) => Number(p.received ?? 1) > 0 || p.time).length ?? 0;
+    if (received > 0 && ms != null) {
+      const status = ms > 2500 ? 'degraded' : 'up';
+      return { up: true, status, ms, code: 0, error: null };
+    }
+    return { up: false, status: 'down', ms: null, code: 0, error: 'unreachable from router' };
+  }
+}
+
 /**
  * HTTP/HTTPS reachability probe executed on a MikroTik router (subscriber WAN perspective).
  * Uses /tool fetch when available, with ICMP ping fallback on the URL host.
@@ -1649,77 +1713,43 @@ export async function probeHttpUrlFromRouter(
   conn: RouterConn,
   url: string,
   opts?: { timeoutSec?: number }
-): Promise<{
-  up: boolean;
-  status: 'up' | 'down' | 'degraded';
-  ms: number | null;
-  code: number;
-  error: string | null;
-}> {
-  const { host, fetchUrl } = parseProbeUrl(url);
-  const mode = fetchUrl.startsWith('http://') ? 'http' : 'https';
+): Promise<RouterHttpProbeResult> {
   const start = performance.now();
-
   try {
-    return await withRouter(
-      conn,
-      async (api) => {
-        try {
-          const rows = (await api.write('/tool/fetch', [
-            `=url=${fetchUrl}`,
-            `=mode=${mode}`,
-            '=check-certificate=no',
-            '=http-method=head',
-            '=output=none',
-          ])) as Record<string, string>[];
-
-          const waitForFetch = async (): Promise<{ up: boolean; status: 'up' | 'down' | 'degraded'; error: string | null }> => {
-            const first = rows?.[0] || {};
-            const st0 = String(first.status || '').toLowerCase();
-            if (st0 === 'finished' || st0 === 'ok') return { up: true, status: 'up', error: null };
-            if (st0 === 'failed') return { up: false, status: 'down', error: first.message || 'fetch failed' };
-
-            for (let i = 0; i < 24; i++) {
-              await new Promise((r) => setTimeout(r, 250));
-              const pending = (await api.write('/tool/fetch/print', ['=.proplist=status,message'])) as Record<
-                string,
-                string
-              >[];
-              const row = pending?.[0];
-              if (!row) continue;
-              const st = String(row.status || '').toLowerCase();
-              if (st === 'finished' || st === 'ok') return { up: true, status: 'up', error: null };
-              if (st === 'failed') return { up: false, status: 'down', error: row.message || 'fetch failed' };
-            }
-            return { up: false, status: 'down', error: 'fetch timeout' };
-          };
-
-          const fetched = await waitForFetch();
-          const ms = Math.round(performance.now() - start);
-          if (!fetched.up) {
-            return { up: false, status: fetched.status, ms: null, code: 0, error: fetched.error };
-          }
-          const degraded = ms > 2500;
-          return { up: true, status: degraded ? 'degraded' : 'up', ms, code: 200, error: null };
-        } catch {
-          const pingRows = (await api.write('/ping', [
-            `=address=${host}`,
-            '=count=3',
-            '=interval=100ms',
-          ])) as Record<string, string>[];
-          const ms = parsePingAvgMs(pingRows);
-          const received = pingRows?.filter((p) => Number(p.received ?? 1) > 0 || p.time).length ?? 0;
-          if (received > 0 && ms != null) {
-            const status = ms > 2500 ? 'degraded' : 'up';
-            return { up: true, status, ms, code: 0, error: null };
-          }
-          return { up: false, status: 'down', ms: null, code: 0, error: 'unreachable from router' };
-        }
-      },
-      { timeoutSec: opts?.timeoutSec ?? 15 }
-    );
+    return await withRouter(conn, (api) => probeHttpUrlWithApi(api, url, start), { timeoutSec: opts?.timeoutSec ?? 15 });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     return { up: false, status: 'down', ms: null, code: 0, error: msg || 'router error' };
   }
+}
+
+/** Probe many URLs over one RouterOS API session (much faster than reconnecting per target). */
+export async function probeHttpUrlsFromRouter(
+  conn: RouterConn,
+  urls: string[],
+  opts?: { timeoutSec?: number; concurrency?: number }
+): Promise<RouterHttpProbeResult[]> {
+  const limit = Math.max(1, opts?.concurrency ?? 4);
+  return withRouter(
+    conn,
+    async (api) => {
+      const out: RouterHttpProbeResult[] = new Array(urls.length);
+      let next = 0;
+      const workers = Array.from({ length: Math.min(limit, urls.length || 1) }, async () => {
+        while (next < urls.length) {
+          const i = next++;
+          const start = performance.now();
+          try {
+            out[i] = await probeHttpUrlWithApi(api, urls[i], start);
+          } catch (e: unknown) {
+            const msg = e instanceof Error ? e.message : String(e);
+            out[i] = { up: false, status: 'down', ms: null, code: 0, error: msg || 'router error' };
+          }
+        }
+      });
+      await Promise.all(workers);
+      return out;
+    },
+    { timeoutSec: opts?.timeoutSec ?? Math.min(180, 20 + urls.length * 3) }
+  );
 }

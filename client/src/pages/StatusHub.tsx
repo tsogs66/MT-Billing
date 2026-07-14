@@ -303,13 +303,21 @@ export default function StatusHub() {
 
           {/* Summary strip */}
           <div className="mb-4 rounded-2xl border border-cyan-400/20 bg-cyan-400/5 px-4 py-3 text-sm text-cyan-100/90">
-            {viaRouter ? (
+            {summary?.routerProbeUnavailable ? (
+              <>
+                Router API is not configured for the selected device — showing <b>internet status feeds</b> until host/API credentials are set in System Settings.
+              </>
+            ) : summary?.feedFallback ? (
+              <>
+                Router scan still warming up — showing <b>internet feeds</b> until probes from <b>{current?.name}</b> are available.
+              </>
+            ) : viaRouter ? (
               <>
                 Probing via <b>{current?.name}</b> — HTTP/HTTPS checks originate from the selected router.
               </>
             ) : (
               <>
-                No router selected — showing cached <b>internet status feeds</b>. Pick a router in the top bar to run live probes from your network.
+                No router selected — showing <b>internet status feeds</b>. Pick a router in the top bar to run live probes from your network.
               </>
             )}
           </div>
@@ -319,9 +327,14 @@ export default function StatusHub() {
               { label: 'Degraded', value: summary?.degraded ?? '—', icon: AlertTriangle, tone: '#fbbf24' },
               { label: 'Offline', value: summary?.down ?? '—', icon: XCircle, tone: '#fb7185' },
               {
-                label: viaRouter ? 'Avg RTT' : 'Source',
-                value: viaRouter ? (summary?.avgMs != null ? `${summary.avgMs} ms` : '—') : 'Internet',
-                icon: viaRouter ? Network : Globe2,
+                label: summary?.mode === 'router-probe' ? 'Avg RTT' : 'Source',
+                value:
+                  summary?.mode === 'router-probe'
+                    ? summary?.avgMs != null
+                      ? `${summary.avgMs} ms`
+                      : '—'
+                    : 'Internet',
+                icon: summary?.mode === 'router-probe' ? Network : Globe2,
                 tone: '#22d3ee',
               },
             ].map((s) => (
@@ -430,7 +443,13 @@ export default function StatusHub() {
                               <Spark history={m.history} />
                               <div className="text-right">
                                 <div className="text-[10px] uppercase tracking-wider text-cyan-300/80">
-                                  {m.source === 'router' ? (m.latencyMs != null ? `${m.latencyMs} ms` : 'Router') : 'Feed'}
+                                  {m.source === 'router'
+                                    ? m.latencyMs != null
+                                      ? `${m.latencyMs} ms`
+                                      : 'Router'
+                                    : m.source === 'internet-fallback'
+                                      ? 'Feed · waiting'
+                                      : 'Feed'}
                                 </div>
                                 <div className="text-[10px] text-slate-500 font-mono">{m.uptimePct}% · {ago(m.lastChecked)}</div>
                               </div>

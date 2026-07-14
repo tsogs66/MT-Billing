@@ -5,7 +5,7 @@
  */
 import { db } from './db.js';
 import type { RouterConn } from './mikrotik.js';
-import { probeHttpUrlFromRouter } from './mikrotik.js';
+import { probeHttpUrlsFromRouter } from './mikrotik.js';
 
 const HEARTBEAT_KEEP = 120;
 const DEFAULT_INTERVAL_SEC = 90;
@@ -205,6 +205,8 @@ let uplinkRunning = false;
 let lastRunAt: number | null = null;
 let lastUplinkRunAt: number | null = null;
 let activeRouterId: number | null = null;
+let lastProbeMode: 'internet-feeds' | 'router-probe' = 'internet-feeds';
+let lastRouterProbeUnavailable = false;
 
 function columnExists(table: string, col: string): boolean {
   const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
@@ -589,10 +591,15 @@ export async function runStatusChecks(
     }
 
     const viaRouter = !!(routerConn?.host && routerConn?.api_user);
+    lastRouterProbeUnavailable = rid > 0 && !viaRouter;
+    lastProbeMode = viaRouter ? 'router-probe' : 'internet-feeds';
 
-    await mapPool(rows, CONCURRENCY, async (m) => {
-      if (viaRouter) {
-        const r = await probeHttpUrlFromRouter(routerConn!, m.url);
+    if (viaRouter) {
+      const urls = rows.map((m) => String(m.url || ''));
+      const results = await probeHttpUrlsFromRouter(routerConn!, urls, { concurrency: 4 });
+      for (let i = 0; i < rows.length; i++) {
+        const m = rows[i];
+        const r = results[i];
         recordHeartbeat(
           m.id,
           r.status,
@@ -600,13 +607,22 @@ export async function runStatusChecks(
           rid,
           r.ms
         );
-        return;
       }
-      const r = await resolveFeedStatus(m.feedSlug || null, m.statusPage || null);
-      recordHeartbeat(m.id, r.status, r.error || r.detail, 0);
-    });
+    } else {
+      await mapPool(rows, CONCURRENCY, async (m) => {
+        const r = await resolveFeedStatus(m.feedSlug || null, m.statusPage || null);
+        recordHeartbeat(m.id, r.status, r.error || r.detail, 0);
+      });
+    }
     lastRunAt = Date.now();
-    return { ok: true, checked: rows.length, at: lastRunAt, mode: viaRouter ? 'router-probe' : 'internet-feeds', routerId: rid || null };
+    return {
+      ok: true,
+      checked: rows.length,
+      at: lastRunAt,
+      mode: lastProbeMode,
+      routerId: viaRouter ? rid : null,
+      routerProbeUnavailable: lastRouterProbeUnavailable,
+    };
   } finally {
     running = false;
   }
@@ -636,9 +652,12 @@ export async function runUplinkChecks(routerConn?: RouterConn | null, routerId?:
 
     const viaRouter = !!(routerConn?.host && routerConn?.api_user);
 
-    await mapPool(targets, CONCURRENCY, async (t) => {
-      if (viaRouter) {
-        const r = await probeHttpUrlFromRouter(routerConn!, t.url);
+    if (viaRouter) {
+      const urls = targets.map((t) => String(t.url || ''));
+      const results = await probeHttpUrlsFromRouter(routerConn!, urls, { concurrency: 4 });
+      for (let i = 0; i < targets.length; i++) {
+        const t = targets[i];
+        const r = results[i];
         db.prepare(`
           INSERT INTO status_uplink_results (target_id, status, latency_ms, code, body_snip, error, checked_at, router_id)
           VALUES (?, ?, ?, NULL, ?, ?, ?, ?)
@@ -652,15 +671,17 @@ export async function runUplinkChecks(routerConn?: RouterConn | null, routerId?:
           rid
         );
         pruneUplinkResults(t.id);
-        return;
       }
-      const r = await resolveFeedStatus(t.feedSlug || null, t.statusPage || null);
-      db.prepare(`
-        INSERT INTO status_uplink_results (target_id, status, latency_ms, code, body_snip, error, checked_at, router_id)
-        VALUES (?, ?, NULL, NULL, ?, ?, ?, 0)
-      `).run(t.id, r.status, r.detail || null, r.error || null, Date.now());
-      pruneUplinkResults(t.id);
-    });
+    } else {
+      await mapPool(targets, CONCURRENCY, async (t) => {
+        const r = await resolveFeedStatus(t.feedSlug || null, t.statusPage || null);
+        db.prepare(`
+          INSERT INTO status_uplink_results (target_id, status, latency_ms, code, body_snip, error, checked_at, router_id)
+          VALUES (?, ?, NULL, NULL, ?, ?, ?, 0)
+        `).run(t.id, r.status, r.detail || null, r.error || null, Date.now());
+        pruneUplinkResults(t.id);
+      });
+    }
 
     lastUplinkRunAt = Date.now();
     return {
@@ -669,7 +690,7 @@ export async function runUplinkChecks(routerConn?: RouterConn | null, routerId?:
       hosts: 0,
       at: lastUplinkRunAt,
       mode: viaRouter ? 'router-probe' : 'internet-feeds',
-      routerId: rid || null,
+      routerId: viaRouter ? rid : null,
     };
   } finally {
     uplinkRunning = false;
@@ -685,6 +706,18 @@ function latestHeartbeat(monitorId: number, routerId = 0) {
   `
     )
     .get(monitorId, routerId || 0) as any;
+}
+
+function heartbeatView(monitorId: number, requestedRouterId = 0) {
+  if (requestedRouterId > 0) {
+    const fromRouter = latestHeartbeat(monitorId, requestedRouterId);
+    if (fromRouter) return { hb: fromRouter, source: 'router' as const, readRouterId: requestedRouterId };
+    const fromFeed = latestHeartbeat(monitorId, 0);
+    if (fromFeed) return { hb: fromFeed, source: 'internet-fallback' as const, readRouterId: 0 };
+    return { hb: null as any, source: 'pending' as const, readRouterId: requestedRouterId };
+  }
+  const fromFeed = latestHeartbeat(monitorId, 0);
+  return { hb: fromFeed, source: 'internet' as const, readRouterId: 0 };
 }
 
 function heartbeatHistory(monitorId: number, routerId = 0, limit = 48) {
@@ -711,6 +744,40 @@ function uptimePct(monitorId: number, routerId = 0): number {
   return Math.round((up / rows.length) * 1000) / 10;
 }
 
+function latestUplinkResult(targetId: number, routerId = 0) {
+  return db
+    .prepare(
+      `
+      SELECT status, latency_ms AS latencyMs, code, body_snip AS bodySnip, error, checked_at AS checkedAt
+      FROM status_uplink_results WHERE target_id = ? AND router_id = ? ORDER BY checked_at DESC LIMIT 1
+    `
+    )
+    .get(targetId, routerId || 0) as any;
+}
+
+function uplinkView(targetId: number, requestedRouterId = 0) {
+  if (requestedRouterId > 0) {
+    const fromRouter = latestUplinkResult(targetId, requestedRouterId);
+    if (fromRouter) return { row: fromRouter, readRouterId: requestedRouterId };
+    const fromFeed = latestUplinkResult(targetId, 0);
+    if (fromFeed) return { row: fromFeed, readRouterId: 0 };
+    return { row: null as any, readRouterId: requestedRouterId };
+  }
+  return { row: latestUplinkResult(targetId, 0), readRouterId: 0 };
+}
+
+function uplinkHistory(targetId: number, routerId = 0, limit = 30) {
+  return db
+    .prepare(
+      `
+      SELECT status, latency_ms AS latencyMs, checked_at AS t
+      FROM status_uplink_results WHERE target_id = ? AND router_id = ? ORDER BY checked_at DESC LIMIT ?
+    `
+    )
+    .all(targetId, routerId || 0, limit)
+    .reverse() as any[];
+}
+
 export function listStatusOverview(routerId?: number | null) {
   const rid = routerId ?? activeRouterId ?? 0;
   const groups = db
@@ -730,9 +797,9 @@ export function listStatusOverview(routerId?: number | null) {
     .all() as any[];
 
   const enriched = monitors.map((m) => {
-    const last = latestHeartbeat(m.id, rid);
-    const history = heartbeatHistory(m.id, rid, 40);
-    const viaRouter = rid > 0;
+    const view = heartbeatView(m.id, rid);
+    const last = view.hb;
+    const history = heartbeatHistory(m.id, view.readRouterId, 40);
     return {
       ...m,
       enabled: !!m.enabled,
@@ -743,8 +810,8 @@ export function listStatusOverview(routerId?: number | null) {
       lastError: last?.error ?? null,
       detail: last?.error ?? null,
       lastChecked: last?.checkedAt ?? null,
-      uptimePct: uptimePct(m.id, rid),
-      source: viaRouter ? 'router' : 'internet',
+      uptimePct: uptimePct(m.id, view.readRouterId),
+      source: view.source,
       history: history.map((h) => ({
         t: h.t,
         up: h.status === 'up' || h.status === 'degraded',
@@ -754,7 +821,8 @@ export function listStatusOverview(routerId?: number | null) {
     };
   });
 
-  const viaRouter = rid > 0;
+  const routerProbeActive = enriched.some((m) => m.source === 'router');
+  const feedFallback = rid > 0 && enriched.some((m) => m.source === 'internet-fallback');
   const summary = {
     total: enriched.length,
     up: enriched.filter((m) => m.status === 'up').length,
@@ -767,8 +835,10 @@ export function listStatusOverview(routerId?: number | null) {
     })(),
     lastRunAt,
     scanning: running,
-    mode: viaRouter ? ('router-probe' as const) : ('internet-feeds' as const),
-    routerId: rid || null,
+    mode: routerProbeActive ? ('router-probe' as const) : ('internet-feeds' as const),
+    routerId: routerProbeActive ? rid : null,
+    routerProbeUnavailable: lastRouterProbeUnavailable,
+    feedFallback,
     egressOk: true as boolean | null,
   };
 
@@ -788,23 +858,9 @@ export function listUplinkOverview(routerId?: number | null) {
     .all() as any[];
 
   const enrichedTargets = targets.map((t) => {
-    const last = db
-      .prepare(
-        `
-      SELECT status, latency_ms AS latencyMs, code, body_snip AS bodySnip, error, checked_at AS checkedAt
-      FROM status_uplink_results WHERE target_id = ? AND router_id = ? ORDER BY checked_at DESC LIMIT 1
-    `
-      )
-      .get(t.id, rid || 0) as any;
-    const history = db
-      .prepare(
-        `
-      SELECT status, latency_ms AS latencyMs, checked_at AS t
-      FROM status_uplink_results WHERE target_id = ? AND router_id = ? ORDER BY checked_at DESC LIMIT 30
-    `
-      )
-      .all(t.id, rid || 0)
-      .reverse() as any[];
+    const view = uplinkView(t.id, rid);
+    const last = view.row;
+    const history = uplinkHistory(t.id, view.readRouterId, 30);
     return {
       ...t,
       enabled: !!t.enabled,
@@ -824,7 +880,7 @@ export function listUplinkOverview(routerId?: number | null) {
     };
   });
 
-  const viaRouter = rid > 0;
+  const routerProbeActive = enrichedTargets.some((t) => rid > 0 && latestUplinkResult(t.id, rid));
   const summary = {
     publicIp: null as string | null,
     total: enrichedTargets.length,
@@ -836,8 +892,9 @@ export function listUplinkOverview(routerId?: number | null) {
       return lat.length ? Math.round(lat.reduce((a, b) => a + b, 0) / lat.length) : null;
     })(),
     lastRunAt: lastUplinkRunAt,
-    mode: viaRouter ? ('router-probe' as const) : ('internet-feeds' as const),
-    routerId: rid || null,
+    mode: routerProbeActive ? ('router-probe' as const) : ('internet-feeds' as const),
+    routerId: routerProbeActive ? rid : null,
+    feedFallback: rid > 0 && !routerProbeActive && enrichedTargets.some((t) => t.status !== 'pending'),
   };
 
   return { targets: enrichedTargets, hosts: [], summary };
