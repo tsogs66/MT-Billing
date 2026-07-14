@@ -1706,23 +1706,26 @@ async function probeHttpUrlWithApi(
   start = performance.now()
 ): Promise<RouterHttpProbeResult> {
   const { host, fetchUrl } = parseProbeUrl(url);
-  const mode = fetchUrl.startsWith('http://') ? 'http' : 'https';
   let fetchError: string | null = null;
 
   await removeStaleFetches(api);
   await cancelFetchTool(api);
 
   try {
-    const rows = (await api.write('/tool/fetch', [
+    // RouterOS v7 rejects keep-result=no together with output=none ("please use output option").
+    const fetchArgs = [
       `=url=${fetchUrl}`,
-      `=mode=${mode}`,
       '=check-certificate=no',
       '=http-method=get',
       '=output=none',
-      '=keep-result=no',
-    ])) as Record<string, string>[];
+    ];
+    let rows = (await api.write('/tool/fetch', fetchArgs)) as Record<string, string>[];
 
     let { st, message } = terminalFetchStatus(rows);
+    if (st === 'failed' && message?.toLowerCase().includes('output')) {
+      rows = (await api.write('/tool/fetch', [...fetchArgs, '=as-value'])) as Record<string, string>[];
+      ({ st, message } = terminalFetchStatus(rows));
+    }
     const deadline = Date.now() + 12_000;
 
     while (!['finished', 'ok', 'failed'].includes(st) && Date.now() < deadline) {
