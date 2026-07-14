@@ -162,9 +162,9 @@ export default function StatusHub() {
         }),
         api.get('/status-hub/uplink/check', { params: routerParams }).then((r) => setUplink(r.data)),
       ]);
-      // Poll while background scan finishes
-      for (let i = 0; i < 12; i++) {
-        await new Promise((r) => setTimeout(r, 1500));
+      // Full router sweep can take several minutes (sequential probes).
+      for (let i = 0; i < 120; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
         const [svc, up] = await Promise.all([
           api.get('/status-hub', { params: routerParams }),
           api.get('/status-hub/uplink', { params: routerParams }),

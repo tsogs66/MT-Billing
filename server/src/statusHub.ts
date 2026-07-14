@@ -595,6 +595,11 @@ export async function runStatusChecks(
     lastProbeMode = viaRouter ? 'router-probe' : 'internet-feeds';
 
     if (viaRouter) {
+      // Drop stale router heartbeats so UI cannot show hours-old "output option" errors mid-scan.
+      if (rid > 0) {
+        db.prepare('DELETE FROM status_heartbeats WHERE router_id = ?').run(rid);
+        for (const m of rows) recordHeartbeat(m.id, 'pending', 'Scanning…', rid, null);
+      }
       const urls = rows.map((m) => String(m.url || ''));
       const results = await probeHttpUrlsFromRouter(routerConn!, urls);
       for (let i = 0; i < rows.length; i++) {

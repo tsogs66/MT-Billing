@@ -1716,45 +1716,80 @@ function extractImmediateFetchResult(rows: Record<string, string>[] | undefined)
   return null;
 }
 
-/** RouterOS v7 needs as-value + output=none; keep-result=no triggers "please use output option". */
-async function attemptRouterFetch(api: RouterOSAPI, fetchUrl: string): Promise<{ ok: boolean; message: string | null }> {
-  const variants: string[][] = [
-    // RouterOS 7.20+ CLI: /tool fetch url=... as-value output=none check-certificate=no
-    [`=url=${fetchUrl}`, '=as-value=', '=output=none', '=check-certificate=no'],
-    [`=url=${fetchUrl}`, '=as-value=', '=output=user', '=check-certificate=no', '=http-method=head'],
-    [`=url=${fetchUrl}`, '=as-value=', '=output=none'],
-    [`=url=${fetchUrl}`, '=output=none', '=check-certificate=no'],
-  ];
-
-  await removeStaleFetches(api);
-  await cancelFetchTool(api);
-
-  let lastError: string | null = null;
-  for (const args of variants) {
-    await cancelFetchTool(api);
+async function removeProbeFile(api: RouterOSAPI, name: string) {
+  try {
+    await api.write('/file/remove', [`=.id=${name}`]);
+  } catch {
     try {
-      const rows = (await api.write('/tool/fetch', args)) as Record<string, string>[];
-      const immediate = extractImmediateFetchResult(rows);
-      const result = immediate ?? (await waitForRouterFetch(api, rows));
-      if (result.ok) {
-        await cancelFetchTool(api);
-        await removeStaleFetches(api);
-        return result;
-      }
-      lastError = result.message;
-      const retry = lastError?.toLowerCase().includes('output') || lastError?.toLowerCase().includes('keep-result');
-      if (!retry) break;
-    } catch (e: unknown) {
-      lastError = rosErrorMessage(e);
-      const retry = lastError.toLowerCase().includes('output') || lastError.toLowerCase().includes('keep-result');
-      if (!retry) break;
-    } finally {
-      await cancelFetchTool(api);
+      await api.write('/file/remove', [`=numbers=${name}`]);
+    } catch {
+      /* ignore */
     }
   }
+}
 
+/**
+ * RouterOS 7.20 API rejects many output=/keep-result= combinations with
+ * "please use 'output' option". Writing to a temp file (default output=file)
+ * is the reliable API path; CLI as-value/output=none still works in Winbox.
+ */
+async function attemptRouterFetch(api: RouterOSAPI, fetchUrl: string): Promise<{ ok: boolean; message: string | null }> {
+  const dst = `mtb-probe-${Date.now() % 1_000_000}.tmp`;
   await removeStaleFetches(api);
+  await cancelFetchTool(api);
+  await removeProbeFile(api, dst);
+
+  let lastError: string | null = null;
+  try {
+    const rows = (await api.write('/tool/fetch', [
+      `=url=${fetchUrl}`,
+      `=dst-path=${dst}`,
+      '=check-certificate=no',
+      '=http-method=get',
+    ])) as Record<string, string>[];
+    const immediate = extractImmediateFetchResult(rows);
+    const result = immediate ?? (await waitForRouterFetch(api, rows));
+    if (result.ok) {
+      await removeProbeFile(api, dst);
+      return result;
+    }
+    lastError = result.message;
+    if (lastError?.toLowerCase().includes('output')) {
+      const rows2 = (await api.write('/tool/fetch', [
+        `=url=${fetchUrl}`,
+        '=as-value=',
+        '=output=none',
+        '=check-certificate=no',
+      ])) as Record<string, string>[];
+      const immediate2 = extractImmediateFetchResult(rows2);
+      const result2 = immediate2 ?? (await waitForRouterFetch(api, rows2));
+      if (result2.ok) return result2;
+      lastError = result2.message || lastError;
+    }
+  } catch (e: unknown) {
+    lastError = rosErrorMessage(e);
+  } finally {
+    await cancelFetchTool(api);
+    await removeProbeFile(api, dst);
+    await removeStaleFetches(api);
+  }
   return { ok: false, message: lastError };
+}
+
+async function resolveHostViaRouter(api: RouterOSAPI, host: string): Promise<string | null> {
+  try {
+    const rows = (await api.write('/resolve', [`=domain-name=${host}`])) as Record<string, string>[];
+    const ip = rows?.[0]?.['ret'] || rows?.[0]?.address || rows?.[0]?.['ip'];
+    return ip ? String(ip) : null;
+  } catch {
+    try {
+      const rows = (await api.write('/resolve', [`=address=${host}`])) as Record<string, string>[];
+      const ip = rows?.[0]?.['ret'] || rows?.[0]?.address;
+      return ip ? String(ip) : null;
+    } catch {
+      return null;
+    }
+  }
 }
 
 async function probePingHost(
@@ -1762,15 +1797,32 @@ async function probePingHost(
   host: string,
   start: number
 ): Promise<RouterHttpProbeResult | null> {
-  const pingRows = (await api.write('/ping', [`=address=${host}`, '=count=3', '=interval=100ms'])) as Record<
-    string,
-    string
-  >[];
-  const ms = parsePingAvgMs(pingRows);
-  const received = pingRows?.filter((p) => Number(p.received ?? 1) > 0 || p.time).length ?? 0;
-  if (received > 0 && ms != null) {
-    const status = ms > 2500 ? 'degraded' : 'up';
-    return { up: true, status, ms: Math.round(performance.now() - start), code: 0, error: null };
+  const address = (await resolveHostViaRouter(api, host)) || host;
+  const attempts: string[][] = [
+    [`=address=${address}`, '=count=2'],
+    [`=address=${address}`, '=count=2', '=interval=500ms'],
+    [`=address=${host}`, '=count=2'],
+  ];
+
+  for (const args of attempts) {
+    try {
+      const pingRows = (await api.write('/ping', args)) as Record<string, string>[];
+      const ms = parsePingAvgMs(pingRows);
+      const received =
+        pingRows?.filter((p) => {
+          if (p.time || p['avg-rtt']) return true;
+          if (Number(p.received) > 0) return true;
+          const st = String(p.status || '').toLowerCase();
+          return st === '' || st === 'echo reply';
+        }).length ?? 0;
+      if (received > 0) {
+        const latency = ms ?? Math.round(performance.now() - start);
+        const status = latency > 2500 ? 'degraded' : 'up';
+        return { up: true, status, ms: latency, code: 0, error: null };
+      }
+    } catch {
+      /* try next */
+    }
   }
   return null;
 }
@@ -1782,7 +1834,7 @@ async function probeHttpUrlWithApi(
 ): Promise<RouterHttpProbeResult> {
   const { host, fetchUrl } = parseProbeUrl(url);
 
-  // Ping is reliable via API on RouterOS 7 when /tool fetch syntax differs from CLI.
+  // Prefer ICMP: avoids RouterOS 7 API /tool fetch "output" traps when WAN works.
   const pinged = await probePingHost(api, host, start);
   if (pinged) return pinged;
 
@@ -1793,12 +1845,19 @@ async function probeHttpUrlWithApi(
     return { up: true, status: degraded ? 'degraded' : 'up', ms, code: 200, error: null };
   }
 
+  const msg = fetched.message || 'unreachable from router';
+  // Never surface the ROS7 API syntax trap as a service outage reason.
+  const clean =
+    msg.toLowerCase().includes('output') || msg.toLowerCase().includes('keep-result')
+      ? 'host unreachable (ping/fetch failed from router)'
+      : msg;
+
   return {
     up: false,
     status: 'down',
     ms: null,
     code: 0,
-    error: fetched.message || 'unreachable from router',
+    error: clean,
   };
 }
 
