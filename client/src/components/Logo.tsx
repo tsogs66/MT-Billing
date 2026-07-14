@@ -16,10 +16,10 @@ type LogoProps = {
 };
 
 const SIZES = {
-  sm: { box: 'w-9 h-9', title: 'text-sm', sub: 'text-[10px]', img: 'h-full w-full' },
-  md: { box: 'w-11 h-11', title: 'text-base', sub: 'text-[11px]', img: 'h-full w-full' },
-  lg: { box: 'w-14 h-14', title: 'text-lg', sub: 'text-xs', img: 'h-full w-full' },
-  hero: { box: 'w-24 h-24 sm:w-28 sm:h-28', title: 'text-2xl sm:text-3xl', sub: 'text-sm', img: 'h-full w-full' },
+  sm: { box: 'w-9 h-9 rounded-2xl', title: 'text-sm', sub: 'text-[10px]', img: 'h-full w-full' },
+  md: { box: 'w-11 h-11 rounded-2xl', title: 'text-base', sub: 'text-[11px]', img: 'h-full w-full' },
+  lg: { box: 'w-14 h-14 rounded-2xl', title: 'text-lg', sub: 'text-xs', img: 'h-full w-full' },
+  hero: { box: 'w-24 h-24 sm:w-28 sm:h-28 rounded-3xl', title: 'text-2xl sm:text-3xl', sub: 'text-sm', img: 'h-full w-full' },
 };
 
 export default function Logo({
@@ -43,13 +43,13 @@ export default function Logo({
   return (
     <div className={`flex items-center gap-3 ${className}`}>
       <div
-        className={`${s.box} rounded-xl bg-white/95 flex items-center justify-center overflow-hidden shadow-glow shrink-0 ring-1 ring-black/5`}
+        className={`${s.box} bg-white/95 flex items-center justify-center overflow-hidden shadow-glow shrink-0 ring-1 ring-black/5`}
         title={PRODUCT_TITLE}
       >
         <img
           src={logoSrc}
           alt={name}
-          className={`${s.img} object-contain object-center p-1`}
+          className={`${s.img} object-contain object-center p-1.5 rounded-[inherit]`}
         />
       </div>
       {showText && (

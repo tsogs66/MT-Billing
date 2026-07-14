@@ -289,25 +289,32 @@ function oltIcon(name: string, active = false, online?: boolean | null) {
   });
 }
 
-/** NAP — blue square box with N (matches reference) */
+/** NAP — fiber distribution / junction box icon */
 function napIcon(name: string, active = false) {
+  const svg = `<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+    <rect x="4" y="5" width="16" height="14" rx="2.5" fill="none" stroke="#fff" stroke-width="1.8"/>
+    <circle cx="9" cy="12" r="1.5" fill="#fff"/>
+    <circle cx="15" cy="12" r="1.5" fill="#fff"/>
+    <path d="M9 13.5v4M15 13.5v4M4 9h16" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/>
+  </svg>`;
   return L.divIcon({
     className: 'map-equip-marker',
     html: `<div class="map-equip-row ${active ? 'is-active' : ''}">
-      <span class="map-badge map-badge-nap">N</span>
+      <span class="map-badge map-badge-nap" title="NAP">${svg}</span>
       <span class="map-equip-label">${escapeHtml(name)}</span>
     </div>`,
-    iconSize: [100, 26],
-    iconAnchor: [13, 13],
+    iconSize: [110, 28],
+    iconAnchor: [14, 14],
   });
 }
 
-/** Client ONU — round disc with house; pulse when online (color matches icon) */
+/** Client ONU — home + fiber drop; pulse when online */
 function onuIcon(state: ClientState, hovered = false, selected = false) {
   const { fill, glow } = CLIENT_COLORS[state];
-  const size = selected || hovered ? 22 : 18;
-  const house = `<svg viewBox="0 0 16 16" width="10" height="10" aria-hidden="true">
-    <path d="M2.5 7.5 L8 2.5 L13.5 7.5 V13 H9.5 V10 H6.5 V13 H2.5 Z" fill="#fff"/>
+  const size = selected || hovered ? 24 : 20;
+  const icon = `<svg viewBox="0 0 20 20" width="12" height="12" aria-hidden="true">
+    <path d="M3 9.2 L10 3.5 L17 9.2 V16.5 H12.2 V12.2 H7.8 V16.5 H3 Z" fill="#fff"/>
+    <circle cx="10" cy="10.2" r="1.5" fill="${fill}"/>
   </svg>`;
   const cls = [
     'map-onu-round',
@@ -317,7 +324,7 @@ function onuIcon(state: ClientState, hovered = false, selected = false) {
   ].filter(Boolean).join(' ');
   return L.divIcon({
     className: 'map-onu-marker',
-    html: `<span class="${cls}" style="--onu-color:${fill};--onu-glow:${glow};width:${size}px;height:${size}px">${house}</span>`,
+    html: `<span class="${cls}" style="--onu-color:${fill};--onu-glow:${glow};width:${size}px;height:${size}px" title="Client / ONU">${icon}</span>`,
     iconSize: [size, size],
     iconAnchor: [size / 2, size / 2],
   });
