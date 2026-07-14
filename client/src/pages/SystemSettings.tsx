@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Settings as SettingsIcon, Sun, Moon, Anchor, Database as DbIcon, Bot, Clock, KeyRound,
-  Router as RouterIcon, Globe2, Download, Trash2, RefreshCw, Plus, Pencil, Power, Cloud,
+  Router as RouterIcon, Globe2, Download, Trash2, RefreshCw, Plus, Pencil, Power, Cloud, Wifi,
 } from 'lucide-react';
 import Layout from '../components/Layout';
 import {
@@ -729,8 +729,23 @@ function RouterManagement({ flash }: any) {
 function RouterModal({ router, onClose, onSaved }: any) {
   const [form, setForm] = useState({ ...router, api_pass: '' });
   const [busy, setBusy] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<any>(null);
   const isEdit = !!router.id;
   const set = (patch: any) => setForm((f: any) => ({ ...f, ...patch }));
+  const test = async () => {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const r = await api.post('/routers/test', { ...form, id: router.id });
+      setTestResult(r.data);
+      if (r.data.board) set({ board: r.data.board });
+    } catch (e: any) {
+      setTestResult({ online: false, error: e?.response?.data?.error || 'Test failed' });
+    } finally {
+      setTesting(false);
+    }
+  };
   const save = async () => {
     if (!form.name?.trim()) return;
     setBusy(true);
@@ -746,9 +761,38 @@ function RouterModal({ router, onClose, onSaved }: any) {
     <Modal
       title={isEdit ? 'Edit Router' : 'Add Router'}
       onClose={onClose}
-      footer={<ModalFooter onCancel={onClose} onConfirm={save} busy={busy} />}
+      footer={
+        <div className="flex items-center justify-between w-full gap-2">
+          <button type="button" className="btn-secondary" onClick={test} disabled={testing || !form.host}>
+            <Wifi size={16} className={testing ? 'animate-pulse' : ''} />
+            {testing ? 'Testing…' : 'Test connection'}
+          </button>
+          <ModalFooter onCancel={onClose} onConfirm={save} busy={busy} />
+        </div>
+      }
     >
       <div className="space-y-3">
+        {testResult && (
+          <div
+            className={`text-sm rounded-lg px-3 py-2 ${
+              testResult.online ? 'bg-emerald-50 text-emerald-800' : 'bg-rose-50 text-rose-800'
+            }`}
+          >
+            {testResult.online ? (
+              <>
+                <b>Connected</b>
+                {testResult.board && <> · Board: {testResult.board}</>}
+                {testResult.identity && <> · Identity: {testResult.identity}</>}
+                {testResult.version && <> · {testResult.version}</>}
+              </>
+            ) : (
+              <>
+                <b>Unreachable</b>
+                {testResult.error && <> — {testResult.error}</>}
+              </>
+            )}
+          </div>
+        )}
         <FormField label="Name" required>
           <input className="input" value={form.name || ''} onChange={(e) => set({ name: e.target.value })} />
         </FormField>

@@ -333,7 +333,7 @@ function routerConnForId(routerId: number | null) {
   if (!r?.host || !r?.api_user) return null;
   return {
     host: r.host,
-    port: r.api_port || 8728,
+    port: Number(r.port) || 8728,
     api_user: r.api_user,
     api_pass: r.api_pass,
   };
