@@ -46,19 +46,19 @@ detect_board() {
 }
 
 ensure_swap_if_low_ram() {
-  # Orange Pi One has 512 MB RAM — builds will OOM without swap.
+  # Pi 3 / Orange Pi One (≤2 GB) OOMs during Vite/tsc without swap.
   local mem_kb
   mem_kb="$(awk '/MemTotal/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)"
-  if [[ "${mem_kb:-0}" -ge 900000 ]]; then
+  if [[ "${mem_kb:-0}" -ge 1900000 ]]; then
     return 0
   fi
   if swapon --show 2>/dev/null | grep -q .; then
     echo "Low RAM (${mem_kb} kB); swap already active."
     return 0
   fi
-  echo "Low RAM (${mem_kb} kB); creating 1G swapfile…"
+  echo "Low RAM (${mem_kb} kB); creating 2G swapfile…"
   if [[ ! -f /swapfile ]]; then
-    fallocate -l 1G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=1024 status=none
+    fallocate -l 2G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none
     chmod 600 /swapfile
     mkswap /swapfile
   fi
