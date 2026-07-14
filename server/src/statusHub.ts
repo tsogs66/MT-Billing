@@ -4,6 +4,8 @@
  * Heartbeats stored in SQLite; optional Prometheus text export.
  */
 import { db } from './db.js';
+import type { RouterConn } from './mikrotik.js';
+import { probeHttpUrlFromRouter } from './mikrotik.js';
 
 const HEARTBEAT_KEEP = 120;
 const DEFAULT_INTERVAL_SEC = 90;
@@ -202,6 +204,7 @@ let running = false;
 let uplinkRunning = false;
 let lastRunAt: number | null = null;
 let lastUplinkRunAt: number | null = null;
+let activeRouterId: number | null = null;
 
 function columnExists(table: string, col: string): boolean {
   const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
@@ -293,6 +296,12 @@ export function initStatusHub() {
   }
   if (!columnExists('status_uplink_targets', 'status_page')) {
     db.exec(`ALTER TABLE status_uplink_targets ADD COLUMN status_page TEXT`);
+  }
+  if (!columnExists('status_heartbeats', 'router_id')) {
+    db.exec(`ALTER TABLE status_heartbeats ADD COLUMN router_id INTEGER NOT NULL DEFAULT 0`);
+  }
+  if (!columnExists('status_uplink_results', 'router_id')) {
+    db.exec(`ALTER TABLE status_uplink_results ADD COLUMN router_id INTEGER NOT NULL DEFAULT 0`);
   }
 
   seedGroupsAndMonitors();
@@ -530,40 +539,74 @@ function pruneHeartbeats(monitorId: number) {
   db.prepare('DELETE FROM status_heartbeats WHERE monitor_id = ? AND checked_at < ?').run(monitorId, cutoff);
 }
 
-function recordHeartbeat(monitorId: number, status: HeartbeatStatus, detail?: string | null) {
+function recordHeartbeat(
+  monitorId: number,
+  status: HeartbeatStatus,
+  detail?: string | null,
+  routerId = 0,
+  latencyMs?: number | null
+) {
   db.prepare(`
-    INSERT INTO status_heartbeats (monitor_id, status, latency_ms, code, error, checked_at)
-    VALUES (?, ?, NULL, NULL, ?, ?)
-  `).run(monitorId, status, detail || null, Date.now());
+    INSERT INTO status_heartbeats (monitor_id, status, latency_ms, code, error, checked_at, router_id)
+    VALUES (?, ?, ?, NULL, ?, ?, ?)
+  `).run(monitorId, status, latencyMs ?? null, detail || null, Date.now(), routerId || 0);
   pruneHeartbeats(monitorId);
 }
 
-export async function runStatusChecks(monitorIds?: number[]) {
+export function setStatusHubRouterId(routerId: number | null | undefined) {
+  const id = routerId != null && Number(routerId) > 0 ? Number(routerId) : null;
+  activeRouterId = id;
+  return activeRouterId;
+}
+
+export function getStatusHubRouterId() {
+  return activeRouterId;
+}
+
+export async function runStatusChecks(
+  monitorIds?: number[],
+  routerConn?: RouterConn | null,
+  routerId?: number | null
+) {
   if (running) return { skipped: true, running: true };
   running = true;
+  const rid = routerId ?? activeRouterId ?? 0;
   try {
     let rows: any[];
     if (monitorIds?.length) {
       const placeholders = monitorIds.map(() => '?').join(',');
       rows = db
         .prepare(
-          `SELECT id, feed_slug AS feedSlug, status_page AS statusPage FROM status_monitors WHERE enabled = 1 AND id IN (${placeholders})`
+          `SELECT id, name, url, feed_slug AS feedSlug, status_page AS statusPage FROM status_monitors WHERE enabled = 1 AND id IN (${placeholders})`
         )
         .all(...monitorIds);
     } else {
       rows = db
         .prepare(
-          `SELECT id, feed_slug AS feedSlug, status_page AS statusPage FROM status_monitors WHERE enabled = 1`
+          `SELECT id, name, url, feed_slug AS feedSlug, status_page AS statusPage FROM status_monitors WHERE enabled = 1`
         )
         .all();
     }
 
+    const viaRouter = !!(routerConn?.host && routerConn?.api_user);
+
     await mapPool(rows, CONCURRENCY, async (m) => {
+      if (viaRouter) {
+        const r = await probeHttpUrlFromRouter(routerConn!, m.url);
+        recordHeartbeat(
+          m.id,
+          r.status,
+          r.error || (r.ms != null ? `Router probe · ${r.ms} ms` : 'Router probe'),
+          rid,
+          r.ms
+        );
+        return;
+      }
       const r = await resolveFeedStatus(m.feedSlug || null, m.statusPage || null);
-      recordHeartbeat(m.id, r.status, r.error || r.detail);
+      recordHeartbeat(m.id, r.status, r.error || r.detail, 0);
     });
     lastRunAt = Date.now();
-    return { ok: true, checked: rows.length, at: lastRunAt, mode: 'internet-feeds' };
+    return { ok: true, checked: rows.length, at: lastRunAt, mode: viaRouter ? 'router-probe' : 'internet-feeds', routerId: rid || null };
   } finally {
     running = false;
   }
@@ -580,66 +623,96 @@ function pruneUplinkResults(targetId: number) {
   db.prepare('DELETE FROM status_uplink_results WHERE target_id = ? AND checked_at < ?').run(targetId, cutoff);
 }
 
-export async function runUplinkChecks() {
+export async function runUplinkChecks(routerConn?: RouterConn | null, routerId?: number | null) {
   if (uplinkRunning) return { skipped: true, running: true };
   uplinkRunning = true;
+  const rid = routerId ?? activeRouterId ?? 0;
   try {
     const targets = db
       .prepare(
-        `SELECT id, feed_slug AS feedSlug, status_page AS statusPage FROM status_uplink_targets WHERE enabled = 1`
+        `SELECT id, name, url, feed_slug AS feedSlug, status_page AS statusPage FROM status_uplink_targets WHERE enabled = 1`
       )
       .all() as any[];
 
+    const viaRouter = !!(routerConn?.host && routerConn?.api_user);
+
     await mapPool(targets, CONCURRENCY, async (t) => {
+      if (viaRouter) {
+        const r = await probeHttpUrlFromRouter(routerConn!, t.url);
+        db.prepare(`
+          INSERT INTO status_uplink_results (target_id, status, latency_ms, code, body_snip, error, checked_at, router_id)
+          VALUES (?, ?, ?, NULL, ?, ?, ?, ?)
+        `).run(
+          t.id,
+          r.status,
+          r.ms,
+          r.ms != null ? `Router probe · ${r.ms} ms` : null,
+          r.error || null,
+          Date.now(),
+          rid
+        );
+        pruneUplinkResults(t.id);
+        return;
+      }
       const r = await resolveFeedStatus(t.feedSlug || null, t.statusPage || null);
       db.prepare(`
-        INSERT INTO status_uplink_results (target_id, status, latency_ms, code, body_snip, error, checked_at)
-        VALUES (?, ?, NULL, NULL, ?, ?, ?)
+        INSERT INTO status_uplink_results (target_id, status, latency_ms, code, body_snip, error, checked_at, router_id)
+        VALUES (?, ?, NULL, NULL, ?, ?, ?, 0)
       `).run(t.id, r.status, r.detail || null, r.error || null, Date.now());
       pruneUplinkResults(t.id);
     });
 
     lastUplinkRunAt = Date.now();
-    return { ok: true, targets: targets.length, hosts: 0, at: lastUplinkRunAt, mode: 'internet-feeds' };
+    return {
+      ok: true,
+      targets: targets.length,
+      hosts: 0,
+      at: lastUplinkRunAt,
+      mode: viaRouter ? 'router-probe' : 'internet-feeds',
+      routerId: rid || null,
+    };
   } finally {
     uplinkRunning = false;
   }
 }
 
-function latestHeartbeat(monitorId: number) {
+function latestHeartbeat(monitorId: number, routerId = 0) {
   return db
     .prepare(
       `
     SELECT status, latency_ms AS latencyMs, code, error, checked_at AS checkedAt
-    FROM status_heartbeats WHERE monitor_id = ? ORDER BY checked_at DESC LIMIT 1
+    FROM status_heartbeats WHERE monitor_id = ? AND router_id = ? ORDER BY checked_at DESC LIMIT 1
   `
     )
-    .get(monitorId) as any;
+    .get(monitorId, routerId || 0) as any;
 }
 
-function heartbeatHistory(monitorId: number, limit = 48) {
+function heartbeatHistory(monitorId: number, routerId = 0, limit = 48) {
   return db
     .prepare(
       `
     SELECT status, latency_ms AS latencyMs, code, checked_at AS t
-    FROM status_heartbeats WHERE monitor_id = ?
+    FROM status_heartbeats WHERE monitor_id = ? AND router_id = ?
     ORDER BY checked_at DESC LIMIT ?
   `
     )
-    .all(monitorId, limit)
+    .all(monitorId, routerId || 0, limit)
     .reverse() as any[];
 }
 
-function uptimePct(monitorId: number): number {
+function uptimePct(monitorId: number, routerId = 0): number {
   const rows = db
-    .prepare(`SELECT status FROM status_heartbeats WHERE monitor_id = ? ORDER BY checked_at DESC LIMIT 100`)
-    .all(monitorId) as { status: string }[];
+    .prepare(
+      `SELECT status FROM status_heartbeats WHERE monitor_id = ? AND router_id = ? ORDER BY checked_at DESC LIMIT 100`
+    )
+    .all(monitorId, routerId || 0) as { status: string }[];
   if (!rows.length) return 100;
   const up = rows.filter((r) => r.status === 'up' || r.status === 'degraded').length;
   return Math.round((up / rows.length) * 1000) / 10;
 }
 
-export function listStatusOverview() {
+export function listStatusOverview(routerId?: number | null) {
+  const rid = routerId ?? activeRouterId ?? 0;
   const groups = db
     .prepare('SELECT id, slug, name, sort_order AS sortOrder, icon FROM status_groups ORDER BY sort_order, name')
     .all() as any[];
@@ -657,46 +730,53 @@ export function listStatusOverview() {
     .all() as any[];
 
   const enriched = monitors.map((m) => {
-    const last = latestHeartbeat(m.id);
-    const history = heartbeatHistory(m.id, 40);
+    const last = latestHeartbeat(m.id, rid);
+    const history = heartbeatHistory(m.id, rid, 40);
+    const viaRouter = rid > 0;
     return {
       ...m,
       enabled: !!m.enabled,
       builtin: !!m.builtin,
       status: (last?.status as HeartbeatStatus) || 'pending',
-      latencyMs: null,
+      latencyMs: last?.latencyMs ?? null,
       code: last?.code ?? null,
       lastError: last?.error ?? null,
       detail: last?.error ?? null,
       lastChecked: last?.checkedAt ?? null,
-      uptimePct: uptimePct(m.id),
-      source: 'internet',
+      uptimePct: uptimePct(m.id, rid),
+      source: viaRouter ? 'router' : 'internet',
       history: history.map((h) => ({
         t: h.t,
         up: h.status === 'up' || h.status === 'degraded',
         status: h.status,
-        ms: null,
+        ms: h.latencyMs ?? null,
       })),
     };
   });
 
+  const viaRouter = rid > 0;
   const summary = {
     total: enriched.length,
     up: enriched.filter((m) => m.status === 'up').length,
     degraded: enriched.filter((m) => m.status === 'degraded').length,
     down: enriched.filter((m) => m.status === 'down').length,
     pending: enriched.filter((m) => m.status === 'pending').length,
-    avgMs: null as number | null,
+    avgMs: (() => {
+      const lat = enriched.map((m) => m.latencyMs).filter((n): n is number => n != null);
+      return lat.length ? Math.round(lat.reduce((a, b) => a + b, 0) / lat.length) : null;
+    })(),
     lastRunAt,
     scanning: running,
-    mode: 'internet-feeds' as const,
+    mode: viaRouter ? ('router-probe' as const) : ('internet-feeds' as const),
+    routerId: rid || null,
     egressOk: true as boolean | null,
   };
 
   return { groups, monitors: enriched, summary };
 }
 
-export function listUplinkOverview() {
+export function listUplinkOverview(routerId?: number | null) {
+  const rid = routerId ?? activeRouterId ?? 0;
   const targets = db
     .prepare(
       `
@@ -712,18 +792,18 @@ export function listUplinkOverview() {
       .prepare(
         `
       SELECT status, latency_ms AS latencyMs, code, body_snip AS bodySnip, error, checked_at AS checkedAt
-      FROM status_uplink_results WHERE target_id = ? ORDER BY checked_at DESC LIMIT 1
+      FROM status_uplink_results WHERE target_id = ? AND router_id = ? ORDER BY checked_at DESC LIMIT 1
     `
       )
-      .get(t.id) as any;
+      .get(t.id, rid || 0) as any;
     const history = db
       .prepare(
         `
       SELECT status, latency_ms AS latencyMs, checked_at AS t
-      FROM status_uplink_results WHERE target_id = ? ORDER BY checked_at DESC LIMIT 30
+      FROM status_uplink_results WHERE target_id = ? AND router_id = ? ORDER BY checked_at DESC LIMIT 30
     `
       )
-      .all(t.id)
+      .all(t.id, rid || 0)
       .reverse() as any[];
     return {
       ...t,
@@ -738,24 +818,28 @@ export function listUplinkOverview() {
       history: history.map((h) => ({
         t: h.t,
         up: h.status === 'up' || h.status === 'degraded',
-        ms: null,
+        ms: h.latencyMs ?? null,
         status: h.status,
       })),
     };
   });
 
+  const viaRouter = rid > 0;
   const summary = {
     publicIp: null as string | null,
     total: enrichedTargets.length,
     up: enrichedTargets.filter((t) => t.status === 'up').length,
     degraded: enrichedTargets.filter((t) => t.status === 'degraded').length,
     down: enrichedTargets.filter((t) => t.status === 'down').length,
-    avgMs: null as number | null,
+    avgMs: (() => {
+      const lat = enrichedTargets.map((t) => t.latencyMs).filter((n): n is number => n != null);
+      return lat.length ? Math.round(lat.reduce((a, b) => a + b, 0) / lat.length) : null;
+    })(),
     lastRunAt: lastUplinkRunAt,
-    mode: 'internet-feeds' as const,
+    mode: viaRouter ? ('router-probe' as const) : ('internet-feeds' as const),
+    routerId: rid || null,
   };
 
-  // Local IP/host probes intentionally unused — status is internet-feed only
   return { targets: enrichedTargets, hosts: [], summary };
 }
 

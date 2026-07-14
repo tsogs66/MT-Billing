@@ -8,6 +8,7 @@ import Layout from '../components/Layout';
 import { Modal, ModalFooter, FormField } from '../components/ui';
 import { api } from '../api';
 import { useAuth } from '../context/AuthContext';
+import { useRouterDevice } from '../context/RouterContext';
 
 type Tab = 'services' | 'uplink' | 'manage';
 type Status = 'up' | 'down' | 'degraded' | 'pending';
@@ -27,6 +28,7 @@ interface Monitor {
   uptimePct: number;
   lastChecked: number | null;
   lastError?: string | null;
+  source?: string;
   history: { t: number; up: boolean; ms: number | null; status: string }[];
 }
 
@@ -124,6 +126,10 @@ function StatusDot({ status }: { status: Status }) {
 
 export default function StatusHub() {
   const { canWrite } = useAuth();
+  const { current } = useRouterDevice();
+  const routerId = current?.id ?? null;
+  const routerParams = routerId ? { routerId } : {};
+  const viaRouter = !!routerId;
   const [tab, setTab] = useState<Tab>('services');
   const [groups, setGroups] = useState<Group[]>([]);
   const [monitors, setMonitors] = useState<Monitor[]>([]);
@@ -134,14 +140,14 @@ export default function StatusHub() {
   const [addOpen, setAddOpen] = useState(false);
 
   const loadServices = async () => {
-    const r = await api.get('/status-hub');
+    const r = await api.get('/status-hub', { params: routerParams });
     setGroups(r.data.groups || []);
     setMonitors(r.data.monitors || []);
     setSummary(r.data.summary || null);
   };
 
   const loadUplink = async () => {
-    const r = await api.get('/status-hub/uplink');
+    const r = await api.get('/status-hub/uplink', { params: routerParams });
     setUplink(r.data);
   };
 
@@ -149,17 +155,20 @@ export default function StatusHub() {
     setBusy(true);
     try {
       await Promise.all([
-        api.get('/status-hub/check').then((r) => {
+        api.get('/status-hub/check', { params: routerParams }).then((r) => {
           setGroups(r.data.groups || []);
           setMonitors(r.data.monitors || []);
           setSummary({ ...(r.data.summary || {}), scanning: true });
         }),
-        api.get('/status-hub/uplink/check').then((r) => setUplink(r.data)),
+        api.get('/status-hub/uplink/check', { params: routerParams }).then((r) => setUplink(r.data)),
       ]);
       // Poll while background scan finishes
       for (let i = 0; i < 12; i++) {
         await new Promise((r) => setTimeout(r, 1500));
-        const [svc, up] = await Promise.all([api.get('/status-hub'), api.get('/status-hub/uplink')]);
+        const [svc, up] = await Promise.all([
+          api.get('/status-hub', { params: routerParams }),
+          api.get('/status-hub/uplink', { params: routerParams }),
+        ]);
         setGroups(svc.data.groups || []);
         setMonitors(svc.data.monitors || []);
         setSummary(svc.data.summary || null);
@@ -207,7 +216,7 @@ export default function StatusHub() {
       cancelled = true;
       clearInterval(id);
     };
-  }, []);
+  }, [routerId]);
 
   const grouped = useMemo(() => {
     const q = filter.trim().toLowerCase();
@@ -265,7 +274,9 @@ export default function StatusHub() {
                 Status <span className="text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 to-sky-400">Hub</span>
               </h1>
               <p className="mt-3 text-slate-400 max-w-xl text-sm sm:text-base leading-relaxed">
-                Crowdsourced and official outage data from the internet — not probed through your panel network. Sources include global status feeds and vendor Statuspages.
+                {viaRouter
+                  ? `Reachability and latency tests run through the active MikroTik router (“${current?.name}”) — your subscribers’ WAN perspective.`
+                  : 'Crowdsourced and official outage data from the internet. Select a router in the top bar to probe services from your network edge.'}
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -292,14 +303,27 @@ export default function StatusHub() {
 
           {/* Summary strip */}
           <div className="mb-4 rounded-2xl border border-cyan-400/20 bg-cyan-400/5 px-4 py-3 text-sm text-cyan-100/90">
-            Status is read from public internet feeds (crowdsourced + official). Your ISP uplink is <b>not</b> used to test these services.
+            {viaRouter ? (
+              <>
+                Probing via <b>{current?.name}</b> — HTTP/HTTPS checks originate from the selected router.
+              </>
+            ) : (
+              <>
+                No router selected — showing cached <b>internet status feeds</b>. Pick a router in the top bar to run live probes from your network.
+              </>
+            )}
           </div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
             {[
               { label: 'Online', value: summary?.up ?? '—', icon: CheckCircle2, tone: '#34d399' },
               { label: 'Degraded', value: summary?.degraded ?? '—', icon: AlertTriangle, tone: '#fbbf24' },
               { label: 'Offline', value: summary?.down ?? '—', icon: XCircle, tone: '#fb7185' },
-              { label: 'Source', value: 'Internet', icon: Globe2, tone: '#22d3ee' },
+              {
+                label: viaRouter ? 'Avg RTT' : 'Source',
+                value: viaRouter ? (summary?.avgMs != null ? `${summary.avgMs} ms` : '—') : 'Internet',
+                icon: viaRouter ? Network : Globe2,
+                tone: '#22d3ee',
+              },
             ].map((s) => (
               <div
                 key={s.label}
@@ -405,7 +429,9 @@ export default function StatusHub() {
                             <div className="flex items-end justify-between gap-2 mt-3">
                               <Spark history={m.history} />
                               <div className="text-right">
-                                <div className="text-[10px] uppercase tracking-wider text-cyan-300/80">Feed</div>
+                                <div className="text-[10px] uppercase tracking-wider text-cyan-300/80">
+                                  {m.source === 'router' ? (m.latencyMs != null ? `${m.latencyMs} ms` : 'Router') : 'Feed'}
+                                </div>
                                 <div className="text-[10px] text-slate-500 font-mono">{m.uptimePct}% · {ago(m.lastChecked)}</div>
                               </div>
                             </div>
@@ -425,14 +451,16 @@ export default function StatusHub() {
           {tab === 'uplink' && (
             <UplinkPanel
               data={uplink}
+              viaRouter={viaRouter}
+              routerName={current?.name}
               onRefresh={async () => {
                 setBusy(true);
                 try {
-                  const r = await api.get('/status-hub/uplink/check');
+                  const r = await api.get('/status-hub/uplink/check', { params: routerParams });
                   setUplink(r.data);
                   for (let i = 0; i < 8; i++) {
                     await new Promise((x) => setTimeout(x, 1200));
-                    const up = await api.get('/status-hub/uplink');
+                    const up = await api.get('/status-hub/uplink', { params: routerParams });
                     setUplink(up.data);
                     if (!up.data.summary?.scanning) break;
                   }
@@ -480,10 +508,14 @@ export default function StatusHub() {
 
 function UplinkPanel({
   data,
+  viaRouter,
+  routerName,
   onRefresh,
   busy,
 }: {
   data: { targets: UplinkTarget[]; hosts: UplinkHost[]; summary: any } | null;
+  viaRouter?: boolean;
+  routerName?: string;
   onRefresh: () => void;
   busy: boolean;
 }) {
@@ -499,7 +531,9 @@ function UplinkPanel({
             </div>
             <div className="text-2xl sm:text-3xl font-bold text-white tracking-tight">CDN & cloud health</div>
             <p className="text-sm text-slate-400 mt-2 max-w-lg">
-              Internet backbone and CDN status from public feeds — not latency tests from this panel.
+              {viaRouter
+                ? `Backbone reachability tested from router “${routerName}”.`
+                : 'Internet backbone status from public feeds — select a router to probe from your network.'}
             </p>
           </div>
           <button
@@ -549,7 +583,12 @@ function UplinkPanel({
                 </div>
                 <div className="flex items-end justify-between mt-3">
                   <Spark history={t.history || []} />
-                  <div className="text-[10px] text-slate-500 font-mono">{ago(t.lastChecked)}</div>
+                  <div className="text-right">
+                    {viaRouter && t.latencyMs != null && (
+                      <div className="text-[10px] text-cyan-300/80 font-mono">{t.latencyMs} ms</div>
+                    )}
+                    <div className="text-[10px] text-slate-500 font-mono">{ago(t.lastChecked)}</div>
+                  </div>
                 </div>
               </article>
             );
