@@ -15,6 +15,7 @@ import Logs from './pages/Logs';
 import Company from './pages/Company';
 import Uptime from './pages/Uptime';
 import StatusHub from './pages/StatusHub';
+import OutageMonitor from './pages/OutageMonitor';
 import Notifications from './pages/Notifications';
 import SystemSettings from './pages/SystemSettings';
 import CloudflareAccess from './pages/CloudflareAccess';
@@ -104,6 +105,7 @@ export default function App() {
                 <Route path="/hotspot" element={<Hotspot />} />
                 <Route path="/uptime" element={<Uptime />} />
                 <Route path="/status-hub" element={<StatusHub />} />
+                <Route path="/outage-monitor" element={<OutageMonitor />} />
                 <Route path="/notifications" element={<Notifications />} />
                 <Route path="/logs" element={<Logs />} />
                 <Route path="/company" element={<Company />} />

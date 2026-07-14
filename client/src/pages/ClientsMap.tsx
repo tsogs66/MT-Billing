@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MapContainer, TileLayer, Marker, Polyline, Popup, Tooltip as LTooltip, useMap, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
-import { Search, SlidersHorizontal, Maximize2, Plus, Server, X, Route, MapPin } from 'lucide-react';
+import { Search, SlidersHorizontal, Maximize2, Plus, Server, X, Route, MapPin, Undo2 } from 'lucide-react';
 import Layout from '../components/Layout';
 import { Modal, ModalFooter, FormField } from '../components/ui';
 import { api } from '../api';
@@ -29,7 +29,7 @@ interface Client {
 }
 
 type ClientState = 'online' | 'offline' | 'expired' | 'non-payment' | 'disabled';
-type RouteKind = 'server-olt' | 'olt-nap' | 'nap-client';
+type RouteKind = 'server-olt' | 'olt-nap' | 'nap-nap' | 'nap-client';
 
 function fmtRate(bps?: number): string {
   const v = bps || 0;
@@ -546,6 +546,48 @@ export default function ClientsMap() {
   const napNodes = useMemo(() => naps.filter((n) => n.kind === 'nap'), [naps]);
   const napsById = useMemo(() => Object.fromEntries(naps.map((n) => [n.id, n])), [naps]);
 
+  /** Topology-valid "From" options for the selected cable route type. */
+  const routeFromOptions = useMemo(() => {
+    if (routeKind === 'server-olt') return servers.map((s) => ({ id: s.id, label: s.name }));
+    if (routeKind === 'olt-nap') {
+      return olts
+        .filter((o) => napNodes.some((n) => Number(n.parentId) === o.id))
+        .map((o) => ({ id: o.id, label: o.name }));
+    }
+    if (routeKind === 'nap-nap') {
+      return napNodes
+        .filter((n) => napNodes.some((c) => Number(c.parentId) === n.id))
+        .map((n) => ({ id: n.id, label: n.name }));
+    }
+    // nap-client
+    return napNodes
+      .filter((n) => clients.some((c) => Number(c.napId) === n.id))
+      .map((n) => ({ id: n.id, label: n.name }));
+  }, [routeKind, servers, olts, napNodes, clients]);
+
+  /** Topology-valid "To" options for the selected From endpoint. */
+  const routeToOptions = useMemo(() => {
+    if (!routeFrom) return [] as { id: number; label: string }[];
+    const fromId = Number(routeFrom);
+    if (routeKind === 'server-olt') return olts.map((o) => ({ id: o.id, label: o.name }));
+    if (routeKind === 'olt-nap') {
+      return napNodes
+        .filter((n) => Number(n.parentId) === fromId)
+        .map((n) => ({ id: n.id, label: n.name }));
+    }
+    if (routeKind === 'nap-nap') {
+      return napNodes
+        .filter((n) => Number(n.parentId) === fromId)
+        .map((n) => ({ id: n.id, label: n.name }));
+    }
+    return clients
+      .filter((c) => Number(c.napId) === fromId)
+      .map((c) => ({
+        id: c.id,
+        label: `${c.customer || c.username}${c.username && c.customer ? ` (${c.username})` : ''}`,
+      }));
+  }, [routeKind, routeFrom, olts, napNodes, clients]);
+
   /** Clients assigned to the selected NAP (for NAP → Client route "To" list). */
   const clientsUnderSelectedNap = useMemo(() => {
     if (routeKind !== 'nap-client' || !routeFrom) return [];
@@ -691,22 +733,53 @@ export default function ClientsMap() {
     }
   };
 
+  const isValidTopologyPair = (kind: RouteKind, fromId: number, toId: number) => {
+    if (kind === 'server-olt') return !!servers.find((s) => s.id === fromId) && !!olts.find((o) => o.id === toId);
+    if (kind === 'olt-nap') {
+      const n = napsById[toId];
+      return !!olts.find((o) => o.id === fromId) && !!n && Number(n.parentId) === fromId;
+    }
+    if (kind === 'nap-nap') {
+      const n = napsById[toId];
+      const p = napsById[fromId];
+      return !!p && p.kind === 'nap' && !!n && n.kind === 'nap' && Number(n.parentId) === fromId;
+    }
+    return clients.some((c) => c.id === toId && Number(c.napId) === fromId);
+  };
+
   const startDraw = () => {
     if (!routeFrom || !routeTo) {
-      alert('Select route endpoints first.');
+      alert('Select a topology connection (From / To) first.');
       return;
     }
-    const existing = findConnector(connectors, routeKind, Number(routeFrom), Number(routeTo));
+    const fromId = Number(routeFrom);
+    const toId = Number(routeTo);
+    if (!isValidTopologyPair(routeKind, fromId, toId)) {
+      alert('Only existing topology links can be edited. Set NAP parent / client NAP assignment first.');
+      return;
+    }
+    const existing = findConnector(connectors, routeKind, fromId, toId);
     setDrawPoints(existing?.points?.slice(1, -1) || []);
     setDrawMode(true);
   };
 
+  const undoDrawPoint = () => {
+    setDrawPoints((p) => p.slice(0, -1));
+  };
+
   const saveRoute = async () => {
     if (!routeFrom || !routeTo) return;
-    const ends = resolveEndpoints(routeKind, Number(routeFrom), Number(routeTo), servers, olt, napsById, clients);
+    const fromId = Number(routeFrom);
+    const toId = Number(routeTo);
+    if (!isValidTopologyPair(routeKind, fromId, toId)) {
+      alert('Only existing topology links can be saved.');
+      return;
+    }
+    const ends = resolveEndpoints(routeKind, fromId, toId, servers, napsById, clients);
     if (!ends) return;
+    // One street path per topology connection (server upserts UNIQUE kind+from+to).
     const points: [number, number][] = [ends[0], ...drawPoints, ends[1]];
-    await api.post('/map/connectors', { kind: routeKind, fromId: routeFrom, toId: routeTo, points });
+    await api.post('/map/connectors', { kind: routeKind, fromId, toId, points });
     setDrawMode(false);
     setDrawPoints([]);
     load();
@@ -715,6 +788,7 @@ export default function ClientsMap() {
   const deleteRoute = async () => {
     if (!routeFrom || !routeTo) return;
     await api.delete('/map/connectors', { params: { kind: routeKind, fromId: routeFrom, toId: routeTo } });
+    setDrawMode(false);
     setDrawPoints([]);
     load();
   };
@@ -912,78 +986,139 @@ export default function ClientsMap() {
               </div>
               <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
                 <FormField label="Route type">
-                  <select className="input" value={routeKind} onChange={(e) => { setRouteKind(e.target.value as RouteKind); setRouteFrom(''); setRouteTo(''); }}>
+                  <select
+                    className="input"
+                    value={routeKind}
+                    onChange={(e) => {
+                      setRouteKind(e.target.value as RouteKind);
+                      setRouteFrom('');
+                      setRouteTo('');
+                      setDrawMode(false);
+                      setDrawPoints([]);
+                    }}
+                  >
                     <option value="server-olt">Server → OLT</option>
                     <option value="olt-nap">OLT → NAP</option>
+                    <option value="nap-nap">NAP → NAP</option>
                     <option value="nap-client">NAP → Client</option>
                   </select>
                 </FormField>
-                <FormField label="From">
+                <FormField label="From" hint="Only topology-linked nodes">
                   <select
                     className="input"
                     value={routeFrom}
                     onChange={(e) => {
-                      const next = e.target.value ? Number(e.target.value) : '';
-                      setRouteFrom(next);
-                      // Changing NAP clears client — To list is scoped to that NAP only.
-                      if (routeKind === 'nap-client') setRouteTo('');
+                      setRouteFrom(e.target.value ? Number(e.target.value) : '');
+                      setRouteTo('');
+                      setDrawMode(false);
+                      setDrawPoints([]);
                     }}
                   >
                     <option value="">Select…</option>
-                    {routeKind === 'server-olt' && servers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-                    {routeKind === 'olt-nap' && olts.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-                    {routeKind === 'nap-client' && napNodes.map((n) => <option key={n.id} value={n.id}>{n.name}</option>)}
+                    {routeFromOptions.map((o) => (
+                      <option key={o.id} value={o.id}>
+                        {o.label}
+                      </option>
+                    ))}
                   </select>
                 </FormField>
                 <FormField
                   label="To"
                   hint={
-                    routeKind === 'nap-client'
-                      ? routeFrom
-                        ? `${clientsUnderSelectedNap.length} user(s) under this NAP`
-                        : 'Select a NAP first'
-                      : undefined
+                    !routeFrom
+                      ? 'Select From first'
+                      : routeKind === 'nap-client'
+                        ? `${routeToOptions.length} user(s) under this NAP`
+                        : `${routeToOptions.length} linked node(s)`
                   }
                 >
                   <select
                     className="input"
                     value={routeTo}
-                    onChange={(e) => setRouteTo(e.target.value ? Number(e.target.value) : '')}
-                    disabled={routeKind === 'nap-client' && !routeFrom}
+                    onChange={(e) => {
+                      setRouteTo(e.target.value ? Number(e.target.value) : '');
+                      setDrawMode(false);
+                      setDrawPoints([]);
+                    }}
+                    disabled={!routeFrom}
                   >
-                    <option value="">
-                      {routeKind === 'nap-client' && !routeFrom ? 'Select NAP first…' : 'Select…'}
-                    </option>
-                    {routeKind === 'server-olt' && olts.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-                    {routeKind === 'olt-nap' && napNodes.map((n) => <option key={n.id} value={n.id}>{n.name}</option>)}
-                    {routeKind === 'nap-client' &&
-                      clientsUnderSelectedNap.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.customer || c.username}
-                          {c.username && c.customer ? ` (${c.username})` : ''}
-                        </option>
-                      ))}
+                    <option value="">{!routeFrom ? 'Select From first…' : 'Select…'}</option>
+                    {routeToOptions.map((o) => (
+                      <option key={o.id} value={o.id}>
+                        {o.label}
+                      </option>
+                    ))}
                   </select>
-                  {routeKind === 'nap-client' && routeFrom && clientsUnderSelectedNap.length === 0 && (
-                    <p className="text-xs text-amber-700 mt-1">No users assigned to this NAP. Set NAP on the user under PPPoE.</p>
+                  {routeFrom && routeToOptions.length === 0 && (
+                    <p className="text-xs text-amber-700 mt-1">
+                      No topology children for this node. Set NAP parent / assign users first.
+                    </p>
                   )}
                 </FormField>
                 <div className="flex flex-wrap gap-2">
-                  <button type="button" className="btn-primary text-sm" onClick={startDraw}>{drawMode ? 'Drawing…' : 'Draw on Map'}</button>
-                  <button type="button" className="btn-secondary text-sm" onClick={saveRoute} disabled={!drawMode}>Save Route</button>
-                  <button type="button" className="text-sm text-rose-600 px-3 py-2 border border-rose-200 rounded-xl hover:bg-rose-50" onClick={deleteRoute}>Delete Saved</button>
+                  <button type="button" className="btn-primary text-sm" onClick={startDraw} disabled={!routeFrom || !routeTo}>
+                    {drawMode ? 'Drawing…' : 'Edit path'}
+                  </button>
+                  <button type="button" className="btn-secondary text-sm" onClick={saveRoute} disabled={!drawMode}>
+                    Save Route
+                  </button>
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1.5 text-sm px-3 py-2 border border-slate-200 rounded-xl hover:bg-slate-50 disabled:opacity-40"
+                    onClick={undoDrawPoint}
+                    disabled={!drawMode || drawPoints.length === 0}
+                    title="Undo last waypoint"
+                  >
+                    <Undo2 size={14} /> Undo
+                  </button>
+                  <button
+                    type="button"
+                    className="text-sm text-rose-600 px-3 py-2 border border-rose-200 rounded-xl hover:bg-rose-50"
+                    onClick={deleteRoute}
+                    disabled={!routeFrom || !routeTo}
+                  >
+                    Delete Saved
+                  </button>
                 </div>
               </div>
-              {drawMode && <p className="text-xs text-brand-700 mt-2">Click the map to add street waypoints between endpoints, then Save Route.</p>}
+              {drawMode ? (
+                <p className="text-xs text-brand-700 mt-2">
+                  Editing one street path for this topology link. Click the map to add waypoints · <b>Undo</b> removes the last point · Save when done.
+                </p>
+              ) : (
+                <p className="text-xs text-slate-500 mt-2">
+                  One cable path per topology connection. Choose an existing Server/OLT/NAP/Client link, then Edit path.
+                </p>
+              )}
             </div>
           </div>
         )}
 
         <div id="map-wrap" className="map-stage overflow-hidden">
           {drawMode && (
-            <div className="map-draw-banner bg-brand-600 text-white text-xs font-medium px-4 py-2 rounded-lg shadow-lg">
-              Drawing cable path — click map to add points ({drawPoints.length} waypoint{drawPoints.length !== 1 ? 's' : ''})
-              <button type="button" className="ml-3 underline" onClick={() => { setDrawMode(false); setDrawPoints([]); }}>Cancel</button>
+            <div className="map-draw-banner bg-brand-600 text-white text-xs font-medium px-4 py-2 rounded-lg shadow-lg flex flex-wrap items-center gap-3">
+              <span>
+                Editing cable path — click map to add points ({drawPoints.length} waypoint
+                {drawPoints.length !== 1 ? 's' : ''})
+              </span>
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 underline disabled:opacity-50"
+                onClick={undoDrawPoint}
+                disabled={drawPoints.length === 0}
+              >
+                <Undo2 size={12} /> Undo last
+              </button>
+              <button
+                type="button"
+                className="underline"
+                onClick={() => {
+                  setDrawMode(false);
+                  setDrawPoints([]);
+                }}
+              >
+                Cancel
+              </button>
             </div>
           )}
 
@@ -1085,7 +1220,7 @@ export default function ClientsMap() {
             })}
 
             {drawMode && routeFrom && routeTo && (() => {
-              const ends = resolveEndpoints(routeKind, Number(routeFrom), Number(routeTo), servers, olt, napsById, clients);
+              const ends = resolveEndpoints(routeKind, Number(routeFrom), Number(routeTo), servers, napsById, clients);
               if (!ends) return null;
               return (
                 <Polyline positions={[ends[0], ...drawPoints, ends[1]]} pathOptions={{ color: '#f59e0b', weight: 3, dashArray: '6 4' }} />
@@ -1345,8 +1480,12 @@ export default function ClientsMap() {
 }
 
 function resolveEndpoints(
-  kind: RouteKind, fromId: number, toId: number,
-  servers: ServerNode[], olt: Nap | undefined, napsById: Record<number, Nap>, clients: Client[]
+  kind: RouteKind,
+  fromId: number,
+  toId: number,
+  servers: ServerNode[],
+  napsById: Record<number, Nap>,
+  clients: Client[]
 ): [[number, number], [number, number]] | null {
   if (kind === 'server-olt') {
     const s = servers.find((x) => x.id === fromId);
@@ -1354,11 +1493,11 @@ function resolveEndpoints(
     if (!s || !o) return null;
     return [[s.lat, s.lng], [o.lat, o.lng]];
   }
-  if (kind === 'olt-nap') {
-    const o = napsById[fromId];
-    const n = napsById[toId];
-    if (!o || !n) return null;
-    return [[o.lat, o.lng], [n.lat, n.lng]];
+  if (kind === 'olt-nap' || kind === 'nap-nap') {
+    const a = napsById[fromId];
+    const b = napsById[toId];
+    if (!a || !b) return null;
+    return [[a.lat, a.lng], [b.lat, b.lng]];
   }
   const n = napsById[fromId];
   const c = clients.find((x) => x.id === toId);

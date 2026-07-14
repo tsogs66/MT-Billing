@@ -63,6 +63,12 @@ import {
   setStatusHubRouterId,
 } from './statusHub.js';
 import {
+  startOutageMonitor,
+  listOutageOverview,
+  getOutageService,
+  runOutageSweep,
+} from './outageMonitor.js';
+import {
   recordPppoePayment,
   createPaymentLink,
   submitPaymentProof,
@@ -3181,9 +3187,10 @@ app.delete('/api/naps/:id', (req, res) => {
   const children = (db.prepare('SELECT COUNT(*) AS c FROM naps WHERE parent_id = ?').get(id) as any).c;
   if (children > 0) return res.status(400).json({ error: 'Remove child NAPs first.' });
   db.prepare('DELETE FROM naps WHERE id = ?').run(id);
-  db.prepare('DELETE FROM map_connectors WHERE (kind = ? AND (from_id = ? OR to_id = ?)) OR (kind = ? AND (from_id = ? OR to_id = ?))').run(
-    'olt-nap', id, id, 'nap-client', id, id
-  );
+  db.prepare(
+    `DELETE FROM map_connectors WHERE
+      (kind IN ('olt-nap','nap-nap','nap-client') AND (from_id = ? OR to_id = ?))`
+  ).run(id, id);
   res.json({ ok: true });
 });
 
@@ -3216,9 +3223,13 @@ app.post('/api/map/connectors', (req, res) => {
   const fromId = Number(b.fromId);
   const toId = Number(b.toId);
   const points = b.points;
-  if (!kind || !fromId || !toId || !Array.isArray(points) || points.length < 2) {
-    return res.status(400).json({ error: 'kind, fromId, toId, and points (min 2) are required' });
+  const allowed = new Set(['server-olt', 'olt-nap', 'nap-nap', 'nap-client']);
+  if (!allowed.has(kind) || !fromId || !toId || !Array.isArray(points) || points.length < 2) {
+    return res.status(400).json({
+      error: 'kind (server-olt|olt-nap|nap-nap|nap-client), fromId, toId, and points (min 2) are required',
+    });
   }
+  // One street path per topology pair — UNIQUE(kind, from_id, to_id) upsert below.
   const json = JSON.stringify(points);
   const ex = db.prepare('SELECT id FROM map_connectors WHERE kind = ? AND from_id = ? AND to_id = ?').get(kind, fromId, toId) as any;
   if (ex) {
@@ -3505,6 +3516,26 @@ app.delete('/api/status-hub/uplink/hosts/:id', (req, res) => {
   }
 });
 
+// ---- Outage Monitor (Downdetector-style crowdsourced directory) ----
+app.get('/api/outage-monitor', (_req, res) => {
+  res.json(listOutageOverview());
+});
+
+app.get('/api/outage-monitor/check', async (_req, res) => {
+  try {
+    await runOutageSweep();
+    res.json(listOutageOverview());
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Outage sweep failed' });
+  }
+});
+
+app.get('/api/outage-monitor/:slug', (req, res) => {
+  const row = getOutageService(String(req.params.slug || ''));
+  if (!row) return res.status(404).json({ error: 'Service not found' });
+  res.json(row);
+});
+
 app.get('/api/status-hub/metrics', (_req, res) => {
   res.type('text/plain; version=0.0.4; charset=utf-8').send(prometheusMetrics());
 });
@@ -3669,6 +3700,7 @@ server.listen(PORT, () => {
   console.log(`MT-Billing API listening on http://localhost:${PORT}`);
   startUptime(90000);
   startStatusHub(5 * 60_000);
+  startOutageMonitor(3 * 60_000);
   startNotifyScheduler(5 * 60 * 1000);
   startUsageScheduler(60_000);
 });
