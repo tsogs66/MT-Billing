@@ -1710,10 +1710,12 @@ async function waitForRouterFetch(
 /** RouterOS v7 needs as-value + output=none; keep-result=no triggers "please use output option". */
 async function attemptRouterFetch(api: RouterOSAPI, fetchUrl: string): Promise<{ ok: boolean; message: string | null }> {
   const variants: string[][] = [
+    // Matches RouterOS 7.20+ CLI: /tool fetch url=... as-value output=none check-certificate=no
+    [`=url=${fetchUrl}`, '=as-value=', '=output=none', '=check-certificate=no'],
     [`=url=${fetchUrl}`, '=as-value', '=output=none', '=check-certificate=no'],
-    [`=url=${fetchUrl}`, '=as-value', '=output=none', '=check-certificate=no', '=http-method=get'],
+    [`=url=${fetchUrl}`, '=as-value=', '=output=none', '=check-certificate=no', '=http-method=get'],
     [`=url=${fetchUrl}`, '=output=none', '=check-certificate=no', '=http-method=get'],
-    [`=url=${fetchUrl}`, '=as-value', '=output=user', '=check-certificate=no', '=http-method=head'],
+    [`=url=${fetchUrl}`, '=as-value=', '=output=user', '=check-certificate=no', '=http-method=head'],
   ];
 
   await removeStaleFetches(api);
