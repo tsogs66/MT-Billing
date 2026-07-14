@@ -99,7 +99,7 @@ Override bases with `OPI_IMAGE_URL`, `OPI_ONE_IMAGE_URL`, or `PC_IMAGE_URL` if n
 3. **Rufus** (Windows): select the `.img` / `.img.xz`, use **DD Image** mode, write to the media.
 4. Boot with Ethernet (recommended). Wait for first-boot install to finish.
 5. Open `http://<device-ip>/` — panel login `admin` / `admin123`.
-6. **PC:** SSH console user from the image seed is `mtadmin` / `mtbilling` (change immediately). UEFI boot recommended.
+6. Console / SSH: **`mtadmin` / `mtbilling`** (change immediately). PC images prefer UEFI boot.
 
 First-boot log on device: `/var/log/mt-billing-firstboot.log`.
 

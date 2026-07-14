@@ -33,7 +33,10 @@
 # Flash either the .img or .img.xz with Balena Etcher or Rufus (DD Image mode).
 # After first boot (needs internet), open http://<device-ip>/
 # Default panel login: admin / admin123
-# PC console SSH (Ubuntu cloud image): mtadmin / mtbilling
+# Console SSH (all appliance images):
+#   username: mtadmin
+#   password: mtbilling
+# Panel web login remains: admin / admin123
 #
 # IMPORTANT: Orange Pi boards are NOT interchangeable.
 #   mt-billing-opi-arm64*     → Orange Pi 5 only
@@ -158,6 +161,8 @@ need sync
 need blkid
 need file
 need python3
+need openssl
+# mtools writes Raspberry Pi bootfs (FAT) even when the host kernel lacks vfat.
 # Optional: growpart, e2fsck, resize2fs improve rootfs expansion when present.
 # qemu-img is required when the PC base image is qcow2 (Ubuntu cloudimg).
 
@@ -249,6 +254,35 @@ EOF
   cat >"$root_mnt/etc/cloud/cloud.cfg.d/99-mt-billing.cfg" <<'EOF'
 datasource_list: [ NoCloud, None ]
 EOF
+}
+
+# Raspberry Pi OS: enable SSH + create console user via bootfs userconf.txt.
+# Uses mtools so injection works even when the build host cannot mount vfat.
+inject_rpi_boot_userconf() {
+  local img="$1"
+  local boot_off="$2"
+  local boot_mnt="${3:-}"
+
+  local hash confdir
+  hash="$(openssl passwd -6 'mtbilling')"
+  confdir="$(mktemp -d /tmp/mt-rpi-boot.XXXXXX)"
+  : >"$confdir/ssh"
+  printf 'mtadmin:%s\n' "$hash" >"$confdir/userconf.txt"
+
+  if [[ -n "$boot_mnt" && -d "$boot_mnt" ]]; then
+    install -m 0644 "$confdir/ssh" "$boot_mnt/ssh"
+    install -m 0644 "$confdir/userconf.txt" "$boot_mnt/userconf.txt"
+    echo "Wrote ssh + userconf.txt via mount (${boot_mnt})."
+  elif command -v mcopy >/dev/null 2>&1; then
+    export MTOOLS_SKIP_CHECK=1
+    mcopy -o -i "${img}@@${boot_off}" "$confdir/ssh" ::ssh
+    mcopy -o -i "${img}@@${boot_off}" "$confdir/userconf.txt" ::userconf.txt
+    echo "Wrote ssh + userconf.txt via mtools (boot offset ${boot_off})."
+  else
+    echo "WARNING: could not write Raspberry Pi userconf (no vfat mount, no mtools)." >&2
+    echo "Install mtools or dosfstools, or add userconf.txt on the SD boot partition manually." >&2
+  fi
+  rm -rf "$confdir"
 }
 
 inject_firstboot() {
@@ -434,8 +468,18 @@ EOF
   ln -sf /etc/systemd/system/mt-billing-firstboot.service \
     "$root_mnt/etc/systemd/system/multi-user.target.wants/mt-billing-firstboot.service"
 
-  # Raspberry Pi: enable SSH marker on boot partition when FAT is mountable
-  if [[ "$boot_mounted" -eq 1 && -n "${boot_mnt:-}" && -d "$boot_mnt" ]]; then
+  # Raspberry Pi: enable SSH + default console user (mtadmin / mtbilling)
+  if [[ "$board_name" == "raspberry-pi" ]]; then
+    if [[ -n "${boot_off:-}" ]]; then
+      local rpi_boot_path=""
+      if [[ "$boot_mounted" -eq 1 && -n "${boot_mnt:-}" && -d "$boot_mnt" ]]; then
+        rpi_boot_path="$boot_mnt"
+      fi
+      inject_rpi_boot_userconf "$img" "$boot_off" "$rpi_boot_path"
+    else
+      echo "WARNING: no FAT boot partition found for Raspberry Pi userconf." >&2
+    fi
+  elif [[ "$boot_mounted" -eq 1 && -n "${boot_mnt:-}" && -d "$boot_mnt" ]]; then
     touch "$boot_mnt/ssh" 2>/dev/null || true
   fi
 
@@ -450,7 +494,8 @@ EOF
   "board": "${board_name}",
   "built_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "repo": "https://github.com/tsogs66/MT-Billing",
-  "default_login": "admin / admin123"
+  "default_login": "admin / admin123",
+  "console_login": "mtadmin / mtbilling"
 }
 EOF
 

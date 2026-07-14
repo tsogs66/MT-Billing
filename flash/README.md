@@ -29,7 +29,11 @@ See **[SYSTEM_REQUIREMENTS.md](../SYSTEM_REQUIREMENTS.md)** for hardware minimum
 1. Boot the device with Ethernet (recommended). First boot needs internet.
 2. Wait for [`firstboot-mt-billing.sh`](./firstboot-mt-billing.sh) to finish (panel on port 80).
 3. Open `http://<device-ip>/` — panel login `admin` / `admin123`.
-4. **PC only:** console SSH user from the cloud seed is `mtadmin` / `mtbilling` (change immediately).
+4. Console / SSH login: **`mtadmin` / `mtbilling`** (change immediately).
+
+```bash
+ssh mtadmin@<device-ip>
+```
 
 First-boot log on device: `/var/log/mt-billing-firstboot.log`.
 

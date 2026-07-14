@@ -103,8 +103,28 @@ install_nodejs() {
   echo "Node.js ready: $(node -v)"
 }
 
+ensure_console_user() {
+  # Console / SSH login for appliance images (not the web panel admin).
+  local user="mtadmin" pass="mtbilling"
+  if ! id "$user" &>/dev/null; then
+    echo "Creating console user ${user}…"
+    useradd -m -s /bin/bash -G sudo,adm "$user" 2>/dev/null || useradd -m -s /bin/bash "$user"
+  fi
+  echo "${user}:${pass}" | chpasswd
+  # Passwordless sudo helps headless recovery on small boards.
+  echo "${user} ALL=(ALL) NOPASSWD:ALL" >"/etc/sudoers.d/010-${user}"
+  chmod 440 "/etc/sudoers.d/010-${user}"
+  # Raspberry Pi OS: keep SSH enabled on bootfs.
+  for d in /boot/firmware /boot; do
+    if [[ -d "$d" && -w "$d" ]]; then
+      touch "$d/ssh" 2>/dev/null || true
+    fi
+  done
+}
+
 detect_board
 ensure_swap_if_low_ram
+ensure_console_user
 
 # Wait briefly for DHCP / cloud-init networking on appliance images.
 for _i in $(seq 1 30); do
