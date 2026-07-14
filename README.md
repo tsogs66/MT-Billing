@@ -49,6 +49,7 @@ See **[SYSTEM_REQUIREMENTS.md](./SYSTEM_REQUIREMENTS.md)** for full hardware and
 | **Proxmox LXC** | Proxmox VE 7.4+ · **2 vCPU · 4 GB RAM · 32 GB disk** (script defaults) |
 | **Raspberry Pi** | Pi 3/4/5 64-bit · 16 GB+ microSD · flash `mt-billing-rpi-arm64.img.xz` |
 | **Orange Pi** | OPi 5 (or Armbian board image) · 16 GB+ storage · flash `mt-billing-opi-arm64.img.xz` |
+| **PC (amd64)** | UEFI x86_64 · 16 GB+ USB/SSD · flash `mt-billing-pc-amd64.img.xz` |
 
 ## Getting started (development)
 
@@ -117,7 +118,9 @@ data otherwise).
 | `install/mt-billing-reinstall.sh` | Guest reinstall script (wipe + reclone + optional DB reset) |
 | `scripts/build-rpi-img.sh` | Build Raspberry Pi `.img` (+ `.img.xz`) for Etcher/Rufus |
 | `scripts/build-opi-img.sh` | Build Orange Pi `.img` (+ `.img.xz`) for Etcher/Rufus |
-| `scripts/build-sbc-flash-image.sh` | Shared builder (`--board rpi\|opi\|all`) |
+| `scripts/build-pc-img.sh` | Build PC amd64 `.img` (+ `.img.xz`) for Etcher/Rufus |
+| `scripts/build-all-flash-images.sh` | Build RPi + OPi + PC flash images |
+| `scripts/build-sbc-flash-image.sh` | Shared builder (`--board rpi\|opi\|pc\|all`) |
 | `scripts/sync-proxmox-embed.sh` | Sync `install/` into embedded Proxmox guest script |
 
 ## Deploying on Ubuntu (Proxmox)
@@ -322,13 +325,16 @@ Or step by step:
 4. Serve `client/dist` with nginx and run the compiled API (`npm --prefix server run start`) via
    `systemd`. Point the reverse proxy at the API on `PORT`.
 
-## Deploying on Raspberry Pi / Orange Pi (flash image)
+## Deploying on Raspberry Pi / Orange Pi / PC (flash image)
 
-Build one compressed disk image **per board**, then flash with **Balena Etcher** or **Rufus** (DD mode):
+Build one disk image **per platform**, then flash with **Balena Etcher** or **Rufus** (DD Image mode):
 
 ```bash
-sudo bash scripts/build-rpi-img.sh   # → dist/flash/mt-billing-rpi-arm64.img
-sudo bash scripts/build-opi-img.sh   # → dist/flash/mt-billing-opi-arm64.img
+sudo bash scripts/build-rpi-img.sh              # → dist/flash/mt-billing-rpi-arm64.img
+sudo bash scripts/build-opi-img.sh              # → dist/flash/mt-billing-opi-arm64.img
+sudo bash scripts/build-pc-img.sh               # → dist/flash/mt-billing-pc-amd64.img
+# or all three:
+sudo bash scripts/build-all-flash-images.sh
 ```
 
 Details: [flash/README.md](./flash/README.md) · [SYSTEM_REQUIREMENTS.md](./SYSTEM_REQUIREMENTS.md).

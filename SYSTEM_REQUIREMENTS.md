@@ -50,43 +50,53 @@ Guest install script: `install/mt-billing-install.sh` (also embedded in `ct/mt-b
 
 ---
 
-## Raspberry Pi / Orange Pi (flash image)
+## Raspberry Pi / Orange Pi / PC (flash image)
 
-Build **one flashable `.img.xz` per board**, then write it with **Balena Etcher** or **Rufus**.
+Build **one flashable `.img` (and `.img.xz`) per platform**, then write it with **Balena Etcher** or **Rufus** (DD Image mode).
 
-| Item | Raspberry Pi | Orange Pi |
-|------|--------------|-----------|
-| Boards | Pi 3 / 4 / 5 (64-bit) | Orange Pi 5 (default image); other boards via `OPI_IMAGE_URL` |
-| Base OS | Raspberry Pi OS Lite 64-bit | Armbian Bookworm minimal |
-| Storage | microSD **≥ 16 GB** (32 GB recommended) | microSD / eMMC **≥ 16 GB** |
-| Power | Official PSU for your board | Adequate 5V supply for the board |
-| Network | Ethernet preferred (Wi‑Fi OK) | Ethernet preferred |
-| First boot | 5–20 min online install of MT-Billing | Same |
+| Item | Raspberry Pi | Orange Pi | PC (amd64) |
+|------|--------------|-----------|------------|
+| Target | Pi 3 / 4 / 5 (64-bit) | Orange Pi 5 (default); other boards via `OPI_IMAGE_URL` | UEFI x86_64 PC / mini-PC / NUC |
+| Base OS | Raspberry Pi OS Lite 64-bit | Armbian Bookworm minimal | Ubuntu 24.04 server cloud image |
+| Storage | microSD **≥ 16 GB** (32 GB recommended) | microSD / eMMC **≥ 16 GB** | USB / SSD / NVMe **≥ 16 GB** (32 GB+) |
+| Power | Official PSU for your board | Adequate 5V supply for the board | Standard ATX / adapter |
+| Network | Ethernet preferred (Wi‑Fi OK) | Ethernet preferred | Ethernet preferred |
+| First boot | Online install of MT-Billing | Same | Same (+ cloud-init NoCloud seed) |
 
-### Build the flash file (Linux)
-
-Separate images per board:
+### Build the flash files (Linux)
 
 ```bash
 git clone https://github.com/tsogs66/MT-Billing.git
 cd MT-Billing
 
-# Raspberry Pi only → dist/flash/mt-billing-rpi-arm64.img (+ .img.xz)
+# Raspberry Pi → dist/flash/mt-billing-rpi-arm64.img (+ .img.xz)
 sudo bash scripts/build-rpi-img.sh
 
-# Orange Pi 5 only → dist/flash/mt-billing-opi-arm64.img (+ .img.xz)
+# Orange Pi 5 → dist/flash/mt-billing-opi-arm64.img (+ .img.xz)
 sudo bash scripts/build-opi-img.sh
+
+# PC amd64 → dist/flash/mt-billing-pc-amd64.img (+ .img.xz)
+# requires: sudo apt install qemu-utils
+sudo bash scripts/build-pc-img.sh
+
+# All three
+sudo bash scripts/build-all-flash-images.sh
 ```
 
 Other Orange Pi boards: set `OPI_IMAGE_URL` to the matching Armbian `.img.xz` URL, then run `build-opi-img.sh`.
+Override PC base with `PC_IMAGE_URL` if needed.
 
 ### Flash with Balena Etcher or Rufus
 
-1. Use **`mt-billing-rpi-arm64.img`** for Raspberry Pi, or **`mt-billing-opi-arm64.img`** for Orange Pi (do not mix).
+1. Pick the matching file — **do not mix platforms**:
+   - Raspberry Pi → `mt-billing-rpi-arm64.img` (or `.img.xz`)
+   - Orange Pi → `mt-billing-opi-arm64.img` (or `.img.xz`)
+   - PC → `mt-billing-pc-amd64.img` (or `.img.xz`)
 2. **Balena Etcher**: Flash from file → select the `.img` or `.img.xz` → select SD/USB → Flash.
-3. **Rufus** (Windows): select the `.img` / `.img.xz`, use **DD image** mode, write to the SD card.
-4. Insert the card, boot the SBC with Ethernet (recommended), wait for first-boot install to finish.
-5. Open `http://<device-ip>/` — login `admin` / `admin123`.
+3. **Rufus** (Windows): select the `.img` / `.img.xz`, use **DD Image** mode, write to the media.
+4. Boot with Ethernet (recommended). Wait for first-boot install to finish.
+5. Open `http://<device-ip>/` — panel login `admin` / `admin123`.
+6. **PC:** SSH console user from the image seed is `mtadmin` / `mtbilling` (change immediately). UEFI boot recommended.
 
 First-boot log on device: `/var/log/mt-billing-firstboot.log`.
 

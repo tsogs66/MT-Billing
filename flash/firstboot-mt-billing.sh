@@ -3,7 +3,7 @@
 # License: MIT
 # Source: https://github.com/tsogs66/MT-Billing
 #
-# First-boot installer for Raspberry Pi / Orange Pi flash images.
+# First-boot installer for Raspberry Pi / Orange Pi / PC flash images.
 # Runs once via systemd, installs Node.js + MT-Billing, configures nginx.
 
 set -euo pipefail
@@ -20,25 +20,40 @@ LOG="${MT_FIRSTBOOT_LOG:-/var/log/mt-billing-firstboot.log}"
 
 exec > >(tee -a "$LOG") 2>&1
 echo "==== MT-Billing first-boot $(date -Is) ===="
+echo "Arch: $(uname -m)  Kernel: $(uname -r)"
 
 export DEBIAN_FRONTEND=noninteractive
 
 detect_board() {
-  local model=""
+  local model="" arch
+  arch="$(uname -m)"
   [[ -f /proc/device-tree/model ]] && model="$(tr -d '\0' </proc/device-tree/model)"
-  echo "Board model: ${model:-unknown}"
+  if [[ -f /etc/mt-billing-image.json ]]; then
+    echo "Image marker: $(cat /etc/mt-billing-image.json)"
+  fi
+  echo "Board model: ${model:-unknown} (${arch})"
   if echo "$model" | grep -qiE 'raspberry|bcm27|bcm28'; then
     echo "Detected: Raspberry Pi"
   elif echo "$model" | grep -qiE 'orange|sun|rockchip|xunlong'; then
     echo "Detected: Orange Pi / Armbian SBC"
+  elif [[ "$arch" == "x86_64" || "$arch" == "amd64" ]]; then
+    echo "Detected: PC / x86_64"
   else
-    echo "Detected: generic ARM/Debian host"
+    echo "Detected: generic Linux host"
   fi
 }
 
 detect_board
 
-# Ensure SSH is available for headless access (RPi/OPi).
+# Wait briefly for DHCP / cloud-init networking on appliance images.
+for _i in $(seq 1 30); do
+  if ping -c1 -W2 1.1.1.1 >/dev/null 2>&1 || ping -c1 -W2 8.8.8.8 >/dev/null 2>&1; then
+    break
+  fi
+  sleep 2
+done
+
+# Ensure SSH is available for headless access (RPi/OPi/PC).
 systemctl enable --now ssh 2>/dev/null || systemctl enable --now sshd 2>/dev/null || true
 # Raspberry Pi OS: also drop the boot marker when the firmware partition is mounted.
 for d in /boot/firmware /boot; do

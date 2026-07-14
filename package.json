@@ -12,7 +12,11 @@
     "lint": "npm --prefix client run lint",
     "start": "npm --prefix server run start",
     "android:sync": "npm --prefix client run cap:sync",
-    "android:open": "npm --prefix client run cap:open"
+    "android:open": "npm --prefix client run cap:open",
+    "flash:rpi": "bash scripts/build-rpi-img.sh",
+    "flash:opi": "bash scripts/build-opi-img.sh",
+    "flash:pc": "bash scripts/build-pc-img.sh",
+    "flash:all": "bash scripts/build-all-flash-images.sh"
   },
   "devDependencies": {
     "concurrently": "^9.1.0"

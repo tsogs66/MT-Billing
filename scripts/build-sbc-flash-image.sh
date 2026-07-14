@@ -4,7 +4,7 @@
 # Source: https://github.com/tsogs66/MT-Billing
 #
 # =============================================================================
-#  Build SEPARATE flashable disk images for Raspberry Pi and Orange Pi.
+#  Build SEPARATE flashable disk images for Raspberry Pi, Orange Pi, and PC.
 # =============================================================================
 #
 # Dedicated wrappers (recommended):
@@ -16,14 +16,20 @@
 #       → dist/flash/mt-billing-opi-arm64.img
 #       → dist/flash/mt-billing-opi-arm64.img.xz
 #
-# Or via this script:
-#   sudo bash scripts/build-sbc-flash-image.sh --board rpi
-#   sudo bash scripts/build-sbc-flash-image.sh --board opi
-#   sudo bash scripts/build-sbc-flash-image.sh --board all
+#   sudo bash scripts/build-pc-img.sh
+#       → dist/flash/mt-billing-pc-amd64.img
+#       → dist/flash/mt-billing-pc-amd64.img.xz
 #
-# Flash either the .img or .img.xz with Balena Etcher or Rufus (DD mode).
+#   sudo bash scripts/build-all-flash-images.sh
+#       → all three boards
+#
+# Or via this script:
+#   sudo bash scripts/build-sbc-flash-image.sh --board rpi|opi|pc|all
+#
+# Flash either the .img or .img.xz with Balena Etcher or Rufus (DD Image mode).
 # After first boot (needs internet), open http://<device-ip>/
-# Default login: admin / admin123
+# Default panel login: admin / admin123
+# PC console SSH (Ubuntu cloud image): mtadmin / mtbilling
 #
 # System requirements: see SYSTEM_REQUIREMENTS.md
 
@@ -39,12 +45,13 @@ COMPRESS=1
 # Always keep the uncompressed .img as a separate flashable file per board.
 KEEP_RAW=1
 
-# Default base images (arm64). Override with env if mirrors move.
+# Default base images. Override with env if mirrors move.
 # Raspberry Pi OS Lite 64-bit — works on Pi 3 / 4 / 5.
 RPI_IMAGE_URL="${RPI_IMAGE_URL:-https://downloads.raspberrypi.com/raspios_lite_arm64/images/raspios_lite_arm64-2026-06-19/2026-06-18-raspios-trixie-arm64-lite.img.xz}"
 # Orange Pi 5 Armbian minimal — resolved from GitHub releases unless overridden.
 OPI_IMAGE_URL="${OPI_IMAGE_URL:-}"
-# Auto-resolve latest Orangepi5 minimal .img.xz from armbian/os GitHub releases when unset.
+# PC / x86_64 — Ubuntu 24.04 server cloud image (qcow2 .img → converted to raw).
+PC_IMAGE_URL="${PC_IMAGE_URL:-https://cloud-images.ubuntu.com/releases/noble/release/ubuntu-24.04-server-cloudimg-amd64.img}"
 
 resolve_opi_image_url() {
   if [[ -n "${OPI_IMAGE_URL:-}" ]]; then
@@ -81,7 +88,7 @@ for r in rels:
 }
 
 usage() {
-  sed -n '2,30p' "$0" | sed 's/^# \?//'
+  awk 'NR==1{next} /^[^#]/{exit} {sub(/^# ?/,""); print}' "$0"
   exit "${1:-0}"
 }
 
@@ -101,8 +108,9 @@ BOARD="$(echo "$BOARD" | tr '[:upper:]' '[:lower:]')"
 case "$BOARD" in
   rpi|raspberry|raspberrypi) BOARD=rpi ;;
   opi|orangepi|orange) BOARD=opi ;;
+  pc|x86|x86_64|amd64|intel|desktop) BOARD=pc ;;
   all) ;;
-  *) echo "Unsupported --board $BOARD (use rpi, opi, or all)" >&2; exit 1 ;;
+  *) echo "Unsupported --board $BOARD (use rpi, opi, pc, or all)" >&2; exit 1 ;;
 esac
 
 if [[ "$(id -u)" -ne 0 ]]; then
@@ -121,7 +129,9 @@ need umount
 need sync
 need blkid
 need file
+need python3
 # Optional: growpart, e2fsck, resize2fs improve rootfs expansion when present.
+# qemu-img is required when the PC base image is qcow2 (Ubuntu cloudimg).
 
 mkdir -p "$OUT_DIR" "$CACHE_DIR"
 
@@ -132,34 +142,90 @@ download_image() {
     return
   fi
   echo "Downloading $url"
-  # Armbian "minimal" URLs often redirect to a dated .img.xz — follow redirects.
+  # Armbian / cloud-image URLs often redirect — follow redirects.
   curl -fL --retry 3 --retry-delay 2 -o "$dest.partial" "$url"
   mv "$dest.partial" "$dest"
 }
 
 decompress_to_img() {
   local src="$1" dest="$2"
-  if [[ "$src" == *.xz ]]; then
+  local kind
+  kind="$(file -b "$src" 2>/dev/null || true)"
+
+  if [[ "$src" == *.xz ]] || echo "$kind" | grep -qi 'xz compressed'; then
     echo "Decompressing $(basename "$src")…"
     xz -T0 -dc "$src" >"$dest"
-  elif [[ "$src" == *.img ]]; then
-    cp -f "$src" "$dest"
-  else
-    # Armbian download may already be .img.xz with a generic name
-    if file "$src" | grep -qi 'xz compressed'; then
-      xz -T0 -dc "$src" >"$dest"
-    elif file "$src" | grep -qi 'boot sector\|DOS/MBR\|filesystem'; then
-      cp -f "$src" "$dest"
+  elif echo "$kind" | grep -qi 'QEMU QCOW\|QCOW'; then
+    need qemu-img
+    echo "Converting qcow2 → raw $(basename "$dest")…"
+    qemu-img convert -f qcow2 -O raw "$src" "$dest"
+  elif [[ "$src" == *.img ]] || echo "$kind" | grep -qi 'boot sector\|DOS/MBR\|filesystem\|data'; then
+    # Raw disk image (or already-extracted).
+    if echo "$kind" | grep -qi 'QEMU QCOW\|QCOW'; then
+      need qemu-img
+      qemu-img convert -f qcow2 -O raw "$src" "$dest"
     else
-      echo "Unrecognized image format: $src" >&2
-      file "$src" >&2
-      exit 1
+      cp -f "$src" "$dest"
     fi
+  else
+    echo "Unrecognized image format: $src" >&2
+    file "$src" >&2
+    exit 1
   fi
+
+  # After xz decompress, Ubuntu releases sometimes ship qcow2 inside .xz
+  kind="$(file -b "$dest" 2>/dev/null || true)"
+  if echo "$kind" | grep -qi 'QEMU QCOW\|QCOW'; then
+    need qemu-img
+    local tmp="${dest}.rawtmp"
+    echo "Converting decompressed qcow2 → raw…"
+    qemu-img convert -f qcow2 -O raw "$dest" "$tmp"
+    mv -f "$tmp" "$dest"
+  fi
+}
+
+inject_nocloud_seed() {
+  local root_mnt="$1"
+  # Ubuntu cloud images wait on a datasource; seed NoCloud so headless boot works
+  # without a metadata service (USB/SSD appliance installs).
+  install -d -m 0755 "$root_mnt/var/lib/cloud/seed/nocloud" \
+    "$root_mnt/etc/cloud/cloud.cfg.d"
+
+  cat >"$root_mnt/var/lib/cloud/seed/nocloud/meta-data" <<'EOF'
+instance-id: mt-billing-pc
+local-hostname: mt-billing
+EOF
+
+  cat >"$root_mnt/var/lib/cloud/seed/nocloud/user-data" <<'EOF'
+#cloud-config
+hostname: mt-billing
+manage_etc_hosts: true
+ssh_pwauth: true
+users:
+  - default
+  - name: mtadmin
+    gecos: MT-Billing admin
+    groups: [sudo, adm]
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    lock_passwd: false
+chpasswd:
+  expire: false
+  list: |
+    mtadmin:mtbilling
+package_update: false
+runcmd:
+  - [ sh, -c, "systemctl enable --now ssh 2>/dev/null || systemctl enable --now sshd 2>/dev/null || true" ]
+EOF
+
+  cat >"$root_mnt/etc/cloud/cloud.cfg.d/99-mt-billing.cfg" <<'EOF'
+datasource_list: [ NoCloud, None ]
+EOF
 }
 
 inject_firstboot() {
   local img="$1"
+  local board_name="$2"
   local loop="" boot_loop="" root_loop=""
   local boot_mnt root_mnt
   boot_mnt="$(mktemp -d /tmp/mt-boot.XXXXXX)"
@@ -168,6 +234,7 @@ inject_firstboot() {
   cleanup_mounts() {
     sync || true
     umount "$root_mnt/boot/firmware" 2>/dev/null || true
+    umount "$root_mnt/boot/efi" 2>/dev/null || true
     umount "$root_mnt/boot" 2>/dev/null || true
     umount "$boot_mnt" 2>/dev/null || true
     umount "$root_mnt" 2>/dev/null || true
@@ -178,9 +245,6 @@ inject_firstboot() {
   }
   trap cleanup_mounts EXIT
 
-  # Do not pad the image here — partition growth needs growpart/kpartx which
-  # are unavailable in many build containers. First-boot can expand on device.
-
   # Parse DOS/MBR or GPT partition table (works without kernel partition scan).
   local parts
   parts="$(
@@ -190,10 +254,8 @@ import struct, sys, uuid
 path = sys.argv[1]
 with open(path, "rb") as f:
     mbr = f.read(512)
-    # GPT protective MBR?
     f.seek(512)
     sig = f.read(8)
-    entries = []
     if sig == b"EFI PART":
         f.seek(512)
         hdr = f.read(92)
@@ -213,31 +275,37 @@ with open(path, "rb") as f:
             part_entry_size,
             _part_crc,
         ) = struct.unpack("<8sIIIIQQQQ16sQIII", hdr)
+        EFI = uuid.UUID("C12A7328-F81F-11D2-BA4B-00A0C93EC93B")
+        MSB = uuid.UUID("EBD0A0A2-B9E5-4433-87C0-68B6B72699C7")
+        BIOS = uuid.UUID("21686148-6449-6E6F-744E-656564454649")
+        LINUX_FS = uuid.UUID("0FC63DAF-8483-4772-8E79-3D69D8477DE4")
+        LINUX_ROOT = {
+            uuid.UUID("4F68BCE3-E8CD-4DB1-96E7-FBCAF984B709"),  # x86-64
+            uuid.UUID("B921B045-1DF0-41C3-AF44-4C6F280D3FAE"),  # ARM64
+            uuid.UUID("933AC7E1-2EB4-4F13-B844-0E14E2AEF915"),  # /home
+            LINUX_FS,
+        }
         f.seek(part_lba * 512)
         for i in range(part_count):
             e = f.read(part_entry_size)
             if len(e) < 56:
                 break
-            type_guid = e[0:16]
-            if type_guid == b"\x00" * 16:
+            type_guid = uuid.UUID(bytes_le=e[0:16])
+            if type_guid.int == 0:
                 continue
             first_lba, last_lba = struct.unpack_from("<QQ", e, 32)
-            # EFI system = C12A7328-F81F-11D2-BA4B-00A0C93EC93B
-            efi = uuid.UUID(bytes_le=type_guid) == uuid.UUID("C12A7328-F81F-11D2-BA4B-00A0C93EC93B")
-            # Microsoft basic data often used for FAT boot on some images
-            msb = uuid.UUID(bytes_le=type_guid) == uuid.UUID("EBD0A0A2-B9E5-4433-87C0-68B6B72699C7")
-            linux = uuid.UUID(bytes_le=type_guid) == uuid.UUID("0FC63DAF-8483-4772-8E79-3D69D8477DE4")
-            if efi or msb:
-                ptype = "ef"
-            elif linux:
-                ptype = "83"
-            else:
-                ptype = "83"
             off = first_lba * 512
             size = (last_lba - first_lba + 1) * 512
+            if type_guid == BIOS:
+                ptype = "bios"
+            elif type_guid in (EFI, MSB):
+                ptype = "ef"
+            elif type_guid in LINUX_ROOT:
+                ptype = "83"
+            else:
+                ptype = "other"
             print(f"{ptype} {off} {size}")
     else:
-        # DOS MBR
         for i in range(4):
             e = mbr[446 + i * 16 : 446 + (i + 1) * 16]
             _boot, _bh, _bs, _bc, ptype, _eh, _es, _ec, lba, sects = struct.unpack("<BBBBBBBBII", e)
@@ -249,6 +317,8 @@ PY
   [[ -n "$parts" ]] || { echo "Could not parse partition table on $img" >&2; exit 1; }
 
   local boot_off="" boot_sz="" root_off="" root_sz=""
+  local ptype off sz
+  # Prefer largest Linux (83) partition as root; first FAT/EFI as boot.
   while read -r ptype off sz; do
     [[ -n "$ptype" ]] || continue
     case "$ptype" in
@@ -256,17 +326,25 @@ PY
         if [[ -z "$boot_off" ]]; then boot_off="$off"; boot_sz="$sz"; fi
         ;;
       83|8e)
-        if [[ -z "$root_off" ]]; then root_off="$off"; root_sz="$sz"; fi
+        if [[ -z "$root_off" ]] || [[ "${sz:-0}" -gt "${root_sz:-0}" ]]; then
+          root_off="$off"
+          root_sz="$sz"
+        fi
         ;;
     esac
   done <<<"$parts"
 
-  # Fallback: first non-FAT partition is root; first FAT is boot.
+  # Fallback: largest non-boot, non-bios partition.
   if [[ -z "$root_off" ]]; then
     while read -r ptype off sz; do
       case "$ptype" in
-        0c|0b|0e|ef) continue ;;
-        *) root_off="$off"; root_sz="$sz"; break ;;
+        0c|0b|0e|ef|bios) continue ;;
+        *)
+          if [[ -z "$root_off" ]] || [[ "${sz:-0}" -gt "${root_sz:-0}" ]]; then
+            root_off="$off"
+            root_sz="$sz"
+          fi
+          ;;
       esac
     done <<<"$parts"
   fi
@@ -280,10 +358,6 @@ PY
   if command -v e2fsck >/dev/null 2>&1; then
     e2fsck -fy "$root_loop" >/dev/null 2>&1 || true
   fi
-  if command -v resize2fs >/dev/null 2>&1; then
-    # Root partition size in the table was not grown; skip resize unless growpart ran.
-    true
-  fi
 
   mount "$root_loop" "$root_mnt"
   local boot_mounted=0
@@ -291,27 +365,30 @@ PY
     if [[ -d "$root_mnt/boot/firmware" ]] && mount -t vfat "$boot_loop" "$root_mnt/boot/firmware" 2>/dev/null; then
       boot_mnt="$root_mnt/boot/firmware"
       boot_mounted=1
+    elif [[ -d "$root_mnt/boot/efi" ]] && mount -t vfat "$boot_loop" "$root_mnt/boot/efi" 2>/dev/null; then
+      boot_mnt="$root_mnt/boot/efi"
+      boot_mounted=1
     elif [[ -d "$root_mnt/boot" ]] && mount -t vfat "$boot_loop" "$root_mnt/boot" 2>/dev/null; then
       boot_mnt="$root_mnt/boot"
       boot_mounted=1
     elif mount -t vfat "$boot_loop" "$boot_mnt" 2>/dev/null; then
       boot_mounted=1
     else
-      echo "Note: FAT boot partition not mountable here; enabling SSH via first-boot instead."
+      echo "Note: FAT/EFI boot partition not mountable here; enabling SSH via first-boot instead."
       boot_mnt=""
     fi
   else
     boot_mnt=""
   fi
 
-  echo "Injecting first-boot installer…"
+  echo "Injecting first-boot installer (board=${board_name})…"
   install -d -m 0755 "$root_mnt/usr/local/lib/mt-billing" "$root_mnt/etc/systemd/system"
   install -m 0755 "$FIRSTBOOT" "$root_mnt/usr/local/lib/mt-billing/firstboot-mt-billing.sh"
 
   cat >"$root_mnt/etc/systemd/system/mt-billing-firstboot.service" <<'EOF'
 [Unit]
 Description=MT-Billing first-boot installer
-After=network-online.target
+After=network-online.target cloud-init.target
 Wants=network-online.target
 ConditionPathExists=/usr/local/lib/mt-billing/firstboot-mt-billing.sh
 
@@ -325,7 +402,6 @@ TimeoutStartSec=0
 WantedBy=multi-user.target
 EOF
 
-  # Enable without chroot when possible (symlink wants/)
   mkdir -p "$root_mnt/etc/systemd/system/multi-user.target.wants"
   ln -sf /etc/systemd/system/mt-billing-firstboot.service \
     "$root_mnt/etc/systemd/system/multi-user.target.wants/mt-billing-firstboot.service"
@@ -335,11 +411,15 @@ EOF
     touch "$boot_mnt/ssh" 2>/dev/null || true
   fi
 
-  # Marker for support
+  # PC / Ubuntu cloud image: NoCloud seed so the appliance boots without metadata.
+  if [[ "$board_name" == "pc" || "$board_name" == "pc-amd64" ]]; then
+    inject_nocloud_seed "$root_mnt"
+  fi
+
   cat >"$root_mnt/etc/mt-billing-image.json" <<EOF
 {
   "product": "MT-Billing",
-  "board": "${BOARD_NAME}",
+  "board": "${board_name}",
   "built_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "repo": "https://github.com/tsogs66/MT-Billing",
   "default_login": "admin / admin123"
@@ -354,20 +434,31 @@ EOF
 
 build_one() {
   local kind="$1"
-  local url cache_name out_base BOARD_NAME
+  local url cache_name out_base board_name
   case "$kind" in
     rpi)
       url="$RPI_IMAGE_URL"
       cache_name="rpi-base.img.xz"
       out_base="mt-billing-rpi-arm64"
-      BOARD_NAME="raspberry-pi"
+      board_name="raspberry-pi"
       ;;
     opi)
       url="$(resolve_opi_image_url)"
       echo "Orange Pi base image: $url"
       cache_name="opi-base.img.xz"
       out_base="mt-billing-opi-arm64"
-      BOARD_NAME="orange-pi"
+      board_name="orange-pi"
+      ;;
+    pc)
+      url="$PC_IMAGE_URL"
+      cache_name="pc-base.img"
+      out_base="mt-billing-pc-amd64"
+      board_name="pc-amd64"
+      need qemu-img
+      ;;
+    *)
+      echo "Unknown board kind: $kind" >&2
+      exit 1
       ;;
   esac
 
@@ -377,24 +468,21 @@ build_one() {
   download_image "$url" "$cache"
 
   local raw="$OUT_DIR/${out_base}.img"
-  rm -f "$raw" "$OUT_DIR/${out_base}.img.xz"
+  rm -f "$raw" "$OUT_DIR/${out_base}.img.xz" "$OUT_DIR/${out_base}.img.sha256" "$OUT_DIR/${out_base}.img.xz.sha256"
   decompress_to_img "$cache" "$raw"
-  inject_firstboot "$raw"
+  inject_firstboot "$raw" "$board_name"
 
-  local final="$raw"
   local artifacts=("$raw")
   if [[ "$COMPRESS" -eq 1 ]]; then
     echo "Compressing with xz (this may take a few minutes)…"
     xz -T0 -f -k "$raw"
     artifacts+=("$raw.xz")
-    final="$raw.xz"
     if [[ "$KEEP_RAW" -eq 0 ]]; then
       rm -f "$raw"
       artifacts=("$raw.xz")
     fi
   fi
 
-  # Checksums for each produced artifact (separate .img per board)
   (
     cd "$OUT_DIR"
     for f in "${artifacts[@]}"; do
@@ -412,7 +500,7 @@ build_one() {
     echo "    size: $(du -h "$f" | awk '{print $1}')  sha256: $(awk '{print $1}' "$f.sha256")"
   done
   echo
-  echo "Flash the .img (or .img.xz) with Balena Etcher or Rufus (DD mode), then boot."
+  echo "Flash the .img (or .img.xz) with Balena Etcher or Rufus (DD Image mode), then boot."
   echo "First boot installs MT-Billing automatically (needs internet)."
 }
 
@@ -420,6 +508,7 @@ case "$BOARD" in
   all)
     build_one rpi
     build_one opi
+    build_one pc
     ;;
   *)
     build_one "$BOARD"
@@ -427,3 +516,4 @@ case "$BOARD" in
 esac
 
 echo "Done. Images in: $OUT_DIR"
+ls -lh "$OUT_DIR"/mt-billing-*.img* 2>/dev/null || true
