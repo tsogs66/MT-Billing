@@ -308,13 +308,17 @@ function napIcon(name: string, active = false) {
   });
 }
 
-/** Client ONU — home + fiber drop; pulse when online */
+/** Client ONU — CPE router glyph; pulse when online */
 function onuIcon(state: ClientState, hovered = false, selected = false) {
   const { fill, glow } = CLIENT_COLORS[state];
   const size = selected || hovered ? 24 : 20;
   const icon = `<svg viewBox="0 0 20 20" width="12" height="12" aria-hidden="true">
-    <path d="M3 9.2 L10 3.5 L17 9.2 V16.5 H12.2 V12.2 H7.8 V16.5 H3 Z" fill="#fff"/>
-    <circle cx="10" cy="10.2" r="1.5" fill="${fill}"/>
+    <rect x="2.5" y="8" width="15" height="8" rx="1.8" fill="#fff"/>
+    <circle cx="6" cy="12" r="1.1" fill="${fill}"/>
+    <circle cx="10" cy="12" r="1.1" fill="${fill}"/>
+    <circle cx="14" cy="12" r="1.1" fill="${fill}"/>
+    <path d="M6.5 8 V5.2 a3.5 3.5 0 0 1 7 0 V8" fill="none" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/>
+    <path d="M8.2 8 V6.2 a1.8 1.8 0 0 1 3.6 0 V8" fill="none" stroke="#fff" stroke-width="1.4" stroke-linecap="round"/>
   </svg>`;
   const cls = [
     'map-onu-round',
@@ -324,7 +328,7 @@ function onuIcon(state: ClientState, hovered = false, selected = false) {
   ].filter(Boolean).join(' ');
   return L.divIcon({
     className: 'map-onu-marker',
-    html: `<span class="${cls}" style="--onu-color:${fill};--onu-glow:${glow};width:${size}px;height:${size}px" title="Client / ONU">${icon}</span>`,
+    html: `<span class="${cls}" style="--onu-color:${fill};--onu-glow:${glow};width:${size}px;height:${size}px" title="Client / Router">${icon}</span>`,
     iconSize: [size, size],
     iconAnchor: [size / 2, size / 2],
   });
