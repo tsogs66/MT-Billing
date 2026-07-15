@@ -250,6 +250,20 @@ systemctl enable --now mt-billing-api
 systemctl enable nginx
 systemctl reload nginx
 
+echo "[6b/7] Granting panel passwordless sudo (Cloudflare Tunnel + Updater)…"
+# One-time: lets Cloudflare Access / Application Updater work from the UI without SSH.
+if [[ -x "${INSTALL_DIR}/install/mt-billing-grant-updater-root.sh" ]]; then
+  bash "${INSTALL_DIR}/install/mt-billing-grant-updater-root.sh" || true
+elif [[ -f "${INSTALL_DIR}/install/mt-billing-sudoers" ]]; then
+  sed -e "s|__SVC_USER__|${SERVICE_USER}|g" -e "s|__INSTALL_DIR__|${INSTALL_DIR}|g" \
+    -e "s|^Defaults:mtbilling |Defaults:${SERVICE_USER} |g" \
+    -e "s|^mtbilling ALL=|${SERVICE_USER} ALL=|g" \
+    -e "s|/opt/mt-billing|${INSTALL_DIR}|g" \
+    "${INSTALL_DIR}/install/mt-billing-sudoers" >/etc/sudoers.d/mt-billing
+  chmod 440 /etc/sudoers.d/mt-billing
+  visudo -cf /etc/sudoers.d/mt-billing >/dev/null 2>&1 || rm -f /etc/sudoers.d/mt-billing
+fi
+
 echo "[7/7] Disabling first-boot unit…"
 systemctl disable mt-billing-firstboot.service 2>/dev/null || true
 rm -f /etc/systemd/system/mt-billing-firstboot.service
@@ -259,3 +273,4 @@ IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 echo "==== MT-Billing first-boot complete ===="
 echo "Panel: http://${IP:-<device-ip>}/"
 echo "Login: ${ADMIN_USER} / ${ADMIN_PASS}  (change immediately)"
+echo "Panel UI can manage Cloudflare Tunnel / updates (no SSH needed after this)."

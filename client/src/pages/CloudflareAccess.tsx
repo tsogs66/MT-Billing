@@ -77,7 +77,7 @@ export default function CloudflareAccess() {
     } catch (e: any) {
       flash(
         e?.response?.data?.error ||
-          'Apply failed. On the LXC you may need: sudo bash install/mt-billing-grant-updater-root.sh'
+            'Apply failed. One-time SSH fix: sudo bash /opt/mt-billing/install/mt-billing-grant-updater-root.sh — then retry from this page (no SSH after that).'
       );
     } finally {
       setBusy(false);

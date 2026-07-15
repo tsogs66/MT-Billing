@@ -158,7 +158,7 @@ function runCloudflareTunnel(args: string[]): Promise<{ code: number; stdout: st
           code: 127,
           stdout: '',
           stderr:
-            'Could not run Cloudflare Tunnel helper. On the LXC run: sudo bash install/mt-billing-grant-updater-root.sh then retry, or apply manually with sudo bash install/mt-billing-cloudflare-tunnel.sh --from-db',
+            'Could not run Cloudflare Tunnel helper. One-time fix (SSH once): sudo bash /opt/mt-billing/install/mt-billing-grant-updater-root.sh — then retry Install & start tunnel from the panel (no SSH needed after that).',
         });
         return;
       }
