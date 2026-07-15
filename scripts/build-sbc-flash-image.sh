@@ -256,6 +256,107 @@ datasource_list: [ NoCloud, None ]
 EOF
 }
 
+# Create console user + enable SSH password login inside a mounted rootfs.
+# Needed for Armbian (Orange Pi): first-boot can run for hours before ensure_console_user
+# would otherwise create mtadmin — bake the account into the image instead.
+inject_appliance_console_user() {
+  local root_mnt="$1"
+  local user="mtadmin"
+  local pass="mtbilling"
+  local hash home uid gid
+  hash="$(openssl passwd -6 "$pass")"
+  home="/home/${user}"
+
+  # Skip Armbian interactive first-login wizard (forces root password on console).
+  rm -f "$root_mnt/root/.not_logged_in_yet" \
+    "$root_mnt/root/.not_logged_in_yet.disable_user_creation" 2>/dev/null || true
+
+  # Always set a known root password for recovery on SBC images.
+  if [[ -f "$root_mnt/etc/shadow" ]]; then
+    if grep -q '^root:' "$root_mnt/etc/shadow"; then
+      sed -i "s|^root:[^:]*:|root:${hash}:|" "$root_mnt/etc/shadow"
+    fi
+  fi
+
+  if grep -q "^${user}:" "$root_mnt/etc/passwd" 2>/dev/null; then
+    sed -i "s|^${user}:[^:]*:|${user}:${hash}:|" "$root_mnt/etc/shadow" 2>/dev/null || true
+  else
+    uid=1000
+    while grep -q ":x:${uid}:" "$root_mnt/etc/passwd" 2>/dev/null; do
+      uid=$((uid + 1))
+    done
+    gid="$uid"
+    if ! grep -q "^${user}:" "$root_mnt/etc/group" 2>/dev/null; then
+      echo "${user}:x:${gid}:" >>"$root_mnt/etc/group"
+    fi
+    if [[ -f "$root_mnt/etc/gshadow" ]] && ! grep -q "^${user}:" "$root_mnt/etc/gshadow" 2>/dev/null; then
+      echo "${user}:!::" >>"$root_mnt/etc/gshadow"
+    fi
+    echo "${user}:x:${uid}:${gid}:MT-Billing admin:${home}:/bin/bash" >>"$root_mnt/etc/passwd"
+    echo "${user}:${hash}:19000:0:99999:7:::" >>"$root_mnt/etc/shadow"
+    # Secondary groups when present
+    python3 - "$root_mnt/etc/group" "$user" <<'PY'
+import sys
+path, user = sys.argv[1], sys.argv[2]
+lines = open(path).read().splitlines()
+out = []
+for line in lines:
+    if not line.startswith(("sudo:", "adm:")):
+        out.append(line)
+        continue
+    parts = line.split(":")
+    if len(parts) < 4:
+        out.append(line)
+        continue
+    members = [m for m in parts[3].split(",") if m]
+    if user not in members:
+        members.append(user)
+    parts[3] = ",".join(members)
+    out.append(":".join(parts))
+open(path, "w").write("\n".join(out) + "\n")
+PY
+    install -d -m 0755 "$root_mnt${home}"
+    if [[ -d "$root_mnt/etc/skel" ]]; then
+      cp -a "$root_mnt/etc/skel/." "$root_mnt${home}/" 2>/dev/null || true
+    fi
+    # Numeric ownership (user may not exist on the build host).
+    chown -R "${uid}:${gid}" "$root_mnt${home}" 2>/dev/null || true
+  fi
+
+  install -d -m 0755 "$root_mnt/etc/sudoers.d"
+  printf '%s ALL=(ALL) NOPASSWD:ALL\n' "$user" >"$root_mnt/etc/sudoers.d/010-${user}"
+  chmod 440 "$root_mnt/etc/sudoers.d/010-${user}"
+
+  # Enable SSH password auth (Armbian sometimes defaults to keys-only).
+  if [[ -f "$root_mnt/etc/ssh/sshd_config" ]]; then
+    sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' "$root_mnt/etc/ssh/sshd_config"
+    sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin yes/' "$root_mnt/etc/ssh/sshd_config"
+    sed -i 's/^#\?UsePAM.*/UsePAM yes/' "$root_mnt/etc/ssh/sshd_config"
+    if ! grep -q '^PasswordAuthentication' "$root_mnt/etc/ssh/sshd_config"; then
+      echo 'PasswordAuthentication yes' >>"$root_mnt/etc/ssh/sshd_config"
+    fi
+  fi
+  install -d -m 0755 "$root_mnt/etc/ssh/sshd_config.d"
+  cat >"$root_mnt/etc/ssh/sshd_config.d/99-mt-billing.conf" <<'EOF'
+PasswordAuthentication yes
+PermitRootLogin yes
+KbdInteractiveAuthentication yes
+EOF
+
+  # Enable ssh/sshd units when present.
+  for unit in ssh.service sshd.service; do
+    if [[ -e "$root_mnt/lib/systemd/system/${unit}" || -e "$root_mnt/usr/lib/systemd/system/${unit}" ]]; then
+      mkdir -p "$root_mnt/etc/systemd/system/multi-user.target.wants"
+      ln -sf "/lib/systemd/system/${unit}" \
+        "$root_mnt/etc/systemd/system/multi-user.target.wants/${unit}" 2>/dev/null || \
+      ln -sf "/usr/lib/systemd/system/${unit}" \
+        "$root_mnt/etc/systemd/system/multi-user.target.wants/${unit}" 2>/dev/null || true
+    fi
+  done
+
+  echo "Injected console user ${user} / ${pass} (+ root / ${pass} for recovery)."
+}
+
 # Raspberry Pi OS: enable SSH + create console user via bootfs userconf.txt.
 # Uses mtools so injection works even when the build host cannot mount vfat.
 inject_rpi_boot_userconf() {
@@ -468,7 +569,14 @@ EOF
   ln -sf /etc/systemd/system/mt-billing-firstboot.service \
     "$root_mnt/etc/systemd/system/multi-user.target.wants/mt-billing-firstboot.service"
 
-  # Raspberry Pi: enable SSH + default console user (mtadmin / mtbilling)
+  # Bake console login into the image so SSH works before the long first-boot finishes.
+  case "$board_name" in
+    raspberry-pi|orange-pi|orange-pi-5|orange-pi-one)
+      inject_appliance_console_user "$root_mnt"
+      ;;
+  esac
+
+  # Raspberry Pi: also drop bootfs ssh + userconf markers
   if [[ "$board_name" == "raspberry-pi" ]]; then
     if [[ -n "${boot_off:-}" ]]; then
       local rpi_boot_path=""

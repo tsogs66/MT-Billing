@@ -39,6 +39,9 @@ First-boot log on device: `/var/log/mt-billing-firstboot.log`.
 
 ### Orange Pi One notes
 
-- 512 MB RAM — first-boot creates a 1G swapfile; expect a slow first install.
+- 512 MB RAM — first-boot creates swap and can take a long time (even hours) for the Node build.
+- Console login works **immediately** (baked into the image): `mtadmin` / `mtbilling`  
+  Recovery: `root` / `mtbilling`
 - Prefer a Class 10 / UHS microSD **≥ 16 GB**.
 - Use the **`.img.xz`** file directly in Etcher (do not extract into a folder).
+- Do **not** wait for first-boot to finish before SSH — only the web panel needs the install to complete.
