@@ -304,8 +304,9 @@ export default function CloudflareAccess() {
               <span className="font-mono text-slate-700">https://your-hostname</span>.
             </div>
             <div>
-              First-time panel control may need:{' '}
+              One-time only (if Install fails):{' '}
               <code className="text-slate-700">sudo bash /opt/mt-billing/install/mt-billing-grant-updater-root.sh</code>
+              {' '}— after that, manage the tunnel from this page without SSH.
             </div>
           </div>
 
