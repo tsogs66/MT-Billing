@@ -297,21 +297,52 @@ settingsRouter.delete('/db/backups/:name', (req, res) => {
   res.json({ ok: true });
 });
 
-// Restore from an uploaded base64 SQLite file. Applied safely on next restart.
+// Restore from an uploaded base64 SQLite file. Staged then applied on API restart.
 settingsRouter.post('/db/restore', (req, res) => {
   const data = req.body?.data;
-  if (!data || typeof data !== 'string') return res.status(400).json({ error: 'no file uploaded' });
+  if (!data || typeof data !== 'string') {
+    return res.status(400).json({ error: 'No file uploaded. Choose a .db or .sqlite backup first.' });
+  }
   try {
     const base64 = data.includes(',') ? data.split(',')[1] : data;
-    const buf = Buffer.from(base64, 'base64');
-    if (buf.slice(0, 15).toString('utf8') !== 'SQLite format 3') {
-      return res.status(400).json({ error: 'not a valid SQLite database file' });
+    if (!base64 || base64.length < 32) {
+      return res.status(400).json({ error: 'Upload was empty or truncated. Try a smaller file or raise nginx client_max_body_size.' });
     }
-    fs.writeFileSync(`${dbPath}.pending`, buf);
-    db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run('warning', 'database', 'Restore staged; will apply on next restart');
-    res.json({ ok: true, restartRequired: true });
+    const buf = Buffer.from(base64, 'base64');
+    const magic = buf.subarray(0, 16).toString('utf8');
+    if (!magic.startsWith('SQLite format 3')) {
+      return res.status(400).json({
+        error: 'Not a valid SQLite database (.db). Export a panel backup or use a file that starts with “SQLite format 3”.',
+      });
+    }
+    if (buf.length < 1024) {
+      return res.status(400).json({ error: 'Backup file is too small to be a panel database.' });
+    }
+    const pending = `${dbPath}.pending`;
+    fs.writeFileSync(pending, buf);
+    db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+      'warning',
+      'database',
+      `Restore staged (${buf.length} bytes); applying on API restart`
+    );
+    const restart = req.body?.restart !== false;
+    res.json({
+      ok: true,
+      restartRequired: true,
+      bytes: buf.length,
+      message: restart
+        ? 'Backup staged. Restarting API to apply…'
+        : 'Backup staged. Restart the API to apply it.',
+    });
+    if (restart) scheduleApiRestart();
   } catch (e: any) {
-    res.status(500).json({ error: e?.message || 'restore failed' });
+    const msg = String(e?.message || 'restore failed');
+    if (/entity too large|request entity too large|413/i.test(msg)) {
+      return res.status(413).json({
+        error: 'Backup too large for the reverse proxy. On the host run: sudo sed -i "s/server {/server {\\n    client_max_body_size 64m;/" /etc/nginx/sites-available/mt-billing && sudo nginx -t && sudo systemctl reload nginx',
+      });
+    }
+    res.status(500).json({ error: msg });
   }
 });
 

@@ -143,7 +143,9 @@ function addMonthsPreserveDay(iso: string, months: number): string {
 const app = express();
 app.use(cors());
 // Company logo + GCash/Maya QR images are stored as data-URLs in JSON
-app.use(express.json({ limit: '25mb' }));
+// DB restore uploads arrive as base64 data-URLs (~33% larger than the .db file).
+app.use(express.json({ limit: '64mb' }));
+app.use(express.urlencoded({ extended: true, limit: '64mb' }));
 
 const PORT = Number(process.env.PORT) || 4000;
 

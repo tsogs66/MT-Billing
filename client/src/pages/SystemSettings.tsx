@@ -448,15 +448,42 @@ function DatabaseManagement({ flash }: any) {
       flash('Choose a backup file first.');
       return;
     }
+    if (!confirm('Replace the current database with this backup? The API will restart to apply it.')) {
+      return;
+    }
     setBusy(true);
     try {
-      await api.post('/db/restore', { data: fileData });
-      flash('Database restored. Restart the server to load it.');
+      const r = await api.post('/db/restore', { data: fileData, restart: true });
+      flash(r.data?.message || 'Backup staged. Restarting API to apply…');
+      // Poll until API is back (restore applies pending DB on boot).
+      let tries = 0;
+      const timer = setInterval(async () => {
+        tries += 1;
+        try {
+          await api.get('/settings/app');
+          clearInterval(timer);
+          flash('Database restored and API is back online.');
+          load();
+          setBusy(false);
+        } catch {
+          if (tries >= 40) {
+            clearInterval(timer);
+            flash('Restore staged. If the panel stays offline, restart: sudo systemctl restart mt-billing-api');
+            setBusy(false);
+          }
+        }
+      }, 1500);
+      return;
     } catch (e: any) {
-      flash(e?.response?.data?.error || 'Restore failed.');
-    } finally {
-      setBusy(false);
+      const status = e?.response?.status;
+      const msg =
+        e?.response?.data?.error ||
+        (status === 413
+          ? 'Upload rejected (file too large). Raise nginx client_max_body_size to 64m and retry.'
+          : e?.message || 'Restore failed.');
+      flash(msg);
     }
+    setBusy(false);
   };
 
   const download = async (name: string) => {
@@ -488,10 +515,20 @@ function DatabaseManagement({ flash }: any) {
           <div className="flex items-center gap-3 mb-3">
             <button className="btn-primary" onClick={() => fileRef.current?.click()}>Choose file</button>
             <span className="text-sm text-slate-500">{fileName}</span>
-            <input ref={fileRef} type="file" accept=".db,application/octet-stream" className="hidden" onChange={onFile} />
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".db,.sqlite,application/octet-stream,application/x-sqlite3"
+              className="hidden"
+              onChange={onFile}
+            />
           </div>
+          <p className="text-xs text-slate-500 mb-3">
+            Use a panel backup (<code className="text-slate-600">.db</code> / <code className="text-slate-600">.sqlite</code>).
+            After upload the API restarts to load it.
+          </p>
           <button className="w-full flex items-center justify-center gap-2 bg-amber-400 hover:bg-amber-500 text-white font-medium py-2.5 rounded-lg disabled:opacity-60" onClick={restore} disabled={busy || !fileData}>
-            <RefreshCw size={16} /> Upload &amp; Restore
+            <RefreshCw size={16} className={busy ? 'animate-spin' : ''} /> {busy ? 'Restoring…' : 'Upload & Restore'}
           </button>
         </div>
 
