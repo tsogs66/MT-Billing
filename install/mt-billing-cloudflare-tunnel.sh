@@ -159,7 +159,9 @@ PY
 }
 
 cloudflared_bin() {
-  if [[ -x /usr/bin/cloudflared ]]; then
+  if [[ -x /usr/local/bin/cloudflared ]]; then
+    echo /usr/local/bin/cloudflared
+  elif [[ -x /usr/bin/cloudflared ]]; then
     echo /usr/bin/cloudflared
   elif command -v cloudflared >/dev/null 2>&1; then
     command -v cloudflared
@@ -248,36 +250,59 @@ read_from_db() {
 }
 
 install_cloudflared() {
-  if command -v cloudflared >/dev/null 2>&1; then
-    log_ok "cloudflared already installed: $(cloudflared --version 2>/dev/null | head -1 || echo ok)"
+  local existing
+  existing="$(cloudflared_bin)"
+  if [[ -x "$existing" ]] || command -v cloudflared >/dev/null 2>&1; then
+    log_ok "cloudflared already installed: $($(cloudflared_bin) --version 2>/dev/null | head -1 || echo ok)"
     return 0
   fi
   log_info "Installing cloudflared"
-  local arch
-  arch="$(dpkg --print-architecture 2>/dev/null || uname -m)"
-  case "$arch" in
-    amd64|x86_64) arch="amd64" ;;
-    arm64|aarch64) arch="arm64" ;;
-    armhf|armv7*) arch="arm" ;;
+  local sys_arch asset
+  sys_arch="$(dpkg --print-architecture 2>/dev/null || uname -m)"
+  case "$sys_arch" in
+    amd64|x86_64) asset="amd64" ;;
+    arm64|aarch64) asset="arm64" ;;
+    # Debian/Armbian report armhf; Cloudflare ships cloudflared-linux-armhf.deb
+    # (cloudflared-linux-arm.deb is arch "arm" and dpkg rejects it on armhf).
+    armhf|armv7l|armv7*) asset="armhf" ;;
+    armel|arm) asset="arm" ;;
     *)
-      log_err "Unsupported architecture: $arch"
+      log_err "Unsupported architecture: $sys_arch"
       exit 1
       ;;
   esac
 
-  local deb="/tmp/cloudflared-linux-${arch}.deb"
-  local url="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${arch}.deb"
-  if ! curl -fsSL "$url" -o "$deb"; then
-    log_err "Failed to download cloudflared from GitHub releases"
-    exit 1
+  local deb="/tmp/cloudflared-linux-${asset}.deb"
+  local url="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${asset}.deb"
+  local ok=0
+  if curl -fsSL "$url" -o "$deb"; then
+    if DEBIAN_FRONTEND=noninteractive dpkg -i "$deb" >/dev/null 2>&1; then
+      ok=1
+    else
+      # Rare: arch tag mismatch — try force, then fall through to binary.
+      DEBIAN_FRONTEND=noninteractive dpkg -i --force-architecture "$deb" >/dev/null 2>&1 && ok=1 || true
+      apt-get install -f -y >/dev/null 2>&1 || true
+    fi
   fi
-  DEBIAN_FRONTEND=noninteractive dpkg -i "$deb" >/dev/null || apt-get install -f -y >/dev/null
   rm -f "$deb"
-  if ! command -v cloudflared >/dev/null 2>&1; then
+
+  if [[ "$ok" -ne 1 ]] || ! command -v cloudflared >/dev/null 2>&1; then
+    log_info "dpkg install failed or missing; installing cloudflared binary for ${asset}"
+    local bin_url="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${asset}"
+    local bin_tmp="/tmp/cloudflared-linux-${asset}"
+    if ! curl -fsSL "$bin_url" -o "$bin_tmp"; then
+      log_err "Failed to download cloudflared from GitHub releases (${asset})"
+      exit 1
+    fi
+    install -m 0755 "$bin_tmp" /usr/local/bin/cloudflared
+    rm -f "$bin_tmp"
+  fi
+
+  if [[ ! -x "$(cloudflared_bin)" ]] && ! command -v cloudflared >/dev/null 2>&1; then
     log_err "cloudflared install failed"
     exit 1
   fi
-  log_ok "Installed $(cloudflared --version 2>/dev/null | head -1)"
+  log_ok "Installed $($(cloudflared_bin) --version 2>/dev/null | head -1)"
 }
 
 write_unit() {
