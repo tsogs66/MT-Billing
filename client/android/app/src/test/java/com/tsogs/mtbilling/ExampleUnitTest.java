@@ -1,4 +1,4 @@
-package com.getcapacitor.myapp;
+package com.tsogs.mtbilling;
 
 import static org.junit.Assert.*;
 

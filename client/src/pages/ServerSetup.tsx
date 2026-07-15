@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Server, ArrowRight, Loader2, Shield } from 'lucide-react';
-import { normalizeServerUrl, setStoredServerUrl, getApiBase } from '../config';
+import { normalizeServerUrl, setStoredServerUrl } from '../config';
 import { BRAND_SHORT, PRODUCT_TITLE } from '../branding';
 import Logo from '../components/Logo';
 
@@ -30,16 +30,15 @@ export default function ServerSetup({ onReady }: { onReady: () => void }) {
 
     setBusy(true);
     try {
-      setStoredServerUrl(origin);
-      const base = getApiBase();
-      const res = await fetch(`${base}/health`, { method: 'GET' });
+      // Probe before persisting so a bad URL does not skip this screen on next launch.
+      const res = await fetch(`${origin}/api/health`, { method: 'GET' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setStoredServerUrl(origin);
       onReady();
     } catch {
       setError(
         'Could not reach the panel API. Check the URL, HTTPS certificate, and that /api/health is publicly reachable.'
       );
-      // Keep URL saved so user can retry after fixing network; clear on demand
     } finally {
       setBusy(false);
     }

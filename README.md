@@ -74,11 +74,13 @@ The SQLite database is created and seeded automatically on first run.
 
 ### Android app (Capacitor)
 
-Wraps the same React UI in a native Android shell. See **[client/ANDROID.md](./client/ANDROID.md)**.
+Wraps the same React UI in a native Android shell. Full steps: **[client/ANDROID.md](./client/ANDROID.md)**.
 
 ```bash
-npm run android:sync   # build web assets + sync into client/android
-npm run android:open   # open Android Studio → Build APK
+npm install
+npm run android:sync   # build web UI → sync into client/android
+npm run android:open   # Android Studio → Build → Build APK(s)
+# Debug APK: client/android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
 On first launch, enter your public panel URL (e.g. `https://billing.example.com`), then sign in as usual.

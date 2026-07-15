@@ -3,84 +3,130 @@
 MT-Billing ships a **Capacitor** wrapper around the React client so you can build
 an Android APK that talks to your existing panel over HTTPS.
 
-App ID: `com.tsogs.mtbilling`  
-App name: **MT-Billing**
+| | |
+|--|--|
+| App ID | `com.tsogs.mtbilling` |
+| App name | **MT-Billing** |
+| Native project | `client/android/` |
 
-## What you need on the build machine
+The phone app does **not** run the Node API — it is a remote client to your panel.
 
-- Node.js 20+
-- Android Studio (Ladybug+ recommended) with Android SDK + a device/emulator
-- JDK 17 or 21
+---
 
-This cloud environment may not include the full Android SDK — generate/sync here,
-then open the project in Android Studio on your PC to produce the APK.
+## What you need (build PC)
 
-## One-time / every UI change
+- Node.js **20+**
+- **Android Studio** (Ladybug / recent) with Android SDK Platform **35**
+- JDK **17** or **21**
+- A device or emulator
 
-From the **repo root**:
+---
+
+## Build the APK (recommended)
+
+From a clean clone of the repo:
+
+```bash
+# 1) Install dependencies (root installs server + client)
+npm install
+
+# 2) Build the web UI and sync into the Android project
+npm run android:sync
+
+# 3) Open Android Studio
+npm run android:open
+```
+
+In Android Studio:
+
+1. Wait for Gradle sync to finish.
+2. **Build → Build Bundle(s) / APK(s) → Build APK(s)** (debug),  
+   or use a **release** variant after you create a signing keystore.
+3. Install the APK on your phone.
+
+**Debug APK path (typical):**
+
+```text
+client/android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+### CLI alternative (no Studio UI)
+
+Requires `ANDROID_HOME` / SDK + JDK:
 
 ```bash
 npm install
 npm run android:sync
-npm run android:open
+cd client/android
+./gradlew assembleDebug
+# → app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Or from `client/`:
+Release:
 
 ```bash
-npm run cap:android
+cd client/android
+./gradlew assembleRelease
 ```
 
-That builds the Vite app into `client/dist`, copies it into
-`client/android/`, then opens Android Studio.
+(You must configure signing in `app/build.gradle` or via Android Studio for Play Store.)
 
-In Android Studio: **Build → Build Bundle(s) / APK(s) → Build APK(s)**.
-
-Debug APK path (typical):
-
-`client/android/app/build/outputs/apk/debug/app-debug.apk`
+---
 
 ## First launch on the phone
 
 1. Install the APK.
-2. Enter your **public panel URL** (same hostname you use in a browser), e.g.
-   `https://billing.yourdomain.com`.
+2. Enter your **public panel URL** (same hostname as in a browser), e.g.
+   `https://opione.tsogs.cloud` or `https://billing.yourdomain.com`.
 3. The app checks `/api/health`, then shows the normal login screen.
+4. Sign in (default seed: `admin` / `admin123`).
 
-You can change the server later from the login screen (**Change server URL**).
+Change the server later from the login screen (**Change server URL**).
 
 ### Optional: bake the server URL into the build
+
+Skips the connect screen:
 
 ```bash
 cd client
 VITE_API_BASE=https://billing.yourdomain.com npm run cap:sync
+npm run cap:open
 ```
 
-Then the connect screen is skipped.
+---
+
+## After every UI change
+
+Re-sync before rebuilding the APK:
+
+```bash
+npm run android:sync
+# then rebuild in Android Studio or: cd client/android && ./gradlew assembleDebug
+```
+
+`client/android/app/src/main/assets/public` is **gitignored** — always regenerate with sync.
+
+---
 
 ## Notes
 
-- The app does **not** run the Node API on the phone — it is a remote client.
+- Prefer **HTTPS** on the panel (Let’s Encrypt / Cloudflare). Cleartext HTTP is allowed for LAN testing only.
 - Terminal WebSockets use `wss://` against the same host.
-- Use a valid HTTPS certificate on the panel (Let’s Encrypt / Cloudflare).
-- `cleartext: true` is enabled for LAN `http://` testing only; prefer HTTPS in production.
-- Play Store release: create a keystore and use a release build variant in Android Studio.
+- Play Store: create a keystore and use a signed **release** build.
 
 ## Mobile optimizations
 
-The React UI is tuned for phone-sized WebViews and mobile browsers:
-
 | Area | Behavior |
 |------|----------|
-| **Layout** | Collapsible sidebar drawer, `100dvh` shell, safe-area insets on topbar/main |
-| **Tables** | Horizontal touch-scroll wrappers on all `DataTable` views |
-| **Modals** | Bottom-sheet style on small screens; full-width action buttons |
-| **Terminal** | Stacked controls + shorter xterm height on narrow viewports |
+| **Layout** | Collapsible sidebar drawer, `100dvh` shell, safe-area insets |
+| **Tables** | Horizontal touch-scroll on `DataTable` views |
+| **Modals** | Bottom-sheet style on small screens |
+| **Terminal** | Stacked controls + shorter xterm on narrow viewports |
 | **Topology map** | Full-bleed map stage with mobile panel sizing |
-| **PWA** | `manifest.webmanifest` for “Add to Home screen” in Chrome/Android browser |
-| **Native shell** | Android back closes menu → history back → minimize; keyboard resizes body |
+| **PWA** | `manifest.webmanifest` for browser “Add to Home screen” |
+| **Native shell** | Android back closes menu → history → minimize; keyboard resizes body |
 
-Native behaviors live in `client/src/lib/nativeShell.ts` and load automatically in Capacitor builds.
+Native behaviors: `client/src/lib/nativeShell.ts`.
 
 ## Project layout
 
