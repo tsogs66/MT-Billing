@@ -24,7 +24,11 @@ log_ok() { printf '\033[1;32m[OK]\033[0m %s\n' "$*"; }
 log_err() { printf '\033[1;31m[ERROR]\033[0m %s\n' "$*" >&2; }
 
 if [[ "$(id -u)" -ne 0 ]]; then
-  log_err "Run as root: curl -fsSL ${RAW_BASE}/mt-billing-fix-now.sh | sudo bash"
+  log_err "A password was required / not root."
+  log_err "Use one of these (no panel password — you must already be root or have sudo):"
+  log_err "  Pi SSH:     sudo -i   # password is mtbilling if prompted, then re-run the curl|bash"
+  log_err "  Proxmox:    pct enter <CTID>   # already root inside — run curl|bash without sudo"
+  log_err "  Or:         curl -fsSL ${RAW_BASE}/mt-billing-fix-now.sh | sudo -n bash"
   exit 1
 fi
 

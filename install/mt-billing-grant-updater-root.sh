@@ -145,21 +145,42 @@ if command -v visudo >/dev/null 2>&1; then
   fi
 fi
 
+# Also let the console SSH user (mtadmin) run the one-shot fix without a password.
+# Flash images create mtadmin; without this, `curl … | sudo bash` asks for a password.
+for console_user in mtadmin ubuntu debian pi; do
+  if id "$console_user" >/dev/null 2>&1; then
+    cat >"/etc/sudoers.d/mt-billing-${console_user}" <<EOF
+Defaults:${console_user} !requiretty
+${console_user} ALL=(root) NOPASSWD:ALL
+EOF
+    chmod 440 "/etc/sudoers.d/mt-billing-${console_user}"
+    if command -v visudo >/dev/null 2>&1 && ! visudo -cf "/etc/sudoers.d/mt-billing-${console_user}" >/dev/null 2>&1; then
+      rm -f "/etc/sudoers.d/mt-billing-${console_user}"
+    else
+      log_ok "Console user ${console_user}: passwordless sudo enabled"
+    fi
+  fi
+done
+
 systemctl daemon-reload
 log_ok "Installed ${PANEL_UPDATE_UNIT}"
 log_ok "Installed ${SUDOERS_FILE} for ${svc_user}"
 
-# Verify passwordless sudo works as the service user
+# Verify passwordless sudo for the service user (same style the panel uses: sudo -n + full paths).
 if id "$svc_user" >/dev/null 2>&1; then
-  if sudo -u "$svc_user" sudo -n true 2>/dev/null; then
-    log_ok "Verified: ${svc_user} can use passwordless sudo"
+  if sudo -u "$svc_user" sudo -n /bin/true 2>/dev/null \
+    || sudo -u "$svc_user" sudo -n /usr/bin/true 2>/dev/null; then
+    log_ok "Verified: ${svc_user} passwordless sudo works (sudo -n /bin/true)"
   else
-    if sudo -u "$svc_user" sudo -n systemctl start --no-block mt-billing-panel-update.service --dry-run 2>/dev/null \
-      || sudo -u "$svc_user" sudo -n -l 2>/dev/null | grep -q mt-billing-panel-update; then
-      log_ok "Verified: ${svc_user} may start mt-billing-panel-update.service"
-    else
-      log_info "sudoers installed (check with: sudo -u ${svc_user} sudo -n -l)"
-    fi
+    log_err "Passwordless sudo NOT working for ${svc_user} (got: sudo: a password is required)."
+    log_err "Debug: sudo -u ${svc_user} sudo -n -l"
+    log_err "File:  cat ${SUDOERS_FILE}"
+    # Do not abort the whole grant — rules are installed; operator can inspect.
+  fi
+  if sudo -u "$svc_user" sudo -n -l 2>/dev/null | grep -q 'mt-billing-panel-update\|mt-billing-update'; then
+    log_ok "Verified: ${svc_user} sudoers lists panel update commands"
+  else
+    log_info "Could not list sudo rules for ${svc_user} (may still work). Check: sudo -u ${svc_user} sudo -n -l"
   fi
 fi
 
