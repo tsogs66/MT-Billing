@@ -378,6 +378,9 @@ export default function Updater() {
             <code className="block text-[11px] leading-relaxed font-mono bg-white border border-slate-200 rounded-lg px-3 py-2 overflow-x-auto select-all">
               curl -fsSL https://raw.githubusercontent.com/tsogs66/MT-Billing/main/install/mt-billing-fix-now.sh | sudo bash
             </code>
+            <p className="text-xs text-slate-500 mt-2">
+              Run once on the Pi or LXC as root. After that, Update from GitHub works from this page without SSH.
+            </p>
           </div>
         )}
 

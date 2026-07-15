@@ -249,8 +249,8 @@ export async function getUpdaterStatus(): Promise<UpdaterStatus> {
     fs.existsSync(path.join(installDir, 'install/mt-billing-update.sh')) ||
     fs.existsSync(unitFile);
   const applyHint = canApplyFromUi
-    ? `If Update from GitHub fails, run once on the LXC as root:\n${UPDATE_FIX_NOW_CMD}`
-    : `Panel update needs root once. On the LXC run:\n${UPDATE_FIX_NOW_CMD}`;
+    ? `If Update from GitHub fails, run once as root on the host (Pi / LXC):\n${UPDATE_FIX_NOW_CMD}`
+    : `Panel update needs root once. On the host (Pi / LXC) run:\n${UPDATE_FIX_NOW_CMD}`;
 
   return {
     current: currentSha ? `${version} (${short(currentSha)})` : version,
@@ -389,12 +389,12 @@ export async function applyUpdate(): Promise<{
   const trySystemdUpdate = async (): Promise<boolean> => {
     const unitFile = '/etc/systemd/system/mt-billing-panel-update.service';
     if (!fs.existsSync(unitFile)) return false;
-    // Exact commands allowed in install/mt-billing-sudoers — do NOT probe with `sudo -n true`.
+    // Must match install/mt-billing-sudoers exactly (full paths — bare `systemctl` is denied).
     for (const args of [
-      ['-n', 'systemctl', 'start', '--no-block', unit],
       ['-n', '/bin/systemctl', 'start', '--no-block', unit],
       ['-n', '/usr/bin/systemctl', 'start', '--no-block', unit],
-      ['-n', 'systemctl', 'start', unit],
+      ['-n', '/bin/systemctl', 'start', unit],
+      ['-n', '/usr/bin/systemctl', 'start', unit],
     ]) {
       try {
         await execFileAsync('sudo', args, {
@@ -412,7 +412,11 @@ export async function applyUpdate(): Promise<{
   /** Fallback: sudo the update script directly (needs sudoers or root). */
   const trySudoScript = async (): Promise<boolean> => {
     if (!script) return false;
-    return spawnDetached('sudo', ['-n', 'bash', script]);
+    // sudoers allows /bin/bash and /usr/bin/bash only — not PATH `bash`.
+    for (const bash of ['/bin/bash', '/usr/bin/bash']) {
+      if (await spawnDetached('sudo', ['-n', bash, script])) return true;
+    }
+    return false;
   };
 
   /**
@@ -445,9 +449,12 @@ export async function applyUpdate(): Promise<{
 
         let restarted = false;
         for (const args of [
-          ['-n', 'systemctl', 'restart', 'mt-billing-api.service'],
-          ['-n', 'systemctl', 'restart', 'mt-billing-api'],
-          ['-n', 'systemctl', 'start', '--no-block', unit],
+          ['-n', '/bin/systemctl', 'restart', 'mt-billing-api.service'],
+          ['-n', '/usr/bin/systemctl', 'restart', 'mt-billing-api.service'],
+          ['-n', '/bin/systemctl', 'restart', 'mt-billing-api'],
+          ['-n', '/usr/bin/systemctl', 'restart', 'mt-billing-api'],
+          ['-n', '/bin/systemctl', 'start', '--no-block', unit],
+          ['-n', '/usr/bin/systemctl', 'start', '--no-block', unit],
         ]) {
           try {
             await execFileAsync('sudo', args, { timeout: 30_000, env: updateEnv });
@@ -557,7 +564,7 @@ export async function applyUpdate(): Promise<{
   }
 
   const hint =
-    `Panel update needs root once. On the LXC run:\n${UPDATE_FIX_NOW_CMD}\n` +
+    `Panel update needs root once. On the Pi / LXC run:\n${UPDATE_FIX_NOW_CMD}\n` +
     `Or: sudo bash /opt/mt-billing/install/mt-billing-grant-updater-root.sh && sudo bash /opt/mt-billing/install/mt-billing-update.sh`;
   markFailed(hint);
   return { ok: false, message: hint, job: readUpdateJob(installDir) || undefined };

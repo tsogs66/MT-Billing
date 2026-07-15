@@ -42,7 +42,9 @@ touch "$LOG_FILE"
 [[ -d "${INSTALL_DIR}/.git" ]] || fail "No git checkout at ${INSTALL_DIR}"
 
 cd "$INSTALL_DIR"
-BEFORE="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
+git config --global --add safe.directory "$INSTALL_DIR" 2>/dev/null || true
+git config --global --add safe.directory '*' 2>/dev/null || true
+BEFORE="$(git -c safe.directory="$INSTALL_DIR" rev-parse HEAD 2>/dev/null || echo unknown)"
 STARTED="${UPDATE_STARTED_AT:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
 
 python3 - <<PY
@@ -66,10 +68,10 @@ for p in server/data/mt-billing.db server/data/mt-billing.db-wal server/data/mt-
   fi
 done
 
-git remote set-url origin "$REPO_URL" || true
-git fetch origin "$REPO_BRANCH" || fail "git fetch failed — check network / GitHub access"
-git checkout -f -B "$REPO_BRANCH" "origin/${REPO_BRANCH}" || fail "git checkout failed"
-git reset --hard "origin/${REPO_BRANCH}" || fail "git reset failed"
+git -c safe.directory="$INSTALL_DIR" remote set-url origin "$REPO_URL" || true
+git -c safe.directory="$INSTALL_DIR" fetch origin "$REPO_BRANCH" || fail "git fetch failed — check network / GitHub access"
+git -c safe.directory="$INSTALL_DIR" checkout -f -B "$REPO_BRANCH" "origin/${REPO_BRANCH}" || fail "git checkout failed"
+git -c safe.directory="$INSTALL_DIR" reset --hard "origin/${REPO_BRANCH}" || fail "git reset failed"
 
 for p in server/data/mt-billing.db server/data/mt-billing.db-wal server/data/mt-billing.db-shm server/.env; do
   if [[ -e "${PRESERVE}/${p}" ]]; then

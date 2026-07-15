@@ -161,13 +161,17 @@ EOF
   log_ok "Panel updater privileges installed (${svc_user} → ${PANEL_UPDATE_UNIT})"
 }
 
+git_safe() {
+  git -c safe.directory="$INSTALL_DIR" -c safe.directory='*' "$@"
+}
+
 remote_sha() {
-  git -C "$INSTALL_DIR" fetch -q origin "$REPO_BRANCH"
-  git -C "$INSTALL_DIR" rev-parse "origin/${REPO_BRANCH}"
+  git_safe -C "$INSTALL_DIR" fetch -q origin "$REPO_BRANCH"
+  git_safe -C "$INSTALL_DIR" rev-parse "origin/${REPO_BRANCH}"
 }
 
 local_sha() {
-  git -C "$INSTALL_DIR" rev-parse HEAD
+  git_safe -C "$INSTALL_DIR" rev-parse HEAD
 }
 
 write_state() {
@@ -225,11 +229,15 @@ restore_preserve() {
 sync_to_origin() {
   log_info "Syncing to origin/${REPO_BRANCH} (keeping local DB and .env)"
   backup_preserve
-  run git -C "$INSTALL_DIR" remote set-url origin "$REPO_URL" || true
-  run git -C "$INSTALL_DIR" fetch origin "$REPO_BRANCH"
+  # Root/service-user ownership mismatch → "dubious ownership" without this.
+  git config --global --add safe.directory "$INSTALL_DIR" 2>/dev/null || true
+  git config --system --add safe.directory "$INSTALL_DIR" 2>/dev/null || true
+  git -c safe.directory='*' -C "$INSTALL_DIR" status >/dev/null 2>&1 || true
+  run git_safe -C "$INSTALL_DIR" remote set-url origin "$REPO_URL" || true
+  run git_safe -C "$INSTALL_DIR" fetch origin "$REPO_BRANCH"
   # Discard dirty working tree so fast-forward / reset cannot abort
-  run git -C "$INSTALL_DIR" checkout -f -B "$REPO_BRANCH" "origin/${REPO_BRANCH}"
-  run git -C "$INSTALL_DIR" reset --hard "origin/${REPO_BRANCH}"
+  run git_safe -C "$INSTALL_DIR" checkout -f -B "$REPO_BRANCH" "origin/${REPO_BRANCH}"
+  run git_safe -C "$INSTALL_DIR" reset --hard "origin/${REPO_BRANCH}"
   restore_preserve
 }
 

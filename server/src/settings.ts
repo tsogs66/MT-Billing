@@ -147,8 +147,10 @@ function cloudflareTunnelScript(): string {
 function runCloudflareTunnel(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     const script = cloudflareTunnelScript();
+    // sudoers allows /bin/bash + /usr/bin/bash only (not PATH `bash`).
     const tryCmds = [
-      ['sudo', ['-n', 'bash', script, ...args]],
+      ['sudo', ['-n', '/bin/bash', script, ...args]],
+      ['sudo', ['-n', '/usr/bin/bash', script, ...args]],
       ['bash', [script, ...args]],
     ] as [string, string[]][];
 
