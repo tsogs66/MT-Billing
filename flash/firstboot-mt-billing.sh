@@ -157,22 +157,25 @@ fi
 
 echo "[3/7] Cloning MT-Billing (${REPO_BRANCH})…"
 mkdir -p "$(dirname "$INSTALL_DIR")"
-# Root runs git against a tree later owned by the service user — mark safe.
+# Always bypass dubious-ownership checks (root vs service-user chown).
+git_safe() { git -c safe.directory='*' -c safe.directory="$INSTALL_DIR" "$@"; }
 git config --global --add safe.directory "$INSTALL_DIR" 2>/dev/null || true
+git config --global --add safe.directory '*' 2>/dev/null || true
 git config --system --add safe.directory "$INSTALL_DIR" 2>/dev/null || true
+git config --system --add safe.directory '*' 2>/dev/null || true
 if [[ -d "$INSTALL_DIR/.git" ]]; then
-  # Fix ownership from a previous partial first-boot, then update.
+  # Partial installs often leave the tree owned by the service user — reset and update.
   chown -R root:root "$INSTALL_DIR" 2>/dev/null || true
-  git -C "$INSTALL_DIR" fetch origin
-  git -C "$INSTALL_DIR" checkout "$REPO_BRANCH"
-  git -C "$INSTALL_DIR" pull --ff-only origin "$REPO_BRANCH" || true
+  git_safe -C "$INSTALL_DIR" fetch origin
+  git_safe -C "$INSTALL_DIR" checkout "$REPO_BRANCH"
+  git_safe -C "$INSTALL_DIR" pull --ff-only origin "$REPO_BRANCH" || true
 else
   rm -rf "$INSTALL_DIR"
-  git clone --branch "$REPO_BRANCH" --depth 1 "$REPO_URL" "$INSTALL_DIR"
+  git_safe clone --branch "$REPO_BRANCH" --depth 1 "$REPO_URL" "$INSTALL_DIR"
 fi
 chown -R "${SERVICE_USER}:${SERVICE_USER}" "$INSTALL_DIR"
-# Service user also needs safe.directory when running git later (updates).
 sudo -u "$SERVICE_USER" git config --global --add safe.directory "$INSTALL_DIR" 2>/dev/null || true
+sudo -u "$SERVICE_USER" git config --global --add safe.directory '*' 2>/dev/null || true
 
 echo "[4/7] Building application…"
 # Cap Node heap on small boards so the Vite/tsc build survives 1 GB RAM + swap.
