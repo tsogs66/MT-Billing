@@ -23,12 +23,18 @@
 #   sudo bash scripts/build-pc-img.sh
 #       → dist/flash/mt-billing-pc-amd64.img
 #       → dist/flash/mt-billing-pc-amd64.img.xz
+#       (run-from-USB/SSD appliance — OS lives on the stick)
+#
+#   sudo bash scripts/build-pc-usb-img.sh
+#       → dist/flash/mt-billing-pc-usb-amd64.img
+#       → dist/flash/mt-billing-pc-usb-amd64.img.xz
+#       (USB installer — boots from stick, installs onto internal disk)
 #
 #   sudo bash scripts/build-all-flash-images.sh
-#       → rpi + opi5 + opi-one + pc
+#       → rpi + opi5 + opi-one + pc + pc-usb
 #
 # Or via this script:
-#   sudo bash scripts/build-sbc-flash-image.sh --board rpi|opi|opi-one|pc|all
+#   sudo bash scripts/build-sbc-flash-image.sh --board rpi|opi|opi-one|pc|pc-usb|all
 #
 # Flash either the .img or .img.xz with Balena Etcher or Rufus (DD Image mode).
 # After first boot (needs internet), open http://<device-ip>/
@@ -42,6 +48,10 @@
 #   mt-billing-opi-arm64*     → Orange Pi 5 only
 #   mt-billing-opi-one-armhf* → Orange Pi One only
 #
+# PC images:
+#   mt-billing-pc-amd64*     → boot and run from USB/SSD (appliance)
+#   mt-billing-pc-usb-amd64* → flash to USB, boot once, installs to internal disk
+#
 # System requirements: see SYSTEM_REQUIREMENTS.md
 
 set -euo pipefail
@@ -51,6 +61,7 @@ ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 OUT_DIR="${OUT_DIR:-$ROOT/dist/flash}"
 CACHE_DIR="${CACHE_DIR:-$ROOT/dist/flash-cache}"
 FIRSTBOOT="$ROOT/flash/firstboot-mt-billing.sh"
+USB_INSTALL="$ROOT/flash/usb-install-to-disk.sh"
 BOARD="rpi"
 COMPRESS=1
 # Always keep the uncompressed .img as a separate flashable file per board.
@@ -140,8 +151,9 @@ case "$BOARD" in
   # Legacy alias: "opi" means Orange Pi 5 (arm64). Orange Pi One is opi-one.
   opi|orangepi|orange) BOARD=opi ;;
   pc|x86|x86_64|amd64|intel|desktop) BOARD=pc ;;
+  pc-usb|pcusb|usb-install|usb-installer|pc-installer) BOARD=pc-usb ;;
   all) ;;
-  *) echo "Unsupported --board $BOARD (use rpi, opi, opi-one, pc, or all)" >&2; exit 1 ;;
+  *) echo "Unsupported --board $BOARD (use rpi, opi, opi-one, pc, pc-usb, or all)" >&2; exit 1 ;;
 esac
 
 if [[ "$(id -u)" -ne 0 ]]; then
@@ -150,6 +162,9 @@ if [[ "$(id -u)" -ne 0 ]]; then
 fi
 
 [[ -f "$FIRSTBOOT" ]] || { echo "Missing $FIRSTBOOT" >&2; exit 1; }
+if [[ "$BOARD" == "pc-usb" || "$BOARD" == "all" ]]; then
+  [[ -f "$USB_INSTALL" ]] || { echo "Missing $USB_INSTALL" >&2; exit 1; }
+fi
 
 need() { command -v "$1" >/dev/null 2>&1 || { echo "Missing dependency: $1" >&2; exit 1; }; }
 need curl
@@ -219,19 +234,21 @@ decompress_to_img() {
 
 inject_nocloud_seed() {
   local root_mnt="$1"
+  local instance_id="${2:-mt-billing-pc}"
+  local hostname="${3:-mt-billing}"
   # Ubuntu cloud images wait on a datasource; seed NoCloud so headless boot works
   # without a metadata service (USB/SSD appliance installs).
   install -d -m 0755 "$root_mnt/var/lib/cloud/seed/nocloud" \
     "$root_mnt/etc/cloud/cloud.cfg.d"
 
-  cat >"$root_mnt/var/lib/cloud/seed/nocloud/meta-data" <<'EOF'
-instance-id: mt-billing-pc
-local-hostname: mt-billing
+  cat >"$root_mnt/var/lib/cloud/seed/nocloud/meta-data" <<EOF
+instance-id: ${instance_id}
+local-hostname: ${hostname}
 EOF
 
-  cat >"$root_mnt/var/lib/cloud/seed/nocloud/user-data" <<'EOF'
+  cat >"$root_mnt/var/lib/cloud/seed/nocloud/user-data" <<EOF
 #cloud-config
-hostname: mt-billing
+hostname: ${hostname}
 manage_etc_hosts: true
 ssh_pwauth: true
 users:
@@ -254,6 +271,60 @@ EOF
   cat >"$root_mnt/etc/cloud/cloud.cfg.d/99-mt-billing.cfg" <<'EOF'
 datasource_list: [ NoCloud, None ]
 EOF
+}
+
+# USB installer image: boot from stick → clone OS onto largest internal disk → power off.
+inject_usb_installer() {
+  local root_mnt="$1"
+
+  [[ -f "$USB_INSTALL" ]] || { echo "Missing $USB_INSTALL" >&2; exit 1; }
+
+  install -d -m 0755 "$root_mnt/usr/local/lib/mt-billing" "$root_mnt/etc/systemd/system"
+  install -m 0755 "$USB_INSTALL" "$root_mnt/usr/local/lib/mt-billing/usb-install-to-disk.sh"
+  touch "$root_mnt/etc/mt-billing-usb-installer"
+
+  cat >"$root_mnt/etc/systemd/system/mt-billing-usb-install.service" <<'EOF'
+[Unit]
+Description=MT-Billing USB installer (clone to internal disk)
+Documentation=https://github.com/tsogs66/MT-Billing
+After=network-online.target cloud-init.target cloud-init.service
+Wants=network-online.target
+Conflicts=mt-billing-firstboot.service
+Before=mt-billing-firstboot.service
+ConditionPathExists=/etc/mt-billing-usb-installer
+ConditionPathExists=/usr/local/lib/mt-billing/usb-install-to-disk.sh
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/mt-billing/usb-install-to-disk.sh
+RemainAfterExit=yes
+TimeoutStartSec=0
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  mkdir -p "$root_mnt/etc/systemd/system/multi-user.target.wants"
+  ln -sf /etc/systemd/system/mt-billing-usb-install.service \
+    "$root_mnt/etc/systemd/system/multi-user.target.wants/mt-billing-usb-install.service"
+
+  # Do not auto-run firstboot on the USB stick (install runs on the internal disk after clone).
+  rm -f "$root_mnt/etc/systemd/system/multi-user.target.wants/mt-billing-firstboot.service"
+
+  install -d -m 0755 "$root_mnt/etc/issue.d"
+  cat >"$root_mnt/etc/issue.d/mt-billing-usb.issue" <<'EOF'
+
+*** MT-Billing USB installer ***
+This stick installs Ubuntu + MT-Billing onto the largest internal disk (UEFI).
+All data on that disk will be erased. Keep Ethernet connected.
+When finished the PC powers off — unplug USB, then boot from the internal disk.
+SSH (if needed): mtadmin / mtbilling   Log: /var/log/mt-billing-usb-install.log
+
+EOF
+
+  echo "Injected USB → internal-disk installer (marker /etc/mt-billing-usb-installer)."
 }
 
 # Create console user + enable SSH password login inside a mounted rootfs.
@@ -566,8 +637,11 @@ WantedBy=multi-user.target
 EOF
 
   mkdir -p "$root_mnt/etc/systemd/system/multi-user.target.wants"
-  ln -sf /etc/systemd/system/mt-billing-firstboot.service \
-    "$root_mnt/etc/systemd/system/multi-user.target.wants/mt-billing-firstboot.service"
+  # USB installer: firstboot is copied for the cloned internal disk, but not enabled on the stick.
+  if [[ "$board_name" != "pc-usb-amd64" ]]; then
+    ln -sf /etc/systemd/system/mt-billing-firstboot.service \
+      "$root_mnt/etc/systemd/system/multi-user.target.wants/mt-billing-firstboot.service"
+  fi
 
   # Bake console login into the image so SSH works before the long first-boot finishes.
   case "$board_name" in
@@ -593,7 +667,10 @@ EOF
 
   # PC / Ubuntu cloud image: NoCloud seed so the appliance boots without metadata.
   if [[ "$board_name" == "pc" || "$board_name" == "pc-amd64" ]]; then
-    inject_nocloud_seed "$root_mnt"
+    inject_nocloud_seed "$root_mnt" "mt-billing-pc" "mt-billing"
+  elif [[ "$board_name" == "pc-usb-amd64" ]]; then
+    inject_nocloud_seed "$root_mnt" "mt-billing-pc-usb" "mt-billing-usb"
+    inject_usb_installer "$root_mnt"
   fi
 
   cat >"$root_mnt/etc/mt-billing-image.json" <<EOF
@@ -642,6 +719,13 @@ build_one() {
       cache_name="pc-base.img"
       out_base="mt-billing-pc-amd64"
       board_name="pc-amd64"
+      need qemu-img
+      ;;
+    pc-usb)
+      url="$PC_IMAGE_URL"
+      cache_name="pc-base.img"
+      out_base="mt-billing-pc-usb-amd64"
+      board_name="pc-usb-amd64"
       need qemu-img
       ;;
     *)
@@ -698,6 +782,7 @@ case "$BOARD" in
     build_one opi
     build_one opi-one
     build_one pc
+    build_one pc-usb
     ;;
   *)
     build_one "$BOARD"

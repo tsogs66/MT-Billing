@@ -54,14 +54,14 @@ Guest install script: `install/mt-billing-install.sh` (also embedded in `ct/mt-b
 
 Build **one flashable `.img` (and `.img.xz`) per platform**, then write it with **Balena Etcher** or **Rufus** (DD Image mode).
 
-| Item | Raspberry Pi | Orange Pi 5 | Orange Pi One | PC (amd64) |
-|------|--------------|-------------|---------------|------------|
-| Target | Pi 3 / 4 / 5 (64-bit) | OPi 5 (RK3588S arm64) | OPi One (H3 armhf) | UEFI x86_64 PC / mini-PC / NUC |
-| Base OS | Raspberry Pi OS Lite 64-bit | Armbian minimal | Armbian Orangepione minimal | Ubuntu 24.04 server cloud image |
-| Storage | microSD **≥ 16 GB** | microSD / eMMC **≥ 16 GB** | microSD **≥ 16 GB** | USB / SSD / NVMe **≥ 16 GB** |
-| RAM | 2 GB+ recommended | 2 GB+ | 512 MB (swap enabled; slow) | 2 GB+ |
-| Network | Ethernet preferred | Ethernet preferred | Ethernet preferred | Ethernet preferred |
-| Flash file | `mt-billing-rpi-arm64*` | `mt-billing-opi-arm64*` | `mt-billing-opi-one-armhf*` | `mt-billing-pc-amd64*` |
+| Item | Raspberry Pi | Orange Pi 5 | Orange Pi One | PC appliance | PC USB installer |
+|------|--------------|-------------|---------------|--------------|------------------|
+| Target | Pi 3 / 4 / 5 (64-bit) | OPi 5 (RK3588S arm64) | OPi One (H3 armhf) | UEFI x86_64 — run from USB/SSD | UEFI x86_64 — install to internal disk |
+| Base OS | Raspberry Pi OS Lite 64-bit | Armbian minimal | Armbian Orangepione minimal | Ubuntu 24.04 server cloud image | Same base; clones to internal disk |
+| Storage | microSD **≥ 16 GB** | microSD / eMMC **≥ 16 GB** | microSD **≥ 16 GB** | USB / SSD / NVMe **≥ 16 GB** | Flash USB **≥ 8 GB**; target disk **≥ 8 GB** (wiped) |
+| RAM | 2 GB+ recommended | 2 GB+ | 512 MB (swap enabled; slow) | 2 GB+ | 2 GB+ |
+| Network | Ethernet preferred | Ethernet preferred | Ethernet preferred | Ethernet preferred | Ethernet required for install + firstboot |
+| Flash file | `mt-billing-rpi-arm64*` | `mt-billing-opi-arm64*` | `mt-billing-opi-one-armhf*` | `mt-billing-pc-amd64*` | `mt-billing-pc-usb-amd64*` |
 
 ### Build the flash files (Linux)
 
@@ -78,9 +78,12 @@ sudo bash scripts/build-opi-img.sh
 # Orange Pi One → dist/flash/mt-billing-opi-one-armhf.img (+ .img.xz)
 sudo bash scripts/build-opi-one-img.sh
 
-# PC amd64 → dist/flash/mt-billing-pc-amd64.img (+ .img.xz)
+# PC amd64 appliance (run from USB/SSD) → dist/flash/mt-billing-pc-amd64.img (+ .img.xz)
 # requires: sudo apt install qemu-utils
 sudo bash scripts/build-pc-img.sh
+
+# PC USB installer (install onto internal disk) → dist/flash/mt-billing-pc-usb-amd64.img (+ .img.xz)
+sudo bash scripts/build-pc-usb-img.sh
 
 # All platforms
 sudo bash scripts/build-all-flash-images.sh
@@ -94,14 +97,18 @@ Override bases with `OPI_IMAGE_URL`, `OPI_ONE_IMAGE_URL`, or `PC_IMAGE_URL` if n
    - Raspberry Pi → `mt-billing-rpi-arm64.img` (or `.img.xz`)
    - Orange Pi **5** → `mt-billing-opi-arm64.img` (or `.img.xz`)
    - Orange Pi **One** → `mt-billing-opi-one-armhf.img` (or `.img.xz`)
-   - PC → `mt-billing-pc-amd64.img` (or `.img.xz`)
+   - PC appliance (run from media) → `mt-billing-pc-amd64.img` (or `.img.xz`)
+   - PC USB installer → `mt-billing-pc-usb-amd64.img` (or `.img.xz`)
 2. **Balena Etcher**: Flash from file → select the `.img` or `.img.xz` → select SD/USB → Flash.
 3. **Rufus** (Windows): select the `.img` / `.img.xz`, use **DD Image** mode, write to the media.
 4. Boot with Ethernet (recommended). Wait for first-boot install to finish.
 5. Open `http://<device-ip>/` — panel login `admin` / `admin123`.
 6. Console / SSH: **`mtadmin` / `mtbilling`** (change immediately). PC images prefer UEFI boot.
 
+**PC USB installer flow:** flash `mt-billing-pc-usb-amd64*` to a USB stick → boot the PC from that stick (UEFI) → installer wipes the largest internal disk and clones the OS → PC powers off → unplug USB → boot from the internal disk → firstboot installs MT-Billing (internet required).
+
 First-boot log on device: `/var/log/mt-billing-firstboot.log`.
+USB installer log (on the stick): `/var/log/mt-billing-usb-install.log`.
 
 ---
 

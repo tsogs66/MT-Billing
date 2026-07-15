@@ -50,7 +50,8 @@ See **[SYSTEM_REQUIREMENTS.md](./SYSTEM_REQUIREMENTS.md)** for full hardware and
 | **Raspberry Pi** | Pi 3/4/5 64-bit · 16 GB+ microSD · flash `mt-billing-rpi-arm64.img.xz` |
 | **Orange Pi 5** | OPi 5 · 16 GB+ storage · flash `mt-billing-opi-arm64.img.xz` |
 | **Orange Pi One** | OPi One (H3) · 16 GB+ microSD · flash `mt-billing-opi-one-armhf.img.xz` |
-| **PC (amd64)** | UEFI x86_64 · 16 GB+ USB/SSD · flash `mt-billing-pc-amd64.img.xz` |
+| **PC (amd64) appliance** | UEFI x86_64 · 16 GB+ USB/SSD · flash `mt-billing-pc-amd64.img.xz` (run from media) |
+| **PC USB installer** | UEFI x86_64 · flash `mt-billing-pc-usb-amd64.img.xz` to USB → installs onto internal disk |
 
 ## Getting started (development)
 
@@ -120,9 +121,10 @@ data otherwise).
 | `scripts/build-rpi-img.sh` | Build Raspberry Pi `.img` (+ `.img.xz`) for Etcher/Rufus |
 | `scripts/build-opi-img.sh` | Build Orange Pi **5** `.img` (+ `.img.xz`) for Etcher/Rufus |
 | `scripts/build-opi-one-img.sh` | Build Orange Pi **One** `.img` (+ `.img.xz`) for Etcher/Rufus |
-| `scripts/build-pc-img.sh` | Build PC amd64 `.img` (+ `.img.xz`) for Etcher/Rufus |
-| `scripts/build-all-flash-images.sh` | Build RPi + OPi 5 + OPi One + PC flash images |
-| `scripts/build-sbc-flash-image.sh` | Shared builder (`--board rpi\|opi\|opi-one\|pc\|all`) |
+| `scripts/build-pc-img.sh` | Build PC amd64 appliance `.img` (+ `.img.xz`) for Etcher/Rufus |
+| `scripts/build-pc-usb-img.sh` | Build PC USB installer `.img` (+ `.img.xz`) → internal disk |
+| `scripts/build-all-flash-images.sh` | Build RPi + OPi 5 + OPi One + PC + PC-USB flash images |
+| `scripts/build-sbc-flash-image.sh` | Shared builder (`--board rpi\|opi\|opi-one\|pc\|pc-usb\|all`) |
 | `scripts/sync-proxmox-embed.sh` | Sync `install/` into embedded Proxmox guest script |
 
 ## Deploying on Ubuntu (Proxmox)
@@ -335,7 +337,8 @@ Build one disk image **per platform**, then flash with **Balena Etcher** or **Ru
 sudo bash scripts/build-rpi-img.sh              # → dist/flash/mt-billing-rpi-arm64.img
 sudo bash scripts/build-opi-img.sh              # → Orange Pi 5
 sudo bash scripts/build-opi-one-img.sh          # → Orange Pi One
-sudo bash scripts/build-pc-img.sh               # → dist/flash/mt-billing-pc-amd64.img
+sudo bash scripts/build-pc-img.sh               # → appliance (run from USB/SSD)
+sudo bash scripts/build-pc-usb-img.sh           # → USB installer → internal disk
 sudo bash scripts/build-all-flash-images.sh
 ```
 

@@ -9,10 +9,24 @@ or build locally, then flash with **Balena Etcher** or **Rufus** (DD Image mode)
 | **Raspberry Pi** 3/4/5 | `sudo bash scripts/build-rpi-img.sh` | `mt-billing-rpi-arm64.img` (+ `.img.xz`) |
 | **Orange Pi 5** | `sudo bash scripts/build-opi-img.sh` | `mt-billing-opi-arm64.img` (+ `.img.xz`) |
 | **Orange Pi One** (H3) | `sudo bash scripts/build-opi-one-img.sh` | `mt-billing-opi-one-armhf.img` (+ `.img.xz`) |
-| **PC** (UEFI amd64) | `sudo bash scripts/build-pc-img.sh` | `mt-billing-pc-amd64.img` (+ `.img.xz`) |
+| **PC appliance** (run from USB/SSD) | `sudo bash scripts/build-pc-img.sh` | `mt-billing-pc-amd64.img` (+ `.img.xz`) |
+| **PC USB installer** → internal disk | `sudo bash scripts/build-pc-usb-img.sh` | `mt-billing-pc-usb-amd64.img` (+ `.img.xz`) |
 
 **Do not mix Orange Pi images.** `mt-billing-opi-arm64*` is for Orange Pi **5** only.
 Orange Pi **One** must use `mt-billing-opi-one-armhf*`.
+
+### PC: appliance vs USB installer
+
+| Image | What it does |
+|-------|----------------|
+| `mt-billing-pc-amd64*` | Flash to USB/SSD and **run from that drive** (appliance). |
+| `mt-billing-pc-usb-amd64*` | Flash to a USB stick, boot once — **installs onto the largest internal disk** (≥8 GB), then powers off. Unplug USB and boot from the PC disk. |
+
+USB installer notes:
+
+- UEFI boot required; target disk is **wiped**.
+- Needs Ethernet/internet during install and again on first boot from the internal disk (MT-Billing firstboot).
+- Console on the stick: `mtadmin` / `mtbilling`. Install log: `/var/log/mt-billing-usb-install.log`.
 
 Build all:
 
