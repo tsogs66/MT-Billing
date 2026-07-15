@@ -76,7 +76,27 @@ settingsRouter.put('/settings/app', (req, res) => {
     cursor_repo_url: cur.cursor_repo_url || null,
     tz: cur.tz || 'Asia/Manila',
     ntp_server: cur.ntp_server || 'time.cloudflare.com',
-    public_base_url: (() => { const v = cur.public_base_url == null ? '' : String(cur.public_base_url).trim().replace(/\/$/, ''); return v || null; })(),
+    public_base_url: (() => {
+      const host = (() => {
+        const v = cur.cf_tunnel_hostname == null ? '' : String(cur.cf_tunnel_hostname).trim()
+          .replace(/^https?:\/\//i, '').replace(/\/.*$/, '').replace(/:\d+$/, '').replace(/\.$/, '').toLowerCase();
+        return v || '';
+      })();
+      // Cloudflare Access / tunnel setup: keep website + pay links on the tunnel hostname.
+      // Old saved bases (e.g. pay.example.com) otherwise stick and disagree with the tunnel UI.
+      if (b.sync_public_from_tunnel && host) {
+        return `https://${host}`;
+      }
+      if (host && !('public_base_url' in b)) {
+        const existing = cur.public_base_url == null ? '' : String(cur.public_base_url).trim().replace(/\/$/, '');
+        const existingHost = existing.replace(/^https?:\/\//i, '').replace(/\/.*$/, '').toLowerCase();
+        if (!existing || (existingHost && existingHost !== host)) {
+          return `https://${host}`;
+        }
+      }
+      const v = cur.public_base_url == null ? '' : String(cur.public_base_url).trim().replace(/\/$/, '');
+      return v || null;
+    })(),
     cf_tunnel_token: (() => {
       if (cur.cf_tunnel_token == null || cur.cf_tunnel_token === '') return null;
       return String(cur.cf_tunnel_token).replace(/[\r\n\t ]+/g, '').replace(/^['"]|['"]$/g, '') || null;
@@ -205,13 +225,18 @@ settingsRouter.post('/cloudflare-tunnel/apply', async (_req, res) => {
       output: (result.stdout + '\n' + result.stderr).trim(),
     });
   }
+  const url = `https://${String(s.cf_tunnel_hostname).replace(/^https?:\/\//i, '').replace(/\/$/, '')}`;
+  db.prepare(
+    `UPDATE app_settings SET cf_tunnel_status = 'running', cf_tunnel_url = ?, cf_tunnel_enabled = 1,
+       public_base_url = ? WHERE id = 1`
+  ).run(url, url);
   db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
     'info',
     'cloudflare',
     `Tunnel applied for ${s.cf_tunnel_hostname}`
   );
   const status = await runCloudflareTunnel(['status']);
-  const parsed = status.code === 0 ? parseTunnelStatusOutput(status.stdout) : { status: 'running', url: `https://${s.cf_tunnel_hostname}` };
+  const parsed = status.code === 0 ? parseTunnelStatusOutput(status.stdout) : { status: 'running', url };
   res.json({ ok: true, ...parsed, ...publicApp(), output: result.stdout.trim() });
 });
 
@@ -239,7 +264,7 @@ settingsRouter.post('/cloudflare-tunnel/toggle', async (_req, res) => {
     const url = `https://${String(s.cf_tunnel_hostname).replace(/^https?:\/\//i, '').replace(/\/$/, '')}`;
     db.prepare(
       `UPDATE app_settings SET cf_tunnel_status = 'running', cf_tunnel_url = ?, cf_tunnel_enabled = 1,
-         public_base_url = COALESCE(NULLIF(public_base_url, ''), ?) WHERE id = 1`
+         public_base_url = ? WHERE id = 1`
     ).run(url, url);
     db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run('info', 'cloudflare', `Tunnel started at ${url}`);
     return res.json({ status: 'running', url, ...publicApp() });

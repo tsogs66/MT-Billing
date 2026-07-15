@@ -174,6 +174,47 @@ export default function CloudflareAccess() {
             {' · '}
             source <span className="font-medium text-slate-700">{sourceLabel}</span>
           </div>
+          {(() => {
+            const tunnelHost = String(app.cf_tunnel_hostname || '')
+              .replace(/^https?:\/\//i, '')
+              .replace(/\/.*$/, '')
+              .toLowerCase();
+            const activeHost = String(effective || '')
+              .replace(/^https?:\/\//i, '')
+              .replace(/\/.*$/, '')
+              .toLowerCase();
+            if (!tunnelHost || !activeHost || tunnelHost === activeHost) return null;
+            return (
+              <div className="text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-2 flex flex-wrap items-center gap-2">
+                <span>
+                  Website/pay link (<span className="font-mono">{activeHost}</span>) differs from tunnel hostname (
+                  <span className="font-mono">{tunnelHost}</span>).
+                </span>
+                <button
+                  type="button"
+                  className="btn-secondary text-xs py-1 px-2"
+                  disabled={busy}
+                  onClick={async () => {
+                    setBusy(true);
+                    try {
+                      await saveSettings({
+                        sync_public_from_tunnel: true,
+                        public_base_url: `https://${tunnelHost}`,
+                      });
+                      flash(`Website & pay links now use https://${tunnelHost}`);
+                      load();
+                    } catch (e: any) {
+                      flash(e?.response?.data?.error || 'Could not sync public URL');
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                >
+                  Use tunnel hostname
+                </button>
+              </div>
+            );
+          })()}
           {warning && (
             <div className="text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5">{warning}</div>
           )}
@@ -276,9 +317,21 @@ export default function CloudflareAccess() {
               onClick={async () => {
                 setBusy(true);
                 try {
-                  await saveSettings(token ? { cf_tunnel_token: token } : {});
+                  const host = String(app.cf_tunnel_hostname || '')
+                    .replace(/^https?:\/\//i, '')
+                    .replace(/\/.*$/, '')
+                    .toLowerCase();
+                  await saveSettings({
+                    ...(token ? { cf_tunnel_token: token } : {}),
+                    sync_public_from_tunnel: true,
+                    ...(host ? { public_base_url: `https://${host}` } : {}),
+                  });
                   if (token) setToken('');
-                  flash('Cloudflare settings saved.');
+                  flash(
+                    host
+                      ? `Saved. Website & pay links use https://${host}`
+                      : 'Cloudflare settings saved.'
+                  );
                   load();
                 } catch (e: any) {
                   flash(e?.response?.data?.error || 'Save failed');
