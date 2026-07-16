@@ -685,6 +685,16 @@ app.get('/api/dashboard/status', async (req, res) => {
 });
 
 // ---- Sales ----
+function yearMonthKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function yearMonthFromIso(iso: string): string {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return iso.slice(0, 7);
+  return yearMonthKey(d);
+}
+
 function isoWeek(d: Date): string {
   // ISO-8601 week number, returned as "YYYY-Www".
   const dt = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
@@ -706,7 +716,7 @@ app.get('/api/sales', (req, res) => {
     const keyOf = (iso: string) => {
       const d = new Date(iso);
       if (group === 'week') return isoWeek(d);
-      if (group === 'month') return iso.slice(0, 7);
+      if (group === 'month') return yearMonthFromIso(iso);
       return iso.slice(0, 4);
     };
     for (const r of rows) buckets.set(keyOf(r.created_at), (buckets.get(keyOf(r.created_at)) || 0) + r.amount);
@@ -720,7 +730,7 @@ app.get('/api/sales', (req, res) => {
     } else if (group === 'month') {
       for (let i = 11; i >= 0; i--) {
         const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-        const key = d.toISOString().slice(0, 7);
+        const key = yearMonthKey(d);
         series.push({ label: key, value: buckets.get(key) || 0 });
       }
     } else {
@@ -757,7 +767,7 @@ app.get('/api/sales', (req, res) => {
   const bucketBy = days <= 30 ? 'day' : 'month';
   for (const r of rows) {
     const d = new Date(r.created_at);
-    const key = bucketBy === 'day' ? d.toISOString().slice(0, 10) : d.toISOString().slice(0, 7);
+    const key = bucketBy === 'day' ? d.toISOString().slice(0, 10) : yearMonthKey(d);
     buckets.set(key, (buckets.get(key) || 0) + r.amount);
   }
   const series: { label: string; value: number }[] = [];
@@ -771,7 +781,7 @@ app.get('/api/sales', (req, res) => {
     const months = range === '1y' ? 12 : 6;
     for (let i = months - 1; i >= 0; i--) {
       const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      const key = d.toISOString().slice(0, 7);
+      const key = yearMonthKey(d);
       series.push({ label: key, value: buckets.get(key) || 0 });
     }
   }
