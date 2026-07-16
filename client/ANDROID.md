@@ -119,7 +119,7 @@ npm run android:sync
 | Area | Behavior |
 |------|----------|
 | **Layout** | Collapsible sidebar drawer, `100dvh` shell, safe-area insets |
-| **Tables** | Horizontal touch-scroll on `DataTable` views |
+| **Tables** | Horizontal touch-scroll on `DataTable` views; first column (name/user) stays pinned on mobile |
 | **Modals** | Bottom-sheet style on small screens |
 | **Terminal** | Stacked controls + shorter xterm on narrow viewports |
 | **Topology map** | Full-bleed map stage with mobile panel sizing |

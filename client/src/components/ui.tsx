@@ -399,6 +399,7 @@ export function DataTable({
   emptyMessage = 'No records found.',
   stickyHeader,
   sortable = true,
+  freezeFirstColumn = true,
 }: {
   columns: {
     key: string;
@@ -417,6 +418,8 @@ export function DataTable({
   stickyHeader?: boolean;
   /** Enable click-to-sort on headers (default true). Per-column override via columns[].sortable */
   sortable?: boolean;
+  /** On mobile, pin the first column (name / user) while scrolling horizontally */
+  freezeFirstColumn?: boolean;
 }) {
   const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
@@ -452,10 +455,14 @@ export function DataTable({
 
   return (
     <div className="table-scroll-touch overflow-x-auto rounded-xl border border-slate-100/80 -mx-0.5 px-0.5">
-      <table className="data-table w-full text-sm">
+      <table
+        className={['data-table w-full text-sm', freezeFirstColumn ? 'data-table--freeze-first' : '']
+          .filter(Boolean)
+          .join(' ')}
+      >
         <thead className={stickyHeader ? 'sticky top-0 z-10' : ''}>
           <tr>
-            {columns.map((c) => {
+            {columns.map((c, i) => {
               const canSort = sortable && c.sortable !== false;
               const active = sortKey === c.key;
               return (
@@ -465,6 +472,7 @@ export function DataTable({
                     c.align === 'right' ? 'text-right' : c.align === 'center' ? 'text-center' : 'text-left',
                     c.className,
                     canSort ? 'cursor-pointer select-none hover:text-slate-800' : '',
+                    freezeFirstColumn && i === 0 ? 'data-table-freeze-cell' : '',
                   ].filter(Boolean).join(' ')}
                   onClick={() => onHeaderClick(c.key, c.sortable)}
                   title={canSort ? 'Click to sort' : undefined}
@@ -497,7 +505,12 @@ export function DataTable({
                 {r.cells.map((cell, j) => (
                   <td
                     key={j}
-                    className={columns[j]?.align === 'right' ? 'text-right' : columns[j]?.align === 'center' ? 'text-center' : ''}
+                    className={[
+                      columns[j]?.align === 'right' ? 'text-right' : columns[j]?.align === 'center' ? 'text-center' : '',
+                      freezeFirstColumn && j === 0 ? 'data-table-freeze-cell' : '',
+                    ]
+                      .filter(Boolean)
+                      .join(' ')}
                   >
                     {cell}
                   </td>

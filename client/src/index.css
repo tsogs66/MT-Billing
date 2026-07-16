@@ -90,6 +90,40 @@ body {
     padding-left: 0.75rem;
     padding-right: 0.75rem;
   }
+  /* Keep name / user column visible while the rest of the table scrolls sideways */
+  .data-table--freeze-first th:first-child,
+  .data-table--freeze-first td:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    background-color: #fff;
+    box-shadow: 6px 0 10px -6px rgba(15, 23, 42, 0.22);
+  }
+  .data-table--freeze-first th:first-child {
+    z-index: 3;
+    background-color: rgb(248 250 252); /* slate-50 — matches thead */
+  }
+  .data-table--freeze-first tbody tr:hover td:first-child {
+    background-color: color-mix(in srgb, #fff 55%, rgb(255 247 237));
+  }
+  [data-theme='dark'] .data-table--freeze-first th:first-child {
+    background-color: color-mix(in srgb, var(--card-bg, #0f172a) 92%, #fff 8%);
+  }
+  [data-theme='dark'] .data-table--freeze-first td:first-child {
+    background-color: var(--card-bg, #0f172a);
+  }
+  [data-theme='dark'] .data-table--freeze-first tbody tr:hover td:first-child {
+    background-color: color-mix(in srgb, var(--brand, #fb923c) 10%, var(--card-bg, #0f172a));
+  }
+  [data-theme='onepiece'] .data-table--freeze-first th:first-child {
+    background-color: color-mix(in srgb, var(--card-bg, #1e1b4b) 90%, #fff 10%);
+  }
+  [data-theme='onepiece'] .data-table--freeze-first td:first-child {
+    background-color: var(--card-bg, #1e1b4b);
+  }
+  [data-theme='onepiece'] .data-table--freeze-first tbody tr:hover td:first-child {
+    background-color: color-mix(in srgb, var(--brand, #fb923c) 10%, var(--card-bg, #1e1b4b));
+  }
   .card-header {
     flex-direction: column;
     align-items: flex-start;
