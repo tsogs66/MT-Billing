@@ -108,11 +108,23 @@ function wrapText(text: string, width: number): string[] {
 
 const RULE_TEXT = '-'.repeat(RECEIPT_TEXT_CHARS);
 
+function rightAlignLine(text: string, width = RECEIPT_TEXT_CHARS): string {
+  const t = text.trim();
+  if (!t) return '';
+  if (t.length >= width) return t.slice(0, width);
+  return `${' '.repeat(width - t.length)}${t}`;
+}
+
 function stackedFieldText(label: string, value: string): string[] {
   if (!value.trim()) return [];
-  const inline = `${label} ${value}`;
-  if (inline.length <= RECEIPT_TEXT_CHARS) return [inline];
-  return [label, ...wrapText(value, RECEIPT_TEXT_CHARS).map((l) => `  ${l}`)];
+  const rows = [label];
+  for (const line of wrapText(value, RECEIPT_TEXT_CHARS)) rows.push(rightAlignLine(line));
+  return rows;
+}
+
+function amountLineText(label: string, amount: string): string {
+  const gap = RECEIPT_TEXT_CHARS - label.length - amount.length;
+  return `${label}${' '.repeat(Math.max(1, gap))}${amount}`;
 }
 
 /** Plain-text receipt for Android Share → printer apps. */
@@ -143,9 +155,9 @@ export function buildReceiptText(receipt: PaymentReceipt): string {
   lines.push(...stackedFieldText('Next due:', String(receipt.newDue || '')));
 
   lines.push(RULE_TEXT);
-  lines.push(`Subtotal: ${money(subtotal)}`);
-  if (discount > 0) lines.push(`Discount (${discountDays}d): -${money(discount)}`);
-  lines.push(`TOTAL: ${money(total)}`);
+  lines.push(amountLineText('Subtotal:', money(subtotal)));
+  if (discount > 0) lines.push(amountLineText(`Discount (${discountDays}d):`, `-${money(discount)}`));
+  lines.push(amountLineText('TOTAL:', money(total)));
   lines.push(RULE_TEXT);
   lines.push('Thank you for your payment.');
   lines.push(RULE_TEXT);
@@ -162,8 +174,15 @@ export function buildReceiptText(receipt: PaymentReceipt): string {
 
 function fieldHtml(label: string, value: string, bold = false): string {
   if (!value.trim()) return '';
-  const cls = bold ? 'val val-bold' : 'val';
-  return `<div class="field"><div class="lab">${label}</div><div class="${cls}">${escapeReceiptHtml(value)}</div></div>`;
+  const valClass = bold ? 'val val-bold' : 'val';
+  const vals = wrapText(value, RECEIPT_WRAP_CHARS)
+    .map((line) => `<div class="${valClass}">${escapeReceiptHtml(line)}</div>`)
+    .join('');
+  return `<div class="field"><div class="lab">${label}</div>${vals}</div>`;
+}
+
+function amountRowHtml(label: string, amount: string, total = false): string {
+  return `<div class="amount-row${total ? ' amount-row-total' : ''}"><span class="amount-lab">${label}</span><span class="amount-val">${escapeReceiptHtml(amount)}</span></div>`;
 }
 
 function centerHtml(text: string, cls = 'line'): string {
@@ -194,7 +213,7 @@ export function buildReceiptHtml(receipt: PaymentReceipt, opts?: { autoPrint?: b
 
   const discountBlock =
     discount > 0
-      ? `<div class="amount">Discount (${discountDays}d): -${escapeReceiptHtml(money(discount))}</div>`
+      ? amountRowHtml(`Discount (${discountDays}d):`, `-${money(discount)}`)
       : '';
 
   const printScript = autoPrint
@@ -268,29 +287,46 @@ export function buildReceiptHtml(receipt: PaymentReceipt, opts?: { autoPrint?: b
     .addr, .biz { font-size: 10px; font-weight: 600; margin-top: 2px; }
     .when { font-size: 10px; font-weight: 700; margin: 6px 0 5px; }
     .rule { font-size: 10px; margin: 6px 0; }
-    .field { margin: 4px 0; max-width: 100%; }
-    .lab { font-size: 11px; font-weight: 600; text-align: left; }
+    .field { margin: 5px 0; max-width: 100%; }
+    .lab { font-size: 11px; font-weight: 600; text-align: left; line-height: 1.2; }
     .val {
       font-size: 11px;
       font-weight: 700;
-      text-align: left;
-      padding-left: 6px;
+      text-align: right;
+      padding-right: 2px;
       margin-top: 1px;
       word-break: break-word;
       overflow-wrap: anywhere;
       max-width: 100%;
     }
     .val-bold { font-size: 12px; font-weight: 800; }
-    .amount {
-      font-size: 11px;
-      font-weight: 700;
-      text-align: left;
-      margin: 3px 0;
-      word-break: break-word;
-      overflow-wrap: anywhere;
+    .amount-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 8px;
+      margin: 4px 0;
       max-width: 100%;
     }
-    .amount-total { font-size: 12px; font-weight: 800; margin-top: 4px; }
+    .amount-lab {
+      flex: 0 0 auto;
+      font-size: 11px;
+      font-weight: 600;
+      text-align: left;
+    }
+    .amount-val {
+      flex: 1 1 auto;
+      min-width: 0;
+      font-size: 11px;
+      font-weight: 700;
+      text-align: right;
+      padding-right: 2px;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+    }
+    .amount-row-total { margin-top: 5px; }
+    .amount-row-total .amount-lab,
+    .amount-row-total .amount-val { font-size: 12px; font-weight: 800; }
     .thanks { font-size: 11px; font-weight: 700; margin: 5px 0; }
     .disclaimer {
       font-size: 9px;
@@ -341,9 +377,9 @@ export function buildReceiptHtml(receipt: PaymentReceipt, opts?: { autoPrint?: b
     ${fieldHtml('Plan:', String(receipt.plan || ''))}
     ${fieldHtml('Next due:', String(receipt.newDue || ''))}
     <div class="rule">${rule}</div>
-    <div class="amount">Subtotal: ${escapeReceiptHtml(money(subtotal))}</div>
+    ${amountRowHtml('Subtotal:', money(subtotal))}
     ${discountBlock}
-    <div class="amount amount-total">TOTAL: ${escapeReceiptHtml(money(total))}</div>
+    ${amountRowHtml('TOTAL:', money(total), true)}
     <div class="rule">${rule}</div>
     <div class="thanks">Thank you for your payment.</div>
     <div class="rule">${rule}</div>
