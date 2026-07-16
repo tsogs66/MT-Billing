@@ -20,6 +20,7 @@ export interface NotifySettings {
   sms_api_user?: string | null;
   sms_api_pass?: string | null;
   sms_type?: number | null;
+  sms_provider?: string | null;
 }
 
 export function getSettings(): NotifySettings {
@@ -41,7 +42,7 @@ export function getPublicSettings() {
 const COLS = [
   'reminder_enabled', 'days_before', 'email_enabled', 'sms_enabled', 'autodisable_enabled',
   'autodisable_hours', 'email_from', 'sms_sender', 'smtp_host', 'smtp_port', 'smtp_secure',
-  'smtp_user', 'smtp_pass', 'smtp_from', 'sms_api_url', 'sms_api_user', 'sms_api_pass', 'sms_type',
+  'smtp_user', 'smtp_pass', 'smtp_from', 'sms_api_url', 'sms_api_user', 'sms_api_pass', 'sms_type', 'sms_provider',
 ];
 const BOOL_COLS = new Set(['reminder_enabled', 'email_enabled', 'sms_enabled', 'autodisable_enabled', 'smtp_secure']);
 
@@ -61,7 +62,8 @@ export function updateSettings(patch: Record<string, any>) {
        sms_enabled=@sms_enabled, autodisable_enabled=@autodisable_enabled, autodisable_hours=@autodisable_hours,
        email_from=@email_from, sms_sender=@sms_sender, smtp_host=@smtp_host, smtp_port=@smtp_port,
        smtp_secure=@smtp_secure, smtp_user=@smtp_user, smtp_pass=@smtp_pass, smtp_from=@smtp_from,
-       sms_api_url=@sms_api_url, sms_api_user=@sms_api_user, sms_api_pass=@sms_api_pass, sms_type=@sms_type
+       sms_api_url=@sms_api_url, sms_api_user=@sms_api_user, sms_api_pass=@sms_api_pass, sms_type=@sms_type,
+       sms_provider=@sms_provider
      WHERE id=1`
   ).run({
     reminder_enabled: cur.reminder_enabled ? 1 : 0,
@@ -82,6 +84,7 @@ export function updateSettings(patch: Record<string, any>) {
     sms_api_user: cur.sms_api_user || null,
     sms_api_pass: cur.sms_api_pass || null,
     sms_type: Number(cur.sms_type) || 1,
+    sms_provider: cur.sms_provider || 'isms',
   });
   return getPublicSettings();
 }
@@ -158,6 +161,45 @@ async function sendEmailSmtp(
     return { status: 'sent', detail: `sent via SMTP ${s.smtp_host}` };
   } catch (e: any) {
     return { status: 'failed', detail: `SMTP error: ${e?.message || 'send failed'}` };
+  }
+}
+
+const SEMAPHORE_DEFAULT_URL = 'https://semaphore.co/api/v4/messages';
+
+async function sendSmsSemaphore(s: NotifySettings, to: string, message: string) {
+  try {
+    const url = s.sms_api_url || SEMAPHORE_DEFAULT_URL;
+    const params = new URLSearchParams({
+      apikey: s.sms_api_pass || '',
+      number: normalizePhone(to),
+      message,
+    });
+    if (s.sms_sender) params.set('sendername', s.sms_sender);
+    const r = await fetch(url, { method: 'POST', body: params });
+    const text = (await r.text()).trim();
+    let data: any;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      data = null;
+    }
+    if (!r.ok) {
+      const err = data?.message || data?.error || text.slice(0, 200);
+      return { status: 'failed', detail: `Semaphore: ${err || `HTTP ${r.status}`}` };
+    }
+    const items = Array.isArray(data) ? data : data ? [data] : [];
+    if (!items.length) {
+      return { status: 'failed', detail: `Semaphore: unexpected response: ${text.slice(0, 200) || 'empty'}` };
+    }
+    const failed = items.filter((x: any) => String(x.status || '').toLowerCase() === 'failed');
+    if (failed.length) {
+      return { status: 'failed', detail: `Semaphore: delivery failed for ${failed.map((x: any) => x.recipient || 'recipient').join(', ')}` };
+    }
+    const ids = items.map((x: any) => x.message_id).filter(Boolean).join(', ');
+    const statuses = [...new Set(items.map((x: any) => x.status).filter(Boolean))].join(', ');
+    return { status: 'sent', detail: `Semaphore: ${statuses || 'ok'}${ids ? ` (#${ids})` : ''}` };
+  } catch (e: any) {
+    return { status: 'failed', detail: `Semaphore error: ${e?.message || 'unreachable'}` };
   }
 }
 
@@ -312,7 +354,11 @@ async function deliver(
   const s = getSettings();
 
   if (channel === 'email' && s.smtp_host) return sendEmailSmtp(s, recipient, subject, message, opts);
-  if (channel === 'sms' && s.sms_api_url && s.sms_api_user && s.sms_api_pass) return sendSmsBulk(s, recipient, message);
+  if (channel === 'sms' && s.sms_api_pass) {
+    const provider = String(s.sms_provider || 'isms').toLowerCase();
+    if (provider === 'semaphore') return sendSmsSemaphore(s, recipient, message);
+    if (s.sms_api_url && s.sms_api_user) return sendSmsBulk(s, recipient, message);
+  }
 
   const webhook = channel === 'email' ? process.env.NOTIFY_EMAIL_WEBHOOK : process.env.NOTIFY_SMS_WEBHOOK;
   if (webhook) {

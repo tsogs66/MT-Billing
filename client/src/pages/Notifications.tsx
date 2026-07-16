@@ -59,9 +59,19 @@ const TABS = [
   { key: 'send', label: 'Send' },
   { key: 'automation', label: 'Reminders & Auto-disable' },
   { key: 'smtp', label: 'Email (SMTP)' },
-  { key: 'sms', label: 'Bulk SMS' },
+  { key: 'sms', label: 'SMS Setup' },
   { key: 'log', label: 'Log' },
 ];
+
+const SMS_PROVIDERS = [
+  { value: 'isms', label: 'bulksms.com.ph (iSMS)' },
+  { value: 'semaphore', label: 'Semaphore (semaphore.co)' },
+];
+
+const SMS_PROVIDER_DEFAULTS: Record<string, { sms_api_url: string }> = {
+  isms: { sms_api_url: 'https://smtpapi.vocotext.com/isms_send_all_id.php' },
+  semaphore: { sms_api_url: 'https://semaphore.co/api/v4/messages' },
+};
 
 export default function Notifications() {
   const [settings, setSettings] = useState<any>(null);
@@ -155,6 +165,11 @@ export default function Notifications() {
   };
 
   const setS = (patch: any) => setSettings((s: any) => ({ ...s, ...patch }));
+  const smsProvider = String(settings?.sms_provider || 'isms').toLowerCase();
+  const setSmsProvider = (provider: string) => {
+    const defaults = SMS_PROVIDER_DEFAULTS[provider] || SMS_PROVIDER_DEFAULTS.isms;
+    setS({ sms_provider: provider, ...defaults });
+  };
   const saveGateway = async () => {
     setBusy(true);
     try {
@@ -345,37 +360,65 @@ export default function Notifications() {
       )}
 
       {tab === 'sms' && (
-        <Card title="Bulk SMS Setup (bulksms.com.ph / iSMS)">
+        <Card title="SMS Setup">
           <div className="max-w-xl space-y-3">
-            <p className="text-sm text-slate-500">
-              Connect your <a className="text-brand-600 underline" href="https://www.bulksms.com.ph/sms_api.php" target="_blank" rel="noreferrer">bulksms.com.ph</a> (iSMS) account to send real SMS. Requests use the <code>un</code>, <code>pwd</code>, <code>dstno</code>, <code>msg</code>, <code>type</code>, <code>agreedterm</code> and <code>sendid</code> parameters.
-            </p>
             <label className="flex items-center gap-2 text-sm">
               <Toggle label="SMS notifications enabled" on={!!settings.sms_enabled} onChange={() => saveSettings({ sms_enabled: settings.sms_enabled ? 0 : 1 })} /> SMS notifications enabled
             </label>
-            <FormField label="API Endpoint">
-              <input className="input" value={settings.sms_api_url || ''} onChange={(e) => setS({ sms_api_url: e.target.value })} />
+            <FormField label="SMS Provider">
+              <select className="input" value={smsProvider} onChange={(e) => setSmsProvider(e.target.value)}>
+                {SMS_PROVIDERS.map((p) => (
+                  <option key={p.value} value={p.value}>{p.label}</option>
+                ))}
+              </select>
             </FormField>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <FormField label="API Username (un)">
-                <input className="input" value={settings.sms_api_user || ''} onChange={(e) => setS({ sms_api_user: e.target.value })} />
-              </FormField>
-              <FormField label={settings.sms_api_pass_set ? 'API Password (pwd) (saved)' : 'API Password (pwd)'}>
-                <input className="input" type="password" placeholder={settings.sms_api_pass_set ? '••••••• (leave blank to keep)' : ''} value={smsPass} onChange={(e) => setSmsPass(e.target.value)} />
-              </FormField>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <FormField label="Sender ID (sendid)">
-                <input className="input" maxLength={11} value={settings.sms_sender || ''} onChange={(e) => setS({ sms_sender: e.target.value })} />
-              </FormField>
-              <FormField label="Message Type">
-                <select className="input" value={settings.sms_type || 1} onChange={(e) => setS({ sms_type: Number(e.target.value) })}>
-                  <option value={1}>ASCII (English) — up to 153 chars</option>
-                  <option value={2}>Unicode — up to 63 chars</option>
-                </select>
-              </FormField>
-            </div>
-            <button type="button" className="btn-primary" onClick={saveGateway} disabled={busy}>{busy ? 'Saving…' : 'Save Bulk SMS Settings'}</button>
+
+            {smsProvider === 'semaphore' ? (
+              <>
+                <p className="text-sm text-slate-500">
+                  Connect your <a className="text-brand-600 underline" href="https://semaphore.co/" target="_blank" rel="noreferrer">Semaphore</a> account. Get your API key from the Semaphore dashboard. Messages are sent via <code>apikey</code>, <code>number</code>, <code>message</code>, and <code>sendername</code>.
+                </p>
+                <FormField label={settings.sms_api_pass_set ? 'API Key (saved)' : 'API Key'}>
+                  <input className="input" type="password" placeholder={settings.sms_api_pass_set ? '••••••• (leave blank to keep)' : 'Your Semaphore API key'} value={smsPass} onChange={(e) => setSmsPass(e.target.value)} />
+                </FormField>
+                <FormField label="Sender Name (sendername)">
+                  <input className="input" maxLength={11} placeholder="Approved sender name" value={settings.sms_sender || ''} onChange={(e) => setS({ sms_sender: e.target.value })} />
+                  <p className="text-xs text-slate-400 mt-1">Must be an approved sender name on your Semaphore account.</p>
+                </FormField>
+                <FormField label="API Endpoint (optional)">
+                  <input className="input" value={settings.sms_api_url || SMS_PROVIDER_DEFAULTS.semaphore.sms_api_url} onChange={(e) => setS({ sms_api_url: e.target.value })} />
+                </FormField>
+              </>
+            ) : (
+              <>
+                <p className="text-sm text-slate-500">
+                  Connect your <a className="text-brand-600 underline" href="https://www.bulksms.com.ph/sms_api.php" target="_blank" rel="noreferrer">bulksms.com.ph</a> (iSMS) account to send real SMS. Requests use the <code>un</code>, <code>pwd</code>, <code>dstno</code>, <code>msg</code>, <code>type</code>, <code>agreedterm</code> and <code>sendid</code> parameters.
+                </p>
+                <FormField label="API Endpoint">
+                  <input className="input" value={settings.sms_api_url || ''} onChange={(e) => setS({ sms_api_url: e.target.value })} />
+                </FormField>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <FormField label="API Username (un)">
+                    <input className="input" value={settings.sms_api_user || ''} onChange={(e) => setS({ sms_api_user: e.target.value })} />
+                  </FormField>
+                  <FormField label={settings.sms_api_pass_set ? 'API Password (pwd) (saved)' : 'API Password (pwd)'}>
+                    <input className="input" type="password" placeholder={settings.sms_api_pass_set ? '••••••• (leave blank to keep)' : ''} value={smsPass} onChange={(e) => setSmsPass(e.target.value)} />
+                  </FormField>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <FormField label="Sender ID (sendid)">
+                    <input className="input" maxLength={11} value={settings.sms_sender || ''} onChange={(e) => setS({ sms_sender: e.target.value })} />
+                  </FormField>
+                  <FormField label="Message Type">
+                    <select className="input" value={settings.sms_type || 1} onChange={(e) => setS({ sms_type: Number(e.target.value) })}>
+                      <option value={1}>ASCII (English) — up to 153 chars</option>
+                      <option value={2}>Unicode — up to 63 chars</option>
+                    </select>
+                  </FormField>
+                </div>
+              </>
+            )}
+            <button type="button" className="btn-primary" onClick={saveGateway} disabled={busy}>{busy ? 'Saving…' : 'Save SMS Settings'}</button>
           </div>
         </Card>
       )}

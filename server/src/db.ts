@@ -281,6 +281,7 @@ export function migrate() {
     ['sms_api_user', 'TEXT'],
     ['sms_api_pass', 'TEXT'],
     ['sms_type', 'INTEGER DEFAULT 1'],
+    ['sms_provider', "TEXT DEFAULT 'isms'"],
   ];
   for (const [col, type] of notifyCols) {
     if (!columnExists('notify_settings', col)) db.exec(`ALTER TABLE notify_settings ADD COLUMN ${col} ${type}`);
