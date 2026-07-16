@@ -1,15 +1,12 @@
 /**
  * POS-58 thermal receipt (cnfujun POS-5890U-L).
- * PC browser print: fixed pixel width, top-left, left-aligned — Windows drivers
- * ignore mm @page sizes and clip right-aligned text. Android: plain-text Share.
+ * PC browser print: plain-text <pre> block (20 chars wide) — most reliable on
+ * Windows thermal drivers. Android: same text via Share.
  */
 import { isNativeApp } from '../config';
 
-/** Browser print column width (px @ 96dpi ≈ 53mm on 58mm roll). */
-const RECEIPT_PC_WIDTH_PX = 200;
-const RECEIPT_PC_PAD_PX = 6;
-/** Plain-text line width for Bluetooth / RawBT printer apps. */
-const RECEIPT_CHARS = 22;
+/** Max characters per line on 58mm / 384-dot head (conservative for PC print). */
+const RECEIPT_CHARS = 20;
 
 export type PaymentReceipt = {
   company?: string;
@@ -63,15 +60,16 @@ function headerAddressLines(address?: string | null): string[] {
   if (!address?.trim()) return [];
   const byNewline = address.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
   if (byNewline.length > 1) return byNewline;
-  const parts = address.split(',').map((s) => s.trim()).filter(Boolean);
+  const single = byNewline[0] || address.trim();
+  const parts = single.split(',').map((s) => s.trim()).filter(Boolean);
   if (parts.length >= 3) return [`${parts[0]}, ${parts[1]}`, parts.slice(2).join(', ')];
   if (parts.length === 2) return [parts.join(', ')];
-  return [address.trim()];
+  return [single];
 }
 
-function contactLines(phone?: string | null): string[] {
-  if (!phone?.trim()) return [];
-  return phone.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+function multilineField(text?: string | null): string[] {
+  if (!text?.trim()) return [];
+  return text.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
 }
 
 function wrapText(text: string, width = RECEIPT_CHARS): string[] {
@@ -111,12 +109,12 @@ function centerLine(text: string, width = RECEIPT_CHARS): string {
     .join('\n');
 }
 
-function stackedFieldText(label: string, value: string): string[] {
+function stackedField(label: string, value: string): string[] {
   if (!value.trim()) return [];
   return [label, ...wrapText(value, RECEIPT_CHARS)];
 }
 
-/** Plain-text receipt for Share → Bluetooth / RawBT / printer apps. */
+/** Plain-text receipt — used for Share and PC browser print. */
 export function buildReceiptText(receipt: PaymentReceipt): string {
   const company = (receipt.company || 'ISP Billing').toUpperCase();
   const months = Number(receipt.months) || 1;
@@ -127,68 +125,57 @@ export function buildReceiptText(receipt: PaymentReceipt): string {
   const discountDays = Number(receipt.discountDays) || 0;
   const when = receiptWhen(receipt);
   const addressLines = headerAddressLines(receipt.companyAddress);
-  const phones = contactLines(receipt.companyPhone);
+  const phones = multilineField(receipt.companyPhone);
+  const emails = multilineField(receipt.companyEmail);
 
   const lines: string[] = [];
   for (const line of wrapText(company, RECEIPT_CHARS)) lines.push(centerLine(line));
-  for (const line of addressLines) lines.push(centerLine(line));
+  for (const line of addressLines) {
+    for (const wrapped of wrapText(line, RECEIPT_CHARS)) lines.push(centerLine(wrapped));
+  }
   if (addressLines.length) lines.push('');
   lines.push(centerLine(when));
   lines.push(RULE);
 
-  lines.push(...stackedFieldText('Account #:', String(receipt.account || '')));
-  lines.push(...stackedFieldText('Customer:', String(receipt.customer || '')));
-  lines.push(...stackedFieldText('Extension:', extension));
-  lines.push(...stackedFieldText('Plan:', String(receipt.plan || '')));
-  lines.push(...stackedFieldText('Next due:', String(receipt.newDue || '')));
+  lines.push(...stackedField('Account #:', String(receipt.account || '')));
+  lines.push(...stackedField('Customer:', String(receipt.customer || '')));
+  lines.push(...stackedField('Extension:', extension));
+  lines.push(...stackedField('Plan:', String(receipt.plan || '')));
+  lines.push(...stackedField('Next due:', String(receipt.newDue || '')));
 
   lines.push(RULE);
-  lines.push(`Subtotal: ${money(subtotal)}`);
-  if (discount > 0) lines.push(`Discount (${discountDays}d): -${money(discount)}`);
-  lines.push(`TOTAL: ${money(total)}`);
+  lines.push(...wrapText(`Subtotal: ${money(subtotal)}`, RECEIPT_CHARS));
+  if (discount > 0) {
+    lines.push(...wrapText(`Discount (${discountDays}d): -${money(discount)}`, RECEIPT_CHARS));
+  }
+  lines.push(...wrapText(`TOTAL: ${money(total)}`, RECEIPT_CHARS));
   lines.push(RULE);
-  lines.push(centerLine('Thank you for your payment.'));
+  lines.push(centerLine('Thank you for your'));
+  lines.push(centerLine('payment.'));
   lines.push(RULE);
 
   for (const line of wrapText(company, RECEIPT_CHARS)) lines.push(centerLine(line));
-  for (const line of addressLines) lines.push(centerLine(line));
-  for (const line of phones) lines.push(centerLine(line));
-  if (receipt.companyEmail) lines.push(centerLine(String(receipt.companyEmail)));
+  for (const line of addressLines) {
+    for (const wrapped of wrapText(line, RECEIPT_CHARS)) lines.push(centerLine(wrapped));
+  }
+  for (const line of phones) {
+    for (const wrapped of wrapText(line, RECEIPT_CHARS)) lines.push(centerLine(wrapped));
+  }
+  for (const line of emails) {
+    for (const wrapped of wrapText(line, RECEIPT_CHARS)) lines.push(centerLine(wrapped));
+  }
 
   lines.push(RULE);
-  lines.push(centerLine('THIS IS NOT AN OFFICIAL RECEIPT'));
+  lines.push(centerLine('THIS IS NOT AN'));
+  lines.push(centerLine('OFFICIAL RECEIPT'));
   return lines.join('\n');
-}
-
-function stackedFieldHtml(label: string, value: string, bold = false): string {
-  if (!value.trim()) return '';
-  const valClass = bold ? 'val val-bold' : 'val';
-  const vals = wrapText(value, RECEIPT_CHARS)
-    .map((line) => `<div class="${valClass}">${escapeReceiptHtml(line)}</div>`)
-    .join('');
-  return `<div class="stack"><div class="lab">${label}</div>${vals}</div>`;
 }
 
 export function buildReceiptHtml(receipt: PaymentReceipt, opts?: { autoPrint?: boolean }): string {
   const autoPrint = opts?.autoPrint !== false;
-  const companyRaw = (receipt.company || 'ISP Billing').toUpperCase();
-  const months = Number(receipt.months) || 1;
-  const extension = extensionLabel(months);
-  const discountDays = Number(receipt.discountDays) || 0;
-  const subtotal = Number(receipt.subtotal) || 0;
-  const discount = Number(receipt.discount) || 0;
-  const total = Number(receipt.total) || 0;
-  const transactionWhen = escapeReceiptHtml(receiptWhen(receipt));
-  const addressLines = headerAddressLines(receipt.companyAddress);
-  const phones = contactLines(receipt.companyPhone);
+  const text = buildReceiptText(receipt);
+  const body = escapeReceiptHtml(text);
   const accountTitle = escapeReceiptHtml(receipt.account);
-  const w = RECEIPT_PC_WIDTH_PX;
-  const pad = RECEIPT_PC_PAD_PX;
-
-  const discountBlock =
-    discount > 0
-      ? `<div class="amount">Discount (${discountDays}d): -${escapeReceiptHtml(money(discount))}</div>`
-      : '';
 
   const printScript = autoPrint
     ? `<script>
@@ -214,123 +201,60 @@ export function buildReceiptHtml(receipt: PaymentReceipt, opts?: { autoPrint?: b
   </script>`
     : '';
 
-  const companyLines = wrapText(companyRaw, RECEIPT_CHARS)
-    .map((line) => `<div class="brand">${escapeReceiptHtml(line)}</div>`)
-    .join('');
-  const headerAddr = addressLines.map((line) => `<div class="addr">${escapeReceiptHtml(line)}</div>`).join('');
-  const footerAddr = addressLines.map((line) => `<div class="biz">${escapeReceiptHtml(line)}</div>`).join('');
-  const footerPhones = phones.map((line) => `<div class="biz">${escapeReceiptHtml(line)}</div>`).join('');
-
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=${w}, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Receipt ${accountTitle}</title>
   <style>
     @page { margin: 0; size: auto; }
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+    * { box-sizing: border-box; }
     html, body {
-      width: ${w}px;
-      max-width: ${w}px;
       margin: 0;
-      padding: ${pad}px;
+      padding: 0;
       background: #fff;
       color: #000;
-      font-family: 'Courier New', Courier, monospace;
-      font-size: 11px;
-      line-height: 1.25;
       -webkit-print-color-adjust: exact;
       print-color-adjust: exact;
     }
-    .ticket {
-      width: 100%;
-      max-width: 100%;
-      overflow: hidden;
-    }
-    .brand, .addr, .biz, .when, .thanks, .disclaimer, .rule {
-      text-align: center;
-      word-break: break-word;
-      overflow-wrap: break-word;
-      width: 100%;
-    }
-    .brand { font-size: 12px; font-weight: 800; text-transform: uppercase; }
-    .addr, .biz { font-size: 10px; font-weight: 600; margin-top: 2px; }
-    .when { font-size: 10px; font-weight: 700; margin: 6px 0 4px; }
-    .rule {
+    pre {
+      margin: 0;
+      padding: 2px 4px;
+      font-family: 'Courier New', Courier, monospace;
       font-size: 10px;
-      letter-spacing: -1px;
-      margin: 5px 0;
-      overflow: hidden;
-    }
-    .stack { margin: 4px 0; width: 100%; }
-    .lab { font-size: 11px; font-weight: 600; text-align: left; }
-    .val {
-      font-size: 11px;
-      font-weight: 700;
-      text-align: left;
-      padding-left: 8px;
+      line-height: 1.15;
+      white-space: pre-wrap;
       word-break: break-word;
       overflow-wrap: break-word;
-    }
-    .val-bold { font-size: 12px; font-weight: 800; }
-    .amount {
-      font-size: 11px;
-      font-weight: 700;
-      text-align: left;
-      margin: 3px 0;
-      word-break: break-word;
-    }
-    .amount-total { font-size: 12px; font-weight: 800; margin-top: 4px; }
-    .thanks { font-size: 11px; font-weight: 700; margin: 4px 0; }
-    .disclaimer {
-      font-size: 9px;
-      font-weight: 800;
-      text-transform: uppercase;
-      margin-top: 4px;
+      width: ${RECEIPT_CHARS}ch;
+      max-width: ${RECEIPT_CHARS}ch;
+      min-width: 0;
     }
     @media screen {
       html { background: #e5e7eb; }
-      body {
-        margin: 12px auto;
+      body { padding: 12px; }
+      pre {
+        margin: 0 auto;
+        background: #fff;
         box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+        padding: 8px 6px;
       }
     }
     @media print {
-      html, body {
-        width: ${w}px !important;
-        max-width: ${w}px !important;
+      html, body { margin: 0 !important; padding: 0 !important; }
+      pre {
+        font-size: 10px !important;
+        width: ${RECEIPT_CHARS}ch !important;
+        max-width: ${RECEIPT_CHARS}ch !important;
+        padding: 0 2px !important;
         margin: 0 !important;
-        padding: ${pad}px !important;
       }
     }
   </style>
 </head>
 <body>
-  <div class="ticket">
-    ${companyLines}
-    ${headerAddr}
-    <div class="when">${transactionWhen}</div>
-    <div class="rule">${RULE}</div>
-    ${stackedFieldHtml('Account #:', String(receipt.account || ''))}
-    ${stackedFieldHtml('Customer:', String(receipt.customer || ''))}
-    ${stackedFieldHtml('Extension:', extension)}
-    ${stackedFieldHtml('Plan:', String(receipt.plan || ''))}
-    ${stackedFieldHtml('Next due:', String(receipt.newDue || ''))}
-    <div class="rule">${RULE}</div>
-    <div class="amount">Subtotal: ${escapeReceiptHtml(money(subtotal))}</div>
-    ${discountBlock}
-    <div class="amount amount-total">TOTAL: ${escapeReceiptHtml(money(total))}</div>
-    <div class="rule">${RULE}</div>
-    <div class="thanks">Thank you for your payment.</div>
-    <div class="rule">${RULE}</div>
-    ${companyLines}
-    ${footerAddr}
-    ${footerPhones}
-    ${receipt.companyEmail ? `<div class="biz">${escapeReceiptHtml(receipt.companyEmail)}</div>` : ''}
-    <div class="rule">${RULE}</div>
-    <div class="disclaimer">THIS IS NOT AN OFFICIAL RECEIPT</div>
-  </div>
+  <pre>${body}</pre>
   ${printScript}
 </body>
 </html>`;
@@ -339,8 +263,7 @@ export function buildReceiptHtml(receipt: PaymentReceipt, opts?: { autoPrint?: b
 /** Desktop browser: popup print window. Returns false if blocked (caller should show modal). */
 export function printReceiptInBrowser(receipt: PaymentReceipt): boolean {
   const html = buildReceiptHtml(receipt, { autoPrint: true });
-  const w = RECEIPT_PC_WIDTH_PX + RECEIPT_PC_PAD_PX * 2 + 24;
-  const popup = window.open('', '_blank', `width=${w},height=720,left=0,top=0`);
+  const popup = window.open('', '_blank', 'width=240,height=720,left=0,top=0');
   if (!popup) return false;
   popup.document.open();
   popup.document.write(html);

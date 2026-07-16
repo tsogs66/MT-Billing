@@ -143,16 +143,38 @@ export default function Company() {
             <FormField label="Company Name">
               <input className="input" value={company.name || ''} onChange={(e) => setCompany({ ...company, name: e.target.value })} />
             </FormField>
-            <FormField label="Contact Number">
-              <input className="input" value={company.phone || ''} onChange={(e) => setCompany({ ...company, phone: e.target.value })} />
-            </FormField>
           </div>
 
-          <FormField label="Email Address">
-            <input className="input" type="email" value={company.email || ''} onChange={(e) => setCompany({ ...company, email: e.target.value })} />
+          <FormField
+            label="Contact Numbers"
+            hint="One number per line — press Enter for a new line. All lines print on payment receipts (e.g. Globe, PLDT, Smart)."
+          >
+            <textarea
+              className="input min-h-[96px] font-mono text-sm"
+              rows={4}
+              value={company.phone || ''}
+              onChange={(e) => setCompany({ ...company, phone: e.target.value })}
+              placeholder={'Globe - 0432331237\nPLDT - 0433494204 / 0437747409\nSmart - 09283068822'}
+            />
           </FormField>
 
-          <FormField label="Address">
+          <FormField
+            label="Email Addresses"
+            hint="One email per line — press Enter for a new line. Shown on printed receipts."
+          >
+            <textarea
+              className="input min-h-[72px] font-mono text-sm"
+              rows={3}
+              value={company.email || ''}
+              onChange={(e) => setCompany({ ...company, email: e.target.value })}
+              placeholder={'billing@example.com\nsupport@example.com'}
+            />
+          </FormField>
+
+          <FormField
+            label="Address"
+            hint="One line per row on receipts — press Enter for a new line (e.g. barangay, city, province)."
+          >
             <textarea className="input min-h-[96px]" value={company.address || ''} onChange={(e) => setCompany({ ...company, address: e.target.value })} />
           </FormField>
 

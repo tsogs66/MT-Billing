@@ -76,9 +76,9 @@ export function buildBrandedEmail(opts: {
   const logo = parseLogoDataUrl(company.logo);
   const logoCid = logo ? LOGO_CID : null;
   const name = escapeHtml(company.name);
-  const address = company.address ? escapeHtml(company.address) : '';
-  const phone = company.phone ? escapeHtml(company.phone) : '';
-  const email = company.email ? escapeHtml(company.email) : '';
+  const address = company.address ? nl2br(escapeHtml(company.address)) : '';
+  const phone = company.phone ? nl2br(escapeHtml(company.phone)) : '';
+  const email = company.email ? nl2br(escapeHtml(company.email)) : '';
   const showUnofficial = Boolean(opts.isPaymentConfirmation);
 
   const bodyHtml =
@@ -89,7 +89,7 @@ export function buildBrandedEmail(opts: {
     company.name,
     opts.plainText || stripTags(opts.bodyHtml || ''),
     '',
-    [company.address, company.phone ? `Tel: ${company.phone}` : '', company.email].filter(Boolean).join('\n'),
+    [company.address, company.phone || '', company.email].filter(Boolean).join('\n'),
     showUnofficial ? '' : null,
     showUnofficial ? 'This is not an official receipt / formal notice unless stated otherwise.' : null,
   ].filter((p) => p != null && String(p).length);
@@ -129,7 +129,7 @@ export function buildBrandedEmail(opts: {
             <td style="padding:16px 24px 22px;background:#f8fafc;border-top:1px solid #e5e7eb;text-align:center;font-family:Arial,Helvetica,sans-serif;color:#111827;">
               <div style="font-size:13px;font-weight:800;text-transform:uppercase;margin-bottom:6px;">${name}</div>
               ${address ? `<div style="font-size:12px;line-height:1.4;margin:2px 0;">${address}</div>` : ''}
-              ${phone ? `<div style="font-size:12px;margin:2px 0;">Tel: ${phone}</div>` : ''}
+              ${phone ? `<div style="font-size:12px;margin:2px 0;line-height:1.4;">${phone}</div>` : ''}
               ${email ? `<div style="font-size:12px;margin:2px 0;">${email}</div>` : ''}
               ${unofficialFooter}
             </td>
