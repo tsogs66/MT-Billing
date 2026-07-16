@@ -1,6 +1,6 @@
 /**
- * POS-58 thermal receipt (58mm). Web: popup + print dialog.
- * Android/Capacitor: in-app preview + Share (printer apps) — window.print() freezes WebView.
+ * POS-58 thermal receipt (58mm). Content uses 3mm side inset for printer dead zone.
+ * Web: popup + print dialog. Android/Capacitor: in-app preview + Share.
  */
 import { isNativeApp } from '../config';
 
@@ -180,7 +180,7 @@ export function buildReceiptHtml(receipt: PaymentReceipt, opts?: { autoPrint?: b
       width: 58mm;
       max-width: 58mm;
       margin: 0 auto;
-      padding: 0;
+      padding: 0 3mm;
       color: #000;
     }
     .center { text-align: center; }
@@ -190,6 +190,7 @@ export function buildReceiptHtml(receipt: PaymentReceipt, opts?: { autoPrint?: b
       text-transform: uppercase;
       letter-spacing: 0.01em;
       word-break: break-word;
+      overflow-wrap: anywhere;
       color: #000;
     }
     .when {
@@ -218,6 +219,7 @@ export function buildReceiptHtml(receipt: PaymentReceipt, opts?: { autoPrint?: b
       font-weight: 700;
       color: #000;
       word-break: break-word;
+      overflow-wrap: anywhere;
       margin-top: 1px;
     }
     .tot { margin-top: 6px; color: #000; }
@@ -230,6 +232,7 @@ export function buildReceiptHtml(receipt: PaymentReceipt, opts?: { autoPrint?: b
       color: #000;
       line-height: 1.35;
       word-break: break-word;
+      overflow-wrap: anywhere;
     }
     .disclaimer {
       text-align: center;
@@ -264,7 +267,7 @@ export function buildReceiptHtml(receipt: PaymentReceipt, opts?: { autoPrint?: b
         width: 58mm;
         max-width: 58mm;
         margin: 0 auto;
-        padding: 0;
+        padding: 0 3mm;
         box-shadow: none;
       }
       * { color: #000 !important; }
