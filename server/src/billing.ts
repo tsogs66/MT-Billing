@@ -687,9 +687,31 @@ export async function recordPppoePayment(
        status = 'Active', online = 1, nonpayment_since = NULL, reminder_sent = NULL WHERE id = ?`
   ).run(newDue, plan, unit, expirationProfile, userId);
 
+  const updated = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(userId) as any;
+  const company = db.prepare('SELECT * FROM company WHERE id = 1').get() as any;
+  const transactionAt = new Date().toISOString();
+  const receipt = {
+    company: company?.name || 'ISP Billing',
+    companyAddress: company?.address || null,
+    companyPhone: company?.phone || null,
+    companyEmail: company?.email || null,
+    account: updated.account_number,
+    customer: updated.customer_name || updated.username,
+    plan,
+    months,
+    paymentDate: paymentDate.slice(0, 10),
+    transactionAt,
+    previousDue,
+    newDue,
+    subtotal,
+    discount,
+    discountDays,
+    total,
+  };
+
   db.prepare(
-    'INSERT INTO transactions (pppoe_user_id, customer_name, amount, type, created_at) VALUES (?, ?, ?, ?, ?)'
-  ).run(userId, user.customer_name || user.username, total, 'payment', paymentDate);
+    'INSERT INTO transactions (pppoe_user_id, customer_name, amount, type, created_at, receipt_json) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(userId, user.customer_name || user.username, total, 'payment', paymentDate, JSON.stringify(receipt));
 
   db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
     'info',
@@ -697,7 +719,6 @@ export async function recordPppoePayment(
     `Payment for ${user.username}: ${plan} (MT profile ${planMeta.pppProfile}) +${months}mo, due ${previousDue} → ${newDue}, total ${total}${opts.source ? ` (${opts.source})` : ''}${opts.external_ref ? ` ref=${opts.external_ref}` : ''}`
   );
 
-  const updated = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(userId) as any;
   const sync = await syncUserToRouter(updated, 'restore');
 
   let sessionRefresh: { bounced: boolean; waitMs: number; error?: string } | null = null;
@@ -715,8 +736,6 @@ export async function recordPppoePayment(
     }
   }
 
-  const company = db.prepare('SELECT * FROM company WHERE id = 1').get() as any;
-  const transactionAt = new Date().toISOString();
   return {
     ok: true,
     months,
@@ -730,25 +749,44 @@ export async function recordPppoePayment(
     amount: total,
     sync,
     sessionRefresh,
-    receipt: {
-      company: company?.name || 'ISP Billing',
-      companyAddress: company?.address || null,
-      companyPhone: company?.phone || null,
-      companyEmail: company?.email || null,
-      account: updated.account_number,
-      customer: updated.customer_name || updated.username,
-      plan,
-      months,
-      paymentDate: paymentDate.slice(0, 10),
-      transactionAt,
-      previousDue,
-      newDue,
-      subtotal,
-      discount,
-      discountDays,
-      total,
-    },
+    receipt,
     user: updated,
+  };
+}
+
+/** Load a stored receipt snapshot, or rebuild a best-effort receipt for older transactions. */
+export function getTransactionReceipt(txId: number) {
+  const tx = db.prepare('SELECT * FROM transactions WHERE id = ?').get(txId) as any;
+  if (!tx) return null;
+  if (tx.receipt_json) {
+    try {
+      return JSON.parse(tx.receipt_json);
+    } catch {
+      /* fall through */
+    }
+  }
+  const user = tx.pppoe_user_id
+    ? (db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(tx.pppoe_user_id) as any)
+    : null;
+  const company = db.prepare('SELECT * FROM company WHERE id = 1').get() as any;
+  const createdAt = String(tx.created_at || new Date().toISOString());
+  const amount = Number(tx.amount) || 0;
+  return {
+    company: company?.name || 'ISP Billing',
+    companyAddress: company?.address || null,
+    companyPhone: company?.phone || null,
+    companyEmail: company?.email || null,
+    account: user?.account_number || null,
+    customer: tx.customer_name || user?.customer_name || user?.username || 'Customer',
+    plan: user?.profile || '',
+    months: 1,
+    paymentDate: createdAt.slice(0, 10),
+    transactionAt: createdAt,
+    newDue: user?.subscription_due || '',
+    subtotal: amount,
+    discount: 0,
+    discountDays: 0,
+    total: amount,
   };
 }
 

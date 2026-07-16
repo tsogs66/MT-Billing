@@ -11,7 +11,7 @@ import { useRouterDevice } from '../context/RouterContext';
 import { TrafficPair, UsagePair } from '../lib/traffic';
 import { copyTextOrPrompt } from '../lib/clipboard';
 import ReceiptPrintModal from '../components/ReceiptPrintModal';
-import { printReceiptInBrowser, shouldUseReceiptModal } from '../lib/receiptPrint';
+import { openReceiptForPrint } from '../lib/receiptPrint';
 
 interface PUser {
   id: number;
@@ -1730,9 +1730,7 @@ function ProcessPaymentModal({ user, plans, onClose, onPaid }: { user: PUser; pl
         send_receipt: sendReceipt,
       });
       const receipt = r.data.receipt;
-      if (shouldUseReceiptModal() || !printReceiptInBrowser(receipt)) {
-        setReceiptPreview(receipt);
-      }
+      openReceiptForPrint(receipt, setReceiptPreview);
       const bounced = r.data.sessionRefresh?.bounced;
       onPaid(
         `Payment of ${peso(r.data.total)} recorded for ${user.username}. Due ${r.data.previousDue} \u2192 ${r.data.subscriptionDue}` +

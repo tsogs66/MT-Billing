@@ -316,6 +316,16 @@ export function printReceiptInBrowser(receipt: PaymentReceipt): boolean {
   return true;
 }
 
+/** Open receipt in browser print dialog or in-app modal (Android/Capacitor). */
+export function openReceiptForPrint(
+  receipt: PaymentReceipt,
+  onModal: (receipt: PaymentReceipt) => void
+): void {
+  if (shouldUseReceiptModal() || !printReceiptInBrowser(receipt)) {
+    onModal(receipt);
+  }
+}
+
 /** Prefer in-app receipt UI on Capacitor — Android WebView print dialog often freezes the app. */
 export function shouldUseReceiptModal(): boolean {
   return isNativeApp();

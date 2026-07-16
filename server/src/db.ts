@@ -101,7 +101,8 @@ export function initSchema() {
       customer_name TEXT,
       amount REAL NOT NULL,
       type TEXT DEFAULT 'payment',
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      receipt_json TEXT
     );
 
     CREATE TABLE IF NOT EXISTS queues (
@@ -441,6 +442,10 @@ export function migrate() {
   ];
   for (const [col, type] of payLinkCols) {
     if (!columnExists('payment_links', col)) db.exec(`ALTER TABLE payment_links ADD COLUMN ${col} ${type}`);
+  }
+
+  if (!columnExists('transactions', 'receipt_json')) {
+    db.exec('ALTER TABLE transactions ADD COLUMN receipt_json TEXT');
   }
 }
 

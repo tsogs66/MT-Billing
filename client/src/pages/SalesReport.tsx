@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
 import { BarChart, Bar, ResponsiveContainer, XAxis, YAxis, Tooltip, CartesianGrid, LabelList } from 'recharts';
-import { Wallet, Receipt, TrendingUp, CalendarDays, Trash2 } from 'lucide-react';
+import { Wallet, Receipt, TrendingUp, CalendarDays, Trash2, Printer, Loader2 } from 'lucide-react';
 import Layout from '../components/Layout';
 import { Card, StatTile, TabPills, DataTable, Flash } from '../components/ui';
+import ReceiptPrintModal from '../components/ReceiptPrintModal';
 import { api, peso } from '../api';
+import { openReceiptForPrint, type PaymentReceipt } from '../lib/receiptPrint';
 
 const GROUPS = [
   { key: 'month', label: 'Monthly' },
@@ -17,6 +19,8 @@ export default function SalesReport() {
   const [flash, setFlash] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
   const [clearMonth, setClearMonth] = useState('');
   const [busy, setBusy] = useState(false);
+  const [reprintId, setReprintId] = useState<number | null>(null);
+  const [receiptPreview, setReceiptPreview] = useState<PaymentReceipt | null>(null);
 
   const loadSales = () => api.get(`/sales?group=${range}`).then((r) => setSales(r.data));
   const loadTx = () => api.get('/sales/transactions').then((r) => setTx(r.data));
@@ -72,9 +76,24 @@ export default function SalesReport() {
     return peso(n);
   };
 
+  const reprintReceipt = async (txId: number) => {
+    setReprintId(txId);
+    try {
+      const r = await api.get(`/sales/transactions/${txId}/receipt`);
+      openReceiptForPrint(r.data.receipt, setReceiptPreview);
+    } catch (e: any) {
+      setFlash({ type: 'error', msg: e?.response?.data?.error || 'Could not load receipt' });
+    } finally {
+      setReprintId(null);
+    }
+  };
+
   return (
     <Layout title="Sales Report">
       {flash && <Flash type={flash.type} message={flash.msg} onDismiss={() => setFlash(null)} />}
+      {receiptPreview && (
+        <ReceiptPrintModal receipt={receiptPreview} onClose={() => setReceiptPreview(null)} />
+      )}
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-5 mb-5">
         <StatTile label="Net Revenue" value={peso(sales?.total ?? 0)} icon={Wallet} tone="text-brand-600" accent="from-brand-500/15 to-transparent" delay={0} />
@@ -143,14 +162,31 @@ export default function SalesReport() {
               { key: 'customer', label: 'Customer' },
               { key: 'type', label: 'Type' },
               { key: 'amount', label: 'Amount', align: 'right' },
+              { key: 'actions', label: '', align: 'right', sortable: false },
             ]}
             rows={tx.slice(0, 50).map((t) => ({
               key: t.id,
+              sortValues: {
+                date: t.date,
+                customer: t.customer,
+                type: t.type,
+                amount: t.amount,
+              },
               cells: [
                 <span className="text-slate-500">{new Date(t.date).toLocaleString()}</span>,
                 <span className="text-slate-700">{t.customer}</span>,
                 <span className="text-slate-500 capitalize">{t.type}</span>,
                 <span className="font-medium text-emerald-600">{peso(t.amount)}</span>,
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1.5 text-xs font-medium text-brand-600 hover:text-brand-700 border border-brand-200 rounded-lg px-2.5 py-1.5 hover:bg-brand-50 disabled:opacity-50"
+                  onClick={() => reprintReceipt(t.id)}
+                  disabled={reprintId === t.id}
+                  title="Reprint receipt"
+                >
+                  {reprintId === t.id ? <Loader2 size={14} className="animate-spin" /> : <Printer size={14} />}
+                  Reprint
+                </button>,
               ],
             }))}
             emptyMessage="No transactions yet."

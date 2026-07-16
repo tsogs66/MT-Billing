@@ -70,6 +70,7 @@ import {
 } from './outageMonitor.js';
 import {
   recordPppoePayment,
+  getTransactionReceipt,
   createPaymentLink,
   submitPaymentProof,
   rejectPaymentProof,
@@ -788,6 +789,16 @@ app.get('/api/sales/transactions', (_req, res) => {
   res.json(
     db.prepare('SELECT id, customer_name AS customer, amount, type, created_at AS date FROM transactions ORDER BY created_at DESC LIMIT 200').all()
   );
+});
+
+app.get('/api/sales/transactions/:id/receipt', (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id) || id < 1) {
+    return res.status(400).json({ error: 'Invalid transaction id' });
+  }
+  const receipt = getTransactionReceipt(id);
+  if (!receipt) return res.status(404).json({ error: 'Transaction not found' });
+  res.json({ receipt });
 });
 
 app.delete('/api/sales/transactions', (req, res) => {
