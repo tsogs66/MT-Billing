@@ -1,12 +1,16 @@
 /**
  * POS-58 thermal receipt (cnfujun POS-5890U-L).
- * PC browser print: plain-text <pre> block (20 chars wide) — most reliable on
- * Windows thermal drivers. Android: same text via Share.
+ * PC browser print: narrow HTML column (px), left-aligned, 12px Arial.
+ * Android Share: plain-text lines (32 chars max).
  */
 import { isNativeApp } from '../config';
 
-/** Max characters per line on 58mm / 384-dot head (conservative for PC print). */
-const RECEIPT_CHARS = 20;
+/** PC print column — px at 96dpi, fits 58mm roll with left inset. */
+const RECEIPT_PC_WIDTH_PX = 216;
+const RECEIPT_PC_PAD_LEFT_PX = 10;
+const RECEIPT_PC_PAD_RIGHT_PX = 6;
+/** Plain-text line width for Bluetooth / RawBT. */
+const RECEIPT_TEXT_CHARS = 32;
 
 export type PaymentReceipt = {
   company?: string;
@@ -72,7 +76,7 @@ function multilineField(text?: string | null): string[] {
   return text.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
 }
 
-function wrapText(text: string, width = RECEIPT_CHARS): string[] {
+function wrapText(text: string, width: number): string[] {
   const t = text.trim();
   if (!t) return [];
   if (t.length <= width) return [t];
@@ -97,24 +101,16 @@ function wrapText(text: string, width = RECEIPT_CHARS): string[] {
   return lines;
 }
 
-const RULE = '-'.repeat(RECEIPT_CHARS);
+const RULE_TEXT = '-'.repeat(RECEIPT_TEXT_CHARS);
 
-function centerLine(text: string, width = RECEIPT_CHARS): string {
-  return wrapText(text, width)
-    .map((line) => {
-      if (line.length >= width) return line;
-      const pad = Math.floor((width - line.length) / 2);
-      return `${' '.repeat(pad)}${line}`;
-    })
-    .join('\n');
-}
-
-function stackedField(label: string, value: string): string[] {
+function stackedFieldText(label: string, value: string): string[] {
   if (!value.trim()) return [];
-  return [label, ...wrapText(value, RECEIPT_CHARS)];
+  const inline = `${label} ${value}`;
+  if (inline.length <= RECEIPT_TEXT_CHARS) return [inline];
+  return [label, ...wrapText(value, RECEIPT_TEXT_CHARS).map((l) => `  ${l}`)];
 }
 
-/** Plain-text receipt — used for Share and PC browser print. */
+/** Plain-text receipt for Android Share → printer apps. */
 export function buildReceiptText(receipt: PaymentReceipt): string {
   const company = (receipt.company || 'ISP Billing').toUpperCase();
   const months = Number(receipt.months) || 1;
@@ -129,132 +125,212 @@ export function buildReceiptText(receipt: PaymentReceipt): string {
   const emails = multilineField(receipt.companyEmail);
 
   const lines: string[] = [];
-  for (const line of wrapText(company, RECEIPT_CHARS)) lines.push(centerLine(line));
-  for (const line of addressLines) {
-    for (const wrapped of wrapText(line, RECEIPT_CHARS)) lines.push(centerLine(wrapped));
-  }
-  if (addressLines.length) lines.push('');
-  lines.push(centerLine(when));
-  lines.push(RULE);
+  lines.push(...wrapText(company, RECEIPT_TEXT_CHARS));
+  for (const line of addressLines) lines.push(...wrapText(line, RECEIPT_TEXT_CHARS));
+  lines.push('');
+  lines.push(when);
+  lines.push(RULE_TEXT);
 
-  lines.push(...stackedField('Account #:', String(receipt.account || '')));
-  lines.push(...stackedField('Customer:', String(receipt.customer || '')));
-  lines.push(...stackedField('Extension:', extension));
-  lines.push(...stackedField('Plan:', String(receipt.plan || '')));
-  lines.push(...stackedField('Next due:', String(receipt.newDue || '')));
+  lines.push(...stackedFieldText('Account #:', String(receipt.account || '')));
+  lines.push(...stackedFieldText('Customer:', String(receipt.customer || '')));
+  lines.push(...stackedFieldText('Extension:', extension));
+  lines.push(...stackedFieldText('Plan:', String(receipt.plan || '')));
+  lines.push(...stackedFieldText('Next due:', String(receipt.newDue || '')));
 
-  lines.push(RULE);
-  lines.push(...wrapText(`Subtotal: ${money(subtotal)}`, RECEIPT_CHARS));
-  if (discount > 0) {
-    lines.push(...wrapText(`Discount (${discountDays}d): -${money(discount)}`, RECEIPT_CHARS));
-  }
-  lines.push(...wrapText(`TOTAL: ${money(total)}`, RECEIPT_CHARS));
-  lines.push(RULE);
-  lines.push(centerLine('Thank you for your'));
-  lines.push(centerLine('payment.'));
-  lines.push(RULE);
+  lines.push(RULE_TEXT);
+  lines.push(`Subtotal: ${money(subtotal)}`);
+  if (discount > 0) lines.push(`Discount (${discountDays}d): -${money(discount)}`);
+  lines.push(`TOTAL: ${money(total)}`);
+  lines.push(RULE_TEXT);
+  lines.push('Thank you for your payment.');
+  lines.push(RULE_TEXT);
 
-  for (const line of wrapText(company, RECEIPT_CHARS)) lines.push(centerLine(line));
-  for (const line of addressLines) {
-    for (const wrapped of wrapText(line, RECEIPT_CHARS)) lines.push(centerLine(wrapped));
-  }
-  for (const line of phones) {
-    for (const wrapped of wrapText(line, RECEIPT_CHARS)) lines.push(centerLine(wrapped));
-  }
-  for (const line of emails) {
-    for (const wrapped of wrapText(line, RECEIPT_CHARS)) lines.push(centerLine(wrapped));
-  }
+  lines.push(...wrapText(company, RECEIPT_TEXT_CHARS));
+  for (const line of addressLines) lines.push(...wrapText(line, RECEIPT_TEXT_CHARS));
+  for (const line of phones) lines.push(...wrapText(line, RECEIPT_TEXT_CHARS));
+  for (const line of emails) lines.push(...wrapText(line, RECEIPT_TEXT_CHARS));
 
-  lines.push(RULE);
-  lines.push(centerLine('THIS IS NOT AN'));
-  lines.push(centerLine('OFFICIAL RECEIPT'));
+  lines.push(RULE_TEXT);
+  lines.push('THIS IS NOT AN OFFICIAL RECEIPT');
   return lines.join('\n');
+}
+
+function fieldHtml(label: string, value: string, bold = false): string {
+  if (!value.trim()) return '';
+  const cls = bold ? 'val val-bold' : 'val';
+  return `<div class="field"><div class="lab">${label}</div><div class="${cls}">${escapeReceiptHtml(value)}</div></div>`;
+}
+
+function centerHtml(text: string, cls = 'line'): string {
+  return wrapText(text, 28)
+    .map((line) => `<div class="${cls}">${escapeReceiptHtml(line)}</div>`)
+    .join('');
 }
 
 export function buildReceiptHtml(receipt: PaymentReceipt, opts?: { autoPrint?: boolean }): string {
   const autoPrint = opts?.autoPrint !== false;
-  const text = buildReceiptText(receipt);
-  const body = escapeReceiptHtml(text);
+  const companyRaw = (receipt.company || 'ISP Billing').toUpperCase();
+  const months = Number(receipt.months) || 1;
+  const extension = extensionLabel(months);
+  const discountDays = Number(receipt.discountDays) || 0;
+  const subtotal = Number(receipt.subtotal) || 0;
+  const discount = Number(receipt.discount) || 0;
+  const total = Number(receipt.total) || 0;
+  const when = escapeReceiptHtml(receiptWhen(receipt));
+  const addressLines = headerAddressLines(receipt.companyAddress);
+  const phones = multilineField(receipt.companyPhone);
+  const emails = multilineField(receipt.companyEmail);
   const accountTitle = escapeReceiptHtml(receipt.account);
+  const w = RECEIPT_PC_WIDTH_PX;
+  const pl = RECEIPT_PC_PAD_LEFT_PX;
+  const pr = RECEIPT_PC_PAD_RIGHT_PX;
+
+  const discountBlock =
+    discount > 0
+      ? `<div class="amount">Discount (${discountDays}d): -${escapeReceiptHtml(money(discount))}</div>`
+      : '';
 
   const printScript = autoPrint
     ? `<script>
     (function () {
-      function closeWin() {
-        try { window.close(); } catch (e) {}
-      }
-      window.addEventListener('afterprint', function () {
-        setTimeout(closeWin, 120);
-      });
+      function closeWin() { try { window.close(); } catch (e) {} }
+      window.addEventListener('afterprint', function () { setTimeout(closeWin, 120); });
       try {
         var mql = window.matchMedia('print');
-        mql.addEventListener('change', function (mq) {
-          if (!mq.matches) setTimeout(closeWin, 200);
-        });
+        mql.addEventListener('change', function (mq) { if (!mq.matches) setTimeout(closeWin, 200); });
       } catch (e) {}
       window.onload = function () {
         setTimeout(function () {
           try { window.focus(); window.print(); } catch (e) { closeWin(); }
-        }, 250);
+        }, 300);
       };
     })();
   </script>`
     : '';
 
+  const headerAddr = addressLines.map((l) => `<div class="addr">${escapeReceiptHtml(l)}</div>`).join('');
+  const footerAddr = addressLines.map((l) => `<div class="biz">${escapeReceiptHtml(l)}</div>`).join('');
+  const footerPhones = phones.map((l) => `<div class="biz">${escapeReceiptHtml(l)}</div>`).join('');
+  const footerEmails = emails.map((l) => `<div class="biz">${escapeReceiptHtml(l)}</div>`).join('');
+
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=${w}, initial-scale=1" />
   <title>Receipt ${accountTitle}</title>
   <style>
     @page { margin: 0; size: auto; }
-    * { box-sizing: border-box; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body {
-      margin: 0;
-      padding: 0;
       background: #fff;
       color: #000;
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 12px;
+      line-height: 1.35;
       -webkit-print-color-adjust: exact;
       print-color-adjust: exact;
     }
-    pre {
-      margin: 0;
-      padding: 2px 4px;
-      font-family: 'Courier New', Courier, monospace;
-      font-size: 10px;
-      line-height: 1.15;
-      white-space: pre-wrap;
+    .ticket {
+      width: ${w}px;
+      max-width: ${w}px;
+      padding: 6px ${pr}px 8px ${pl}px;
+      overflow: hidden;
+    }
+    .brand {
+      text-align: center;
+      font-size: 13px;
+      font-weight: 800;
+      text-transform: uppercase;
+      line-height: 1.25;
       word-break: break-word;
-      overflow-wrap: break-word;
-      width: ${RECEIPT_CHARS}ch;
-      max-width: ${RECEIPT_CHARS}ch;
-      min-width: 0;
+    }
+    .addr, .biz, .when, .thanks, .disclaimer, .rule {
+      text-align: center;
+      word-break: break-word;
+    }
+    .addr, .biz { font-size: 11px; font-weight: 600; margin-top: 2px; }
+    .when { font-size: 11px; font-weight: 700; margin: 8px 0 6px; }
+    .rule {
+      font-size: 11px;
+      letter-spacing: 1px;
+      margin: 7px 0;
+      overflow: hidden;
+    }
+    .field { margin: 5px 0; }
+    .lab { font-size: 12px; font-weight: 600; text-align: left; }
+    .val {
+      font-size: 12px;
+      font-weight: 700;
+      text-align: left;
+      padding-left: 8px;
+      margin-top: 1px;
+      word-break: break-word;
+    }
+    .val-bold { font-size: 14px; font-weight: 800; }
+    .amount {
+      font-size: 12px;
+      font-weight: 700;
+      text-align: left;
+      margin: 4px 0;
+    }
+    .amount-total { font-size: 14px; font-weight: 800; margin-top: 5px; }
+    .thanks { font-size: 12px; font-weight: 700; margin: 6px 0; }
+    .disclaimer {
+      font-size: 10px;
+      font-weight: 800;
+      text-transform: uppercase;
+      margin-top: 4px;
     }
     @media screen {
       html { background: #e5e7eb; }
-      body { padding: 12px; }
-      pre {
+      body { padding: 12px 0; }
+      .ticket {
         margin: 0 auto;
         background: #fff;
         box-shadow: 0 4px 16px rgba(0,0,0,0.12);
-        padding: 8px 6px;
       }
     }
     @media print {
-      html, body { margin: 0 !important; padding: 0 !important; }
-      pre {
-        font-size: 10px !important;
-        width: ${RECEIPT_CHARS}ch !important;
-        max-width: ${RECEIPT_CHARS}ch !important;
-        padding: 0 2px !important;
+      html, body {
+        width: ${w}px !important;
+        max-width: ${w}px !important;
         margin: 0 !important;
+        padding: 0 !important;
+      }
+      .ticket {
+        width: ${w}px !important;
+        max-width: ${w}px !important;
+        padding: 4px ${pr}px 6px ${pl}px !important;
       }
     }
   </style>
 </head>
 <body>
-  <pre>${body}</pre>
+  <div class="ticket">
+    ${centerHtml(companyRaw, 'brand')}
+    ${headerAddr}
+    <div class="when">${when}</div>
+    <div class="rule">${'-'.repeat(24)}</div>
+    ${fieldHtml('Account #:', String(receipt.account || ''))}
+    ${fieldHtml('Customer:', String(receipt.customer || ''))}
+    ${fieldHtml('Extension:', extension)}
+    ${fieldHtml('Plan:', String(receipt.plan || ''))}
+    ${fieldHtml('Next due:', String(receipt.newDue || ''))}
+    <div class="rule">${'-'.repeat(24)}</div>
+    <div class="amount">Subtotal: ${escapeReceiptHtml(money(subtotal))}</div>
+    ${discountBlock}
+    <div class="amount amount-total">TOTAL: ${escapeReceiptHtml(money(total))}</div>
+    <div class="rule">${'-'.repeat(24)}</div>
+    <div class="thanks">Thank you for your payment.</div>
+    <div class="rule">${'-'.repeat(24)}</div>
+    ${centerHtml(companyRaw, 'brand')}
+    ${footerAddr}
+    ${footerPhones}
+    ${footerEmails}
+    <div class="rule">${'-'.repeat(24)}</div>
+    <div class="disclaimer">THIS IS NOT AN OFFICIAL RECEIPT</div>
+  </div>
   ${printScript}
 </body>
 </html>`;
@@ -263,7 +339,7 @@ export function buildReceiptHtml(receipt: PaymentReceipt, opts?: { autoPrint?: b
 /** Desktop browser: popup print window. Returns false if blocked (caller should show modal). */
 export function printReceiptInBrowser(receipt: PaymentReceipt): boolean {
   const html = buildReceiptHtml(receipt, { autoPrint: true });
-  const popup = window.open('', '_blank', 'width=240,height=720,left=0,top=0');
+  const popup = window.open('', '_blank', `width=${RECEIPT_PC_WIDTH_PX + 40},height=760,left=0,top=0`);
   if (!popup) return false;
   popup.document.open();
   popup.document.write(html);
