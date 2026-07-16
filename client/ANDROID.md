@@ -125,6 +125,7 @@ npm run android:sync
 | **Topology map** | Full-bleed map stage with mobile panel sizing |
 | **PWA** | `manifest.webmanifest` for browser “Add to Home screen” |
 | **Native shell** | Android back closes menu → history → minimize; keyboard resizes body |
+| **Receipts** | Payment receipts use Share → printer app (not system Print, which freezes WebView) |
 
 Native behaviors: `client/src/lib/nativeShell.ts`.
 

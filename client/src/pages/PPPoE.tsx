@@ -10,6 +10,8 @@ import LocationEditor, { DEFAULT_PIN } from '../components/LocationEditor';
 import { useRouterDevice } from '../context/RouterContext';
 import { TrafficPair, UsagePair } from '../lib/traffic';
 import { copyTextOrPrompt } from '../lib/clipboard';
+import ReceiptPrintModal from '../components/ReceiptPrintModal';
+import { printReceiptInBrowser, shouldUseReceiptModal } from '../lib/receiptPrint';
 
 interface PUser {
   id: number;
@@ -1696,225 +1698,6 @@ function PlanFormModal({
   );
 }
 
-function escapeReceiptHtml(s: unknown): string {
-  return String(s ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-/** POS-54 thermal receipt (54mm paper). Opens a print window sized for 54mm rolls. */
-function printReceipt(receipt: any) {
-  const money = (n: number) => `\u20b1${Number(n || 0).toFixed(2)}`;
-  const company = escapeReceiptHtml(receipt.company || 'ISP Billing');
-  const companyAddress = escapeReceiptHtml(receipt.companyAddress || '');
-  const companyPhone = escapeReceiptHtml(receipt.companyPhone || '');
-  const companyEmail = escapeReceiptHtml(receipt.companyEmail || '');
-  const account = escapeReceiptHtml(receipt.account);
-  const fullName = escapeReceiptHtml(receipt.customer || '');
-  const plan = escapeReceiptHtml(receipt.plan);
-  const months = Number(receipt.months) || 1;
-  const extension = months === 1 ? '1 month' : `${months} months`;
-  const newDue = escapeReceiptHtml(receipt.newDue);
-  const discountDays = Number(receipt.discountDays) || 0;
-  const subtotal = Number(receipt.subtotal) || 0;
-  const discount = Number(receipt.discount) || 0;
-  const total = Number(receipt.total) || 0;
-
-  const txRaw = receipt.transactionAt || receipt.paymentDate || new Date().toISOString();
-  const txDate = new Date(txRaw);
-  const transactionWhen = escapeReceiptHtml(
-    Number.isFinite(txDate.getTime())
-      ? txDate.toLocaleString(undefined, {
-          year: 'numeric',
-          month: 'short',
-          day: '2-digit',
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit',
-        })
-      : String(txRaw)
-  );
-
-  // Label on its own line (left); value on the next line (right) — fits POS-54
-  const field = (label: string, value: string) =>
-    value
-      ? `<div class="field"><div class="lab">${label}</div><div class="val">${value}</div></div>`
-      : '';
-
-  const discountBlock =
-    discount > 0
-      ? `${field(`Discount (${discountDays} day/s)`, `- ${money(discount)}`)}`
-      : '';
-
-  const businessBits = [
-    companyAddress ? `<div>${companyAddress}</div>` : '',
-    companyPhone ? `<div>Tel: ${companyPhone}</div>` : '',
-    companyEmail ? `<div>${companyEmail}</div>` : '',
-  ]
-    .filter(Boolean)
-    .join('');
-
-  const html = `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <title>Receipt ${account}</title>
-  <style>
-    @page { size: 54mm auto; margin: 1.5mm; }
-    * { box-sizing: border-box; }
-    html, body {
-      margin: 0;
-      padding: 0;
-      background: #fff;
-      color: #000 !important;
-      font-family: Arial, Helvetica, sans-serif;
-      font-size: 11px;
-      line-height: 1.3;
-      -webkit-print-color-adjust: exact;
-      print-color-adjust: exact;
-    }
-    .ticket {
-      width: 100%;
-      max-width: 54mm;
-      margin: 0;
-      padding: 2mm 0.25in 5mm 1.5mm;
-      color: #000;
-    }
-    .center { text-align: center; }
-    .brand {
-      font-size: 13px;
-      font-weight: 800;
-      text-transform: uppercase;
-      letter-spacing: 0.01em;
-      word-break: break-word;
-      color: #000;
-    }
-    .when {
-      margin-top: 4px;
-      font-size: 10px;
-      font-weight: 700;
-      color: #000;
-    }
-    hr {
-      border: none;
-      border-top: 1px dashed #000;
-      margin: 7px 0;
-    }
-    .field { margin: 5px 0; color: #000; }
-    .field .lab {
-      text-align: left;
-      font-size: 9px;
-      font-weight: 700;
-      color: #000;
-      text-transform: uppercase;
-      letter-spacing: 0.02em;
-    }
-    .field .val {
-      text-align: right;
-      font-size: 11px;
-      font-weight: 700;
-      color: #000;
-      word-break: break-word;
-      margin-top: 1px;
-    }
-    .tot { margin-top: 6px; color: #000; }
-    .tot .lab { font-size: 10px; font-weight: 800; text-align: left; }
-    .tot .val { font-size: 14px; font-weight: 800; text-align: right; margin-top: 2px; }
-    .biz {
-      text-align: center;
-      font-size: 9px;
-      font-weight: 600;
-      color: #000;
-      line-height: 1.35;
-      word-break: break-word;
-    }
-    .disclaimer {
-      text-align: center;
-      font-size: 9px;
-      font-weight: 800;
-      color: #000;
-      text-transform: uppercase;
-      margin-top: 8px;
-      line-height: 1.3;
-    }
-    .thanks {
-      text-align: center;
-      font-size: 10px;
-      font-weight: 700;
-      color: #000;
-    }
-    .cut {
-      text-align: center;
-      margin-top: 8px;
-      font-size: 9px;
-      font-weight: 700;
-      color: #000;
-      letter-spacing: 0.12em;
-    }
-    @media screen {
-      body { background: #e5e7eb; padding: 12px; }
-      .ticket { background: #fff; box-shadow: 0 4px 16px rgba(0,0,0,0.12); }
-    }
-    @media print {
-      html, body { width: 54mm; color: #000 !important; }
-      .ticket {
-        width: 100%;
-        max-width: none;
-        margin: 0;
-        padding: 2mm 0.25in 5mm 1.5mm;
-        box-shadow: none;
-      }
-      * { color: #000 !important; }
-    }
-  </style>
-</head>
-<body>
-  <div class="ticket">
-    <div class="center">
-      <div class="brand">${company}</div>
-      <div class="when">${transactionWhen}</div>
-    </div>
-    <hr/>
-    ${field('Account #', account)}
-    ${field('Customer Name', fullName)}
-    ${field('Extension Availed', extension)}
-    ${field('Plan', plan)}
-    ${field('Next Due Date', newDue)}
-    <hr/>
-    ${field('Subtotal', money(subtotal))}
-    ${discountBlock}
-    <div class="field tot">
-      <div class="lab">TOTAL</div>
-      <div class="val">${money(total)}</div>
-    </div>
-    <hr/>
-    <div class="thanks">Thank you for your payment.</div>
-    ${
-      businessBits
-        ? `<hr/><div class="biz"><div class="brand" style="font-size:10px;margin-bottom:3px">${company}</div>${businessBits}</div>`
-        : ''
-    }
-    <hr/>
-    <div class="disclaimer">This is not an official receipt</div>
-    <div class="cut">* * *</div>
-  </div>
-  <script>
-    window.onload = function () {
-      setTimeout(function () { window.print(); }, 200);
-    };
-  </script>
-</body>
-</html>`;
-
-  const w = window.open('', '_blank', 'width=300,height=640');
-  if (w) {
-    w.document.write(html);
-    w.document.close();
-  }
-}
-
 function ProcessPaymentModal({ user, plans, onClose, onPaid }: { user: PUser; plans: any[]; onClose: () => void; onPaid: (msg: string) => void }) {
   const planOptions = Array.isArray(plans) ? plans.filter((p) => !isSystemPppName(p.name)) : [];
   const [plan, setPlan] = useState(user.profile || planOptions[0]?.name || '');
@@ -1925,6 +1708,7 @@ function ProcessPaymentModal({ user, plans, onClose, onPaid }: { user: PUser; pl
   const [sendReceipt, setSendReceipt] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [receiptPreview, setReceiptPreview] = useState<any | null>(null);
 
   const planPrice = planOptions.find((p) => p.name === plan)?.price ?? user.price ?? 0;
   const subtotal = planPrice * months;
@@ -1945,7 +1729,10 @@ function ProcessPaymentModal({ user, plans, onClose, onPaid }: { user: PUser; pl
         discount_days: discountDays,
         send_receipt: sendReceipt,
       });
-      printReceipt(r.data.receipt);
+      const receipt = r.data.receipt;
+      if (shouldUseReceiptModal() || !printReceiptInBrowser(receipt)) {
+        setReceiptPreview(receipt);
+      }
       const bounced = r.data.sessionRefresh?.bounced;
       onPaid(
         `Payment of ${peso(r.data.total)} recorded for ${user.username}. Due ${r.data.previousDue} \u2192 ${r.data.subscriptionDue}` +
@@ -1960,6 +1747,7 @@ function ProcessPaymentModal({ user, plans, onClose, onPaid }: { user: PUser; pl
   };
 
   return (
+    <>
     <Modal
       title="Process Payment"
       subtitle={`For user: ${user.username}`}
@@ -2039,6 +1827,10 @@ function ProcessPaymentModal({ user, plans, onClose, onPaid }: { user: PUser; pl
         </div>
       </div>
     </Modal>
+    {receiptPreview && (
+      <ReceiptPrintModal receipt={receiptPreview} onClose={() => setReceiptPreview(null)} />
+    )}
+    </>
   );
 }
 
