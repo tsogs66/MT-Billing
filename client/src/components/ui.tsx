@@ -1,10 +1,51 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from 'react';
 import { createPortal } from 'react-dom';
 import type { LucideIcon } from 'lucide-react';
 import {
   Construction, Sparkles, X, Loader2, CheckCircle2, AlertCircle, Inbox, Search,
   ArrowUp, ArrowDown, ArrowUpDown,
 } from 'lucide-react';
+
+/** Prefer pinning username / customer / name columns on mobile (not checkbox/# columns). */
+const FREEZE_COLUMN_KEYS = [
+  'user',
+  'username',
+  'customer',
+  'subscriber',
+  'client',
+  'name',
+  'member',
+  'item',
+  'voucher',
+  'code',
+];
+
+function findFreezeColumnIndex(
+  columns: { key: string; label: ReactNode }[],
+  enabled: boolean
+): number {
+  if (!enabled || columns.length === 0) return -1;
+  for (const key of FREEZE_COLUMN_KEYS) {
+    const i = columns.findIndex((c) => c.key.toLowerCase() === key);
+    if (i >= 0) return i;
+  }
+  for (let i = 0; i < columns.length; i++) {
+    const label = columns[i].label;
+    if (typeof label !== 'string') continue;
+    if (/\b(user|username|customer|subscriber|client|name|member)\b/i.test(label)) return i;
+  }
+  // Fallback: first non-selection column, else column 0
+  const nonSel = columns.findIndex((c) => !/^(sel|select|#)$/i.test(c.key));
+  return nonSel >= 0 ? nonSel : 0;
+}
 
 /* ─── Card ─── */
 
@@ -418,11 +459,21 @@ export function DataTable({
   stickyHeader?: boolean;
   /** Enable click-to-sort on headers (default true). Per-column override via columns[].sortable */
   sortable?: boolean;
-  /** On mobile, pin the first column (name / user) while scrolling horizontally */
+  /**
+   * On mobile, pin username / customer / name (and any columns before it, e.g. checkbox)
+   * while scrolling horizontally.
+   */
   freezeFirstColumn?: boolean;
 }) {
   const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const tableRef = useRef<HTMLTableElement>(null);
+  const [freezeLefts, setFreezeLefts] = useState<number[]>([]);
+
+  const freezeIdx = useMemo(
+    () => findFreezeColumnIndex(columns, freezeFirstColumn),
+    [columns, freezeFirstColumn]
+  );
 
   const sortedRows = useMemo(() => {
     if (!sortKey) return rows;
@@ -444,6 +495,38 @@ export function DataTable({
     return copy;
   }, [rows, columns, sortKey, sortDir]);
 
+  useLayoutEffect(() => {
+    if (freezeIdx < 0) {
+      setFreezeLefts([]);
+      return;
+    }
+    const table = tableRef.current;
+    if (!table) return;
+
+    const measure = () => {
+      const ths = table.querySelectorAll('thead th');
+      let acc = 0;
+      const next: number[] = [];
+      for (let i = 0; i <= freezeIdx; i++) {
+        next[i] = acc;
+        acc += (ths[i] as HTMLElement | undefined)?.offsetWidth || 0;
+      }
+      setFreezeLefts((prev) => {
+        if (prev.length === next.length && prev.every((v, i) => v === next[i])) return prev;
+        return next;
+      });
+    };
+
+    measure();
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null;
+    ro?.observe(table);
+    window.addEventListener('resize', measure);
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  }, [freezeIdx, columns, sortedRows.length]);
+
   const onHeaderClick = (key: string, colSortable?: boolean) => {
     if (!sortable || colSortable === false) return;
     if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
@@ -453,10 +536,26 @@ export function DataTable({
     }
   };
 
+  const freezeStyle = (i: number): CSSProperties | undefined => {
+    if (freezeIdx < 0 || i > freezeIdx) return undefined;
+    return { left: freezeLefts[i] ?? 0 };
+  };
+
+  const freezeClass = (i: number) => {
+    if (freezeIdx < 0 || i > freezeIdx) return '';
+    return [
+      'data-table-freeze-cell',
+      i === freezeIdx ? 'data-table-freeze-edge' : '',
+    ]
+      .filter(Boolean)
+      .join(' ');
+  };
+
   return (
     <div className="table-scroll-touch overflow-x-auto rounded-xl border border-slate-100/80 -mx-0.5 px-0.5">
       <table
-        className={['data-table w-full text-sm', freezeFirstColumn ? 'data-table--freeze-first' : '']
+        ref={tableRef}
+        className={['data-table w-full text-sm', freezeIdx >= 0 ? 'data-table--freeze-first' : '']
           .filter(Boolean)
           .join(' ')}
       >
@@ -472,8 +571,9 @@ export function DataTable({
                     c.align === 'right' ? 'text-right' : c.align === 'center' ? 'text-center' : 'text-left',
                     c.className,
                     canSort ? 'cursor-pointer select-none hover:text-slate-800' : '',
-                    freezeFirstColumn && i === 0 ? 'data-table-freeze-cell' : '',
+                    freezeClass(i),
                   ].filter(Boolean).join(' ')}
+                  style={freezeStyle(i)}
                   onClick={() => onHeaderClick(c.key, c.sortable)}
                   title={canSort ? 'Click to sort' : undefined}
                 >
@@ -507,10 +607,11 @@ export function DataTable({
                     key={j}
                     className={[
                       columns[j]?.align === 'right' ? 'text-right' : columns[j]?.align === 'center' ? 'text-center' : '',
-                      freezeFirstColumn && j === 0 ? 'data-table-freeze-cell' : '',
+                      freezeClass(j),
                     ]
                       .filter(Boolean)
                       .join(' ')}
+                    style={freezeStyle(j)}
                   >
                     {cell}
                   </td>
