@@ -1,16 +1,21 @@
 /**
  * POS-58 thermal receipt (cnfujun POS-5890U-L).
- * PC browser print: narrow HTML column (px), left-aligned, 12px Arial.
- * Android Share: plain-text lines (32 chars max).
+ * PC print: narrow inner column + left inset (Windows drivers use a wide
+ * virtual page; content must stay inside ~42mm). Android: plain-text Share.
  */
 import { isNativeApp } from '../config';
 
-/** PC print column — px at 96dpi, fits 58mm roll with left inset. */
-const RECEIPT_PC_WIDTH_PX = 216;
-const RECEIPT_PC_PAD_LEFT_PX = 10;
-const RECEIPT_PC_PAD_RIGHT_PX = 6;
+/** Screen preview / popup outer width (px). */
+const RECEIPT_OUTER_PX = 190;
+/** Content column width (px) — ~42mm safe zone on 58mm roll. */
+const RECEIPT_INNER_PX = 158;
+/** Push content right from roll edge so the driver does not clip the right side. */
+const RECEIPT_INSET_LEFT_PX = 22;
+const RECEIPT_PAD_RIGHT_PX = 6;
 /** Plain-text line width for Bluetooth / RawBT. */
 const RECEIPT_TEXT_CHARS = 32;
+/** Wrap long centered header/footer lines (chars). */
+const RECEIPT_WRAP_CHARS = 22;
 
 export type PaymentReceipt = {
   company?: string;
@@ -162,7 +167,7 @@ function fieldHtml(label: string, value: string, bold = false): string {
 }
 
 function centerHtml(text: string, cls = 'line'): string {
-  return wrapText(text, 28)
+  return wrapText(text, RECEIPT_WRAP_CHARS)
     .map((line) => `<div class="${cls}">${escapeReceiptHtml(line)}</div>`)
     .join('');
 }
@@ -181,9 +186,11 @@ export function buildReceiptHtml(receipt: PaymentReceipt, opts?: { autoPrint?: b
   const phones = multilineField(receipt.companyPhone);
   const emails = multilineField(receipt.companyEmail);
   const accountTitle = escapeReceiptHtml(receipt.account);
-  const w = RECEIPT_PC_WIDTH_PX;
-  const pl = RECEIPT_PC_PAD_LEFT_PX;
-  const pr = RECEIPT_PC_PAD_RIGHT_PX;
+  const outer = RECEIPT_OUTER_PX;
+  const inner = RECEIPT_INNER_PX;
+  const inset = RECEIPT_INSET_LEFT_PX;
+  const pr = RECEIPT_PAD_RIGHT_PX;
+  const rule = '-'.repeat(20);
 
   const discountBlock =
     discount > 0
@@ -217,75 +224,84 @@ export function buildReceiptHtml(receipt: PaymentReceipt, opts?: { autoPrint?: b
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=${w}, initial-scale=1" />
+  <meta name="viewport" content="width=${outer}, initial-scale=1" />
   <title>Receipt ${accountTitle}</title>
   <style>
-    @page { margin: 0; size: auto; }
+    @page { margin: 0; size: 58mm auto; }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body {
       background: #fff;
       color: #000;
       font-family: Arial, Helvetica, sans-serif;
-      font-size: 12px;
-      line-height: 1.35;
+      font-size: 11px;
+      line-height: 1.3;
       -webkit-print-color-adjust: exact;
       print-color-adjust: exact;
     }
+    .page {
+      width: ${outer}px;
+      max-width: ${outer}px;
+      margin: 0;
+      padding: 4px ${pr}px 6px ${inset}px;
+      overflow: hidden;
+    }
     .ticket {
-      width: ${w}px;
-      max-width: ${w}px;
-      padding: 6px ${pr}px 8px ${pl}px;
+      width: ${inner}px;
+      max-width: ${inner}px;
       overflow: hidden;
     }
     .brand {
       text-align: center;
-      font-size: 13px;
-      font-weight: 800;
+      font-size: 12px;
+      font-weight: 700;
       text-transform: uppercase;
-      line-height: 1.25;
+      line-height: 1.2;
       word-break: break-word;
+      overflow-wrap: anywhere;
     }
     .addr, .biz, .when, .thanks, .disclaimer, .rule {
       text-align: center;
       word-break: break-word;
+      overflow-wrap: anywhere;
+      max-width: 100%;
     }
-    .addr, .biz { font-size: 11px; font-weight: 600; margin-top: 2px; }
-    .when { font-size: 11px; font-weight: 700; margin: 8px 0 6px; }
-    .rule {
-      font-size: 11px;
-      letter-spacing: 1px;
-      margin: 7px 0;
-      overflow: hidden;
-    }
-    .field { margin: 5px 0; }
-    .lab { font-size: 12px; font-weight: 600; text-align: left; }
+    .addr, .biz { font-size: 10px; font-weight: 600; margin-top: 2px; }
+    .when { font-size: 10px; font-weight: 700; margin: 6px 0 5px; }
+    .rule { font-size: 10px; margin: 6px 0; }
+    .field { margin: 4px 0; max-width: 100%; }
+    .lab { font-size: 11px; font-weight: 600; text-align: left; }
     .val {
-      font-size: 12px;
+      font-size: 11px;
       font-weight: 700;
       text-align: left;
-      padding-left: 8px;
+      padding-left: 6px;
       margin-top: 1px;
       word-break: break-word;
+      overflow-wrap: anywhere;
+      max-width: 100%;
     }
-    .val-bold { font-size: 14px; font-weight: 800; }
+    .val-bold { font-size: 12px; font-weight: 800; }
     .amount {
-      font-size: 12px;
+      font-size: 11px;
       font-weight: 700;
       text-align: left;
-      margin: 4px 0;
+      margin: 3px 0;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+      max-width: 100%;
     }
-    .amount-total { font-size: 14px; font-weight: 800; margin-top: 5px; }
-    .thanks { font-size: 12px; font-weight: 700; margin: 6px 0; }
+    .amount-total { font-size: 12px; font-weight: 800; margin-top: 4px; }
+    .thanks { font-size: 11px; font-weight: 700; margin: 5px 0; }
     .disclaimer {
-      font-size: 10px;
+      font-size: 9px;
       font-weight: 800;
       text-transform: uppercase;
-      margin-top: 4px;
+      margin-top: 3px;
     }
     @media screen {
       html { background: #e5e7eb; }
       body { padding: 12px 0; }
-      .ticket {
+      .page {
         margin: 0 auto;
         background: #fff;
         box-shadow: 0 4px 16px rgba(0,0,0,0.12);
@@ -293,43 +309,51 @@ export function buildReceiptHtml(receipt: PaymentReceipt, opts?: { autoPrint?: b
     }
     @media print {
       html, body {
-        width: ${w}px !important;
-        max-width: ${w}px !important;
+        width: ${outer}px !important;
+        max-width: ${outer}px !important;
         margin: 0 !important;
         padding: 0 !important;
       }
+      .page {
+        width: ${outer}px !important;
+        max-width: ${outer}px !important;
+        padding: 2px ${pr}px 4px ${inset}px !important;
+        margin: 0 !important;
+        zoom: 0.92;
+      }
       .ticket {
-        width: ${w}px !important;
-        max-width: ${w}px !important;
-        padding: 4px ${pr}px 6px ${pl}px !important;
+        width: ${inner}px !important;
+        max-width: ${inner}px !important;
       }
     }
   </style>
 </head>
 <body>
-  <div class="ticket">
+  <div class="page">
+    <div class="ticket">
     ${centerHtml(companyRaw, 'brand')}
     ${headerAddr}
     <div class="when">${when}</div>
-    <div class="rule">${'-'.repeat(24)}</div>
+    <div class="rule">${rule}</div>
     ${fieldHtml('Account #:', String(receipt.account || ''))}
     ${fieldHtml('Customer:', String(receipt.customer || ''))}
     ${fieldHtml('Extension:', extension)}
     ${fieldHtml('Plan:', String(receipt.plan || ''))}
     ${fieldHtml('Next due:', String(receipt.newDue || ''))}
-    <div class="rule">${'-'.repeat(24)}</div>
+    <div class="rule">${rule}</div>
     <div class="amount">Subtotal: ${escapeReceiptHtml(money(subtotal))}</div>
     ${discountBlock}
     <div class="amount amount-total">TOTAL: ${escapeReceiptHtml(money(total))}</div>
-    <div class="rule">${'-'.repeat(24)}</div>
+    <div class="rule">${rule}</div>
     <div class="thanks">Thank you for your payment.</div>
-    <div class="rule">${'-'.repeat(24)}</div>
+    <div class="rule">${rule}</div>
     ${centerHtml(companyRaw, 'brand')}
     ${footerAddr}
     ${footerPhones}
     ${footerEmails}
-    <div class="rule">${'-'.repeat(24)}</div>
+    <div class="rule">${rule}</div>
     <div class="disclaimer">THIS IS NOT AN OFFICIAL RECEIPT</div>
+    </div>
   </div>
   ${printScript}
 </body>
@@ -339,7 +363,7 @@ export function buildReceiptHtml(receipt: PaymentReceipt, opts?: { autoPrint?: b
 /** Desktop browser: popup print window. Returns false if blocked (caller should show modal). */
 export function printReceiptInBrowser(receipt: PaymentReceipt): boolean {
   const html = buildReceiptHtml(receipt, { autoPrint: true });
-  const popup = window.open('', '_blank', `width=${RECEIPT_PC_WIDTH_PX + 40},height=760,left=0,top=0`);
+  const popup = window.open('', '_blank', `width=${RECEIPT_OUTER_PX + 32},height=760,left=0,top=0`);
   if (!popup) return false;
   popup.document.open();
   popup.document.write(html);

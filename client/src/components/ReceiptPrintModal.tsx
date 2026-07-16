@@ -147,7 +147,7 @@ export default function ReceiptPrintModal({ receipt, onClose }: Props) {
         />
       </div>
       <p className="text-xs text-slate-400 mt-3 leading-relaxed">
-        PC: 58mm paper, scale 100%, no margins. Android: Share → printer app.
+        PC: 58mm paper, scale 100%, margins none. Content is inset for POS-5890U-L.
       </p>
     </Modal>
   );
