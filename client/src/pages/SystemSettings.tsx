@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Settings as SettingsIcon, Sun, Moon, Anchor, Database as DbIcon, Bot, Clock, KeyRound,
-  Router as RouterIcon, Globe2, Download, Trash2, RefreshCw, Plus, Pencil, Power, Cloud, Wifi,
+  Router as RouterIcon, Globe2, Download, Trash2, RefreshCw, Plus, Pencil, Power, Cloud, Wifi, Loader2, AlertCircle,
 } from 'lucide-react';
 import Layout from '../components/Layout';
 import {
@@ -417,6 +417,12 @@ function DatabaseManagement({ flash }: any) {
   const [fileName, setFileName] = useState('No file chosen');
   const [fileData, setFileData] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
+  const [downloadJob, setDownloadJob] = useState<{
+    name: string;
+    phase: 'preparing' | 'downloading' | 'starting' | 'done' | 'error';
+    percent?: number;
+    error?: string;
+  } | null>(null);
 
   const load = () => api.get('/db/backups').then((r) => setBackups(r.data));
   useEffect(() => {
@@ -487,13 +493,46 @@ function DatabaseManagement({ flash }: any) {
   };
 
   const download = async (name: string) => {
-    const r = await api.get(`/db/backups/${name}/download`, { responseType: 'blob' });
-    const url = URL.createObjectURL(r.data);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = name;
-    a.click();
-    URL.revokeObjectURL(url);
+    if (downloadJob) return;
+    setDownloadJob({ name, phase: 'preparing', percent: 0 });
+    try {
+      const r = await api.get(`/db/backups/${name}/download`, {
+        responseType: 'blob',
+        onDownloadProgress: (ev) => {
+          if (!ev.total) return;
+          const percent = Math.min(100, Math.round((ev.loaded / ev.total) * 100));
+          setDownloadJob((job) =>
+            job?.name === name ? { ...job, phase: 'downloading', percent } : job
+          );
+        },
+      });
+      setDownloadJob({ name, phase: 'starting', percent: 100 });
+      const url = URL.createObjectURL(r.data);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setDownloadJob({ name, phase: 'done', percent: 100 });
+      window.setTimeout(() => setDownloadJob(null), 1500);
+    } catch (e: any) {
+      const blob = e?.response?.data;
+      let message = e?.message || 'Download failed';
+      if (blob instanceof Blob) {
+        try {
+          const text = await blob.text();
+          const parsed = JSON.parse(text);
+          if (parsed?.error) message = parsed.error;
+        } catch {
+          /* ignore */
+        }
+      } else if (e?.response?.data?.error) {
+        message = e.response.data.error;
+      }
+      setDownloadJob({ name, phase: 'error', error: message });
+    }
   };
 
   const del = async (name: string) => {
@@ -503,8 +542,70 @@ function DatabaseManagement({ flash }: any) {
 
   const fmtSize = (n: number) => (n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${(n / 1024).toFixed(0)} KB`);
 
+  const downloadMessage =
+    downloadJob?.phase === 'preparing'
+      ? 'Preparing backup file…'
+      : downloadJob?.phase === 'downloading'
+        ? `Downloading… ${downloadJob.percent ?? 0}%`
+        : downloadJob?.phase === 'starting'
+          ? 'Starting save to your device…'
+          : downloadJob?.phase === 'done'
+            ? 'Download started.'
+            : downloadJob?.error || 'Download failed';
+
   return (
     <SettingsSection icon={DbIcon} title="Database Management">
+      {downloadJob && (
+        <Modal
+          title="Backup download"
+          subtitle={downloadJob.name}
+          onClose={() => {
+            if (downloadJob.phase === 'preparing' || downloadJob.phase === 'downloading' || downloadJob.phase === 'starting') {
+              return;
+            }
+            setDownloadJob(null);
+          }}
+          maxWidth="sm"
+        >
+          <div className="space-y-4">
+            <div className="flex items-center gap-3">
+              {downloadJob.phase === 'error' ? (
+                <div className="w-10 h-10 rounded-full bg-rose-50 text-rose-600 flex items-center justify-center shrink-0">
+                  <AlertCircle size={18} />
+                </div>
+              ) : downloadJob.phase === 'done' ? (
+                <div className="w-10 h-10 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
+                  <Download size={18} />
+                </div>
+              ) : (
+                <Loader2 size={28} className="animate-spin text-brand-600 shrink-0" />
+              )}
+              <p className="text-sm text-slate-700 leading-relaxed">{downloadMessage}</p>
+            </div>
+            {downloadJob.phase === 'downloading' && typeof downloadJob.percent === 'number' && (
+              <div className="space-y-1.5">
+                <div className="h-2 rounded-full bg-slate-100 overflow-hidden">
+                  <div
+                    className="h-full bg-brand-500 transition-all duration-200"
+                    style={{ width: `${downloadJob.percent}%` }}
+                  />
+                </div>
+                <p className="text-xs text-slate-400 text-right">{downloadJob.percent}%</p>
+              </div>
+            )}
+            {(downloadJob.phase === 'preparing' || downloadJob.phase === 'starting') && (
+              <div className="h-2 rounded-full bg-slate-100 overflow-hidden">
+                <div className="h-full w-1/3 bg-brand-500/70 animate-pulse" />
+              </div>
+            )}
+            {downloadJob.phase === 'error' && (
+              <button type="button" className="btn-secondary w-full" onClick={() => setDownloadJob(null)}>
+                Close
+              </button>
+            )}
+          </div>
+        </Modal>
+      )}
       <div className="space-y-5">
         <button className="w-full flex items-center justify-center gap-2 bg-sky-600 hover:bg-sky-700 text-white font-medium py-2.5 rounded-lg" onClick={createBackup} disabled={busy}>
           <DbIcon size={16} /> Create New Backup
@@ -545,7 +646,18 @@ function DatabaseManagement({ flash }: any) {
                     <div className="text-xs text-slate-400">{new Date(b.created).toLocaleString()} · {fmtSize(b.size)}</div>
                   </div>
                   <div className="flex items-center gap-3 text-slate-400">
-                    <button title="Download" className="hover:text-sky-600" onClick={() => download(b.name)}><Download size={16} /></button>
+                    <button
+                      title="Download"
+                      className="hover:text-sky-600 disabled:opacity-40"
+                      disabled={!!downloadJob}
+                      onClick={() => download(b.name)}
+                    >
+                      {downloadJob?.name === b.name ? (
+                        <Loader2 size={16} className="animate-spin text-sky-600" />
+                      ) : (
+                        <Download size={16} />
+                      )}
+                    </button>
                     <button title="Delete" className="hover:text-rose-600" onClick={() => del(b.name)}><Trash2 size={16} /></button>
                   </div>
                 </div>
