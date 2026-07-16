@@ -1,5 +1,5 @@
 /**
- * POS-54 thermal receipt (54mm). Web: popup + print dialog.
+ * POS-58 thermal receipt (58mm). Web: popup + print dialog.
  * Android/Capacitor: in-app preview + Share (printer apps) — window.print() freezes WebView.
  */
 import { isNativeApp } from '../config';
@@ -163,7 +163,7 @@ export function buildReceiptHtml(receipt: PaymentReceipt, opts?: { autoPrint?: b
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Receipt ${account}</title>
   <style>
-    @page { size: 54mm auto; margin: 1.5mm; }
+    @page { size: 58mm auto; margin: 0; }
     * { box-sizing: border-box; }
     html, body {
       margin: 0;
@@ -177,10 +177,10 @@ export function buildReceiptHtml(receipt: PaymentReceipt, opts?: { autoPrint?: b
       print-color-adjust: exact;
     }
     .ticket {
-      width: 100%;
-      max-width: 54mm;
+      width: 58mm;
+      max-width: 58mm;
       margin: 0 auto;
-      padding: 2mm 0.25in 5mm 1.5mm;
+      padding: 0;
       color: #000;
     }
     .center { text-align: center; }
@@ -259,12 +259,12 @@ export function buildReceiptHtml(receipt: PaymentReceipt, opts?: { autoPrint?: b
       .ticket { background: #fff; box-shadow: 0 4px 16px rgba(0,0,0,0.12); }
     }
     @media print {
-      html, body { width: 54mm; color: #000 !important; }
+      html, body { width: 58mm; margin: 0; padding: 0; color: #000 !important; }
       .ticket {
-        width: 100%;
-        max-width: none;
-        margin: 0;
-        padding: 2mm 0.25in 5mm 1.5mm;
+        width: 58mm;
+        max-width: 58mm;
+        margin: 0 auto;
+        padding: 0;
         box-shadow: none;
       }
       * { color: #000 !important; }
