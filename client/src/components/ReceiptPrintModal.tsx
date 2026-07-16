@@ -147,7 +147,7 @@ export default function ReceiptPrintModal({ receipt, onClose }: Props) {
         />
       </div>
       <p className="text-xs text-slate-400 mt-3 leading-relaxed">
-        POS-58 layout (58mm, 3mm side margins). On Android, sharing plain text works best with Bluetooth thermal printer apps.
+        POS-5890U-L / 58mm paper (48mm print area, centered). On Android, Share works best with Bluetooth printer apps.
       </p>
     </Modal>
   );

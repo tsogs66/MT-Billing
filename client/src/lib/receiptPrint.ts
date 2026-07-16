@@ -1,8 +1,14 @@
 /**
- * POS-58 thermal receipt (58mm). Content uses 3mm side inset for printer dead zone.
- * Web: popup + print dialog. Android/Capacitor: in-app preview + Share.
+ * POS-58 thermal receipt for 58mm rolls (e.g. cnfujun POS-5890U-L).
+ * Paper is ~58mm wide; the 384-dot ESC/POS head prints 48mm — content is centered
+ * with ~5mm dead zone on each side. Web: popup + print. Android: Share to printer app.
  */
 import { isNativeApp } from '../config';
+
+/** Physical roll width (mm). */
+const RECEIPT_PAPER_MM = 58;
+/** Printable width for POS-5890 / 384-dot 58mm heads (mm). */
+const RECEIPT_PRINT_MM = 48;
 
 export type PaymentReceipt = {
   company?: string;
@@ -163,7 +169,7 @@ export function buildReceiptHtml(receipt: PaymentReceipt, opts?: { autoPrint?: b
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Receipt ${account}</title>
   <style>
-    @page { size: 58mm auto; margin: 0; }
+    @page { size: ${RECEIPT_PAPER_MM}mm auto; margin: 0; }
     * { box-sizing: border-box; }
     html, body {
       margin: 0;
@@ -177,18 +183,18 @@ export function buildReceiptHtml(receipt: PaymentReceipt, opts?: { autoPrint?: b
       print-color-adjust: exact;
     }
     .ticket {
-      width: 58mm;
-      max-width: 58mm;
+      width: ${RECEIPT_PRINT_MM}mm;
+      max-width: ${RECEIPT_PRINT_MM}mm;
       margin: 0 auto;
-      padding: 0 3mm;
+      padding: 0;
       color: #000;
     }
     .center { text-align: center; }
     .brand {
-      font-size: 13px;
+      font-size: 12px;
       font-weight: 800;
       text-transform: uppercase;
-      letter-spacing: 0.01em;
+      letter-spacing: 0;
       word-break: break-word;
       overflow-wrap: anywhere;
       color: #000;
@@ -258,16 +264,16 @@ export function buildReceiptHtml(receipt: PaymentReceipt, opts?: { autoPrint?: b
       letter-spacing: 0.12em;
     }
     @media screen {
-      body { background: #e5e7eb; padding: 12px; }
+      body { background: #e5e7eb; padding: 12px; width: ${RECEIPT_PAPER_MM}mm; margin: 0 auto; }
       .ticket { background: #fff; box-shadow: 0 4px 16px rgba(0,0,0,0.12); }
     }
     @media print {
-      html, body { width: 58mm; margin: 0; padding: 0; color: #000 !important; }
+      html, body { width: ${RECEIPT_PAPER_MM}mm; margin: 0; padding: 0; color: #000 !important; }
       .ticket {
-        width: 58mm;
-        max-width: 58mm;
+        width: ${RECEIPT_PRINT_MM}mm;
+        max-width: ${RECEIPT_PRINT_MM}mm;
         margin: 0 auto;
-        padding: 0 3mm;
+        padding: 0;
         box-shadow: none;
       }
       * { color: #000 !important; }
