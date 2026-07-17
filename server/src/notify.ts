@@ -1,5 +1,5 @@
 import { db } from './db.js';
-import { buildBrandedEmail, buildReceiptEmailBody, parseLogoDataUrl } from './emailTemplate.js';
+import { buildBrandedEmail, buildReceiptEmailBody, getCompanyBrand, parseLogoDataUrl } from './emailTemplate.js';
 
 export interface NotifySettings {
   reminder_enabled: number;
@@ -97,6 +97,18 @@ async function getMailer(): Promise<any> {
   } catch {
     return null;
   }
+}
+
+/** Append company name as an SMS footer signature (Company settings → name). */
+export function formatSmsMessage(message: string): string {
+  const body = String(message ?? '').replace(/\s+$/, '');
+  if (!body) return body;
+  const name = getCompanyBrand().name.trim();
+  if (!name) return body;
+  const signature = `— ${name}`;
+  const lower = body.toLowerCase();
+  if (lower.endsWith(signature.toLowerCase()) || lower.endsWith(name.toLowerCase())) return body;
+  return `${body}\n\n${signature}`;
 }
 
 // Normalize a PH mobile number to international format for the SMS gateway.
@@ -410,13 +422,14 @@ async function deliver(
 ) {
   if (!recipient) return { status: 'failed', detail: `no ${channel} address on file` };
   const s = getSettings();
+  const outbound = channel === 'sms' ? formatSmsMessage(message) : message;
 
-  if (channel === 'email' && s.smtp_host) return sendEmailSmtp(s, recipient, subject, message, opts);
+  if (channel === 'email' && s.smtp_host) return sendEmailSmtp(s, recipient, subject, outbound, opts);
   if (channel === 'sms' && s.sms_api_pass) {
     const provider = String(s.sms_provider || 'isms').toLowerCase();
-    if (provider === 'semaphore') return sendSmsSemaphore(s, recipient, message);
-    if (provider === 'smsgate' && s.sms_api_user) return sendSmsSmsgate(s, recipient, message);
-    if (s.sms_api_url && s.sms_api_user) return sendSmsBulk(s, recipient, message);
+    if (provider === 'semaphore') return sendSmsSemaphore(s, recipient, outbound);
+    if (provider === 'smsgate' && s.sms_api_user) return sendSmsSmsgate(s, recipient, outbound);
+    if (s.sms_api_url && s.sms_api_user) return sendSmsBulk(s, recipient, outbound);
   }
 
   const webhook = channel === 'email' ? process.env.NOTIFY_EMAIL_WEBHOOK : process.env.NOTIFY_SMS_WEBHOOK;
@@ -424,7 +437,7 @@ async function deliver(
     try {
       const branded =
         channel === 'email' && !opts?.html
-          ? buildBrandedEmail({ subject, plainText: message })
+          ? buildBrandedEmail({ subject, plainText: outbound })
           : null;
       const r = await fetch(webhook, {
         method: 'POST',
@@ -433,7 +446,7 @@ async function deliver(
           channel,
           to: recipient,
           subject,
-          message,
+          message: outbound,
           html: opts?.html || branded?.html || undefined,
         }),
       });
@@ -505,6 +518,7 @@ async function notifyClient(client: Client, channels: ('email' | 'sms')[], subje
   const results: string[] = [];
   for (const ch of channels) {
     const recipient = ch === 'email' ? client.email : client.contact;
+    const outbound = ch === 'sms' ? formatSmsMessage(messageF) : messageF;
     const emailOpts =
       ch === 'email'
         ? (() => {
@@ -519,7 +533,7 @@ async function notifyClient(client: Client, channels: ('email' | 'sms')[], subje
       client_id: client.id,
       customer_name: client.customer_name,
       subject: subjectF,
-      message: messageF,
+      message: outbound,
       type,
       status: r.status,
       detail: r.detail,

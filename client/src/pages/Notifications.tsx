@@ -266,6 +266,11 @@ export default function Notifications() {
             )}
             <FormField label="Message">
               <textarea className="input min-h-[110px]" value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Type your announcement or reminder…" />
+              {(channel === 'sms' || channel === 'both') && (
+                <p className="text-xs text-slate-400 mt-1">
+                  SMS messages automatically end with your company name as a signature (from <strong>Company</strong> settings), e.g. <code>— Pa-North Fiber Internet</code>.
+                </p>
+              )}
             </FormField>
             <button type="button" className="btn-primary" onClick={send} disabled={busy}>
               <Send size={16} /> {busy ? 'Sending…' : target === 'all' ? 'Send to all clients' : `Send to ${selected.length} selected`}
