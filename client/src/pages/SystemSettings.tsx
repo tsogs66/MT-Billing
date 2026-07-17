@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Settings as SettingsIcon, Sun, Moon, Anchor, Database as DbIcon, Bot, Clock, KeyRound,
-  Router as RouterIcon, Globe2, Download, Trash2, RefreshCw, Plus, Pencil, Power, Cloud, Wifi, Loader2, AlertCircle,
+  Router as RouterIcon, Globe2, Download, Trash2, RefreshCw, Plus, Pencil, Power, Cloud, Wifi, Loader2, AlertCircle, Upload, FileCheck,
 } from 'lucide-react';
 import Layout from '../components/Layout';
 import {
@@ -414,12 +414,23 @@ function NgrokSettings({ app, setA, save, flash, reload }: any) {
 function DatabaseManagement({ flash }: any) {
   const [backups, setBackups] = useState<any[]>([]);
   const [busy, setBusy] = useState(false);
-  const [fileName, setFileName] = useState('No file chosen');
   const [fileData, setFileData] = useState('');
+  const [selectedFile, setSelectedFile] = useState<{
+    name: string;
+    size: number;
+    status: 'reading' | 'ready' | 'error';
+    error?: string;
+  } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const [downloadJob, setDownloadJob] = useState<{
     name: string;
     phase: 'preparing' | 'downloading' | 'starting' | 'done' | 'error';
+    percent?: number;
+    error?: string;
+  } | null>(null);
+  const [restoreJob, setRestoreJob] = useState<{
+    fileName: string;
+    phase: 'uploading' | 'restarting' | 'done' | 'error';
     percent?: number;
     error?: string;
   } | null>(null);
@@ -443,23 +454,57 @@ function DatabaseManagement({ flash }: any) {
   const onFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
     if (!f) return;
-    setFileName(f.name);
+    setFileData('');
+    setSelectedFile({ name: f.name, size: f.size, status: 'reading' });
     const reader = new FileReader();
-    reader.onload = () => setFileData(String(reader.result));
+    reader.onload = () => {
+      setFileData(String(reader.result));
+      setSelectedFile({ name: f.name, size: f.size, status: 'ready' });
+    };
+    reader.onerror = () => {
+      setFileData('');
+      setSelectedFile({
+        name: f.name,
+        size: f.size,
+        status: 'error',
+        error: 'Could not read the backup file from disk.',
+      });
+    };
     reader.readAsDataURL(f);
+    e.target.value = '';
+  };
+
+  const clearSelectedFile = () => {
+    setFileData('');
+    setSelectedFile(null);
+    if (fileRef.current) fileRef.current.value = '';
   };
 
   const restore = async () => {
-    if (!fileData) {
-      flash('Choose a backup file first.');
+    if (!fileData || selectedFile?.status !== 'ready') {
+      flash('Choose a backup file first and wait until it is ready.');
       return;
     }
     if (!confirm('Replace the current database with this backup? The API will restart to apply it.')) {
       return;
     }
     setBusy(true);
+    setRestoreJob({ fileName: selectedFile.name, phase: 'uploading', percent: 0 });
     try {
-      const r = await api.post('/db/restore', { data: fileData, restart: true });
+      const r = await api.post(
+        '/db/restore',
+        { data: fileData, restart: true },
+        {
+          onUploadProgress: (ev) => {
+            if (!ev.total) return;
+            const percent = Math.min(100, Math.round((ev.loaded / ev.total) * 100));
+            setRestoreJob((job) =>
+              job?.fileName === selectedFile.name ? { ...job, phase: 'uploading', percent } : job
+            );
+          },
+        }
+      );
+      setRestoreJob({ fileName: selectedFile.name, phase: 'restarting' });
       flash(r.data?.message || 'Backup staged. Restarting API to apply…');
       // Poll until API is back (restore applies pending DB on boot).
       let tries = 0;
@@ -468,12 +513,20 @@ function DatabaseManagement({ flash }: any) {
         try {
           await api.get('/settings/app');
           clearInterval(timer);
+          setRestoreJob({ fileName: selectedFile.name, phase: 'done', percent: 100 });
           flash('Database restored and API is back online.');
           load();
+          clearSelectedFile();
           setBusy(false);
+          window.setTimeout(() => setRestoreJob(null), 2000);
         } catch {
           if (tries >= 40) {
             clearInterval(timer);
+            setRestoreJob({
+              fileName: selectedFile.name,
+              phase: 'error',
+              error: 'Restore staged but the API did not come back in time. Restart: sudo systemctl restart mt-billing-api',
+            });
             flash('Restore staged. If the panel stays offline, restart: sudo systemctl restart mt-billing-api');
             setBusy(false);
           }
@@ -487,9 +540,10 @@ function DatabaseManagement({ flash }: any) {
         (status === 413
           ? 'Upload rejected (file too large). Raise nginx client_max_body_size to 64m and retry.'
           : e?.message || 'Restore failed.');
+      setRestoreJob({ fileName: selectedFile.name, phase: 'error', error: msg });
       flash(msg);
+      setBusy(false);
     }
-    setBusy(false);
   };
 
   const download = async (name: string) => {
@@ -553,8 +607,66 @@ function DatabaseManagement({ flash }: any) {
             ? 'Download started.'
             : downloadJob?.error || 'Download failed';
 
+  const restoreMessage =
+    restoreJob?.phase === 'uploading'
+      ? `Uploading backup… ${restoreJob.percent ?? 0}%`
+      : restoreJob?.phase === 'restarting'
+        ? 'Backup uploaded. Restarting API and applying database…'
+        : restoreJob?.phase === 'done'
+          ? 'Database restored successfully.'
+          : restoreJob?.error || 'Restore failed';
+
   return (
     <SettingsSection icon={DbIcon} title="Database Management">
+      {restoreJob && (
+        <Modal
+          title="Database restore"
+          subtitle={restoreJob.fileName}
+          onClose={() => {
+            if (restoreJob.phase === 'uploading' || restoreJob.phase === 'restarting') return;
+            setRestoreJob(null);
+          }}
+          maxWidth="sm"
+        >
+          <div className="space-y-4">
+            <div className="flex items-center gap-3">
+              {restoreJob.phase === 'error' ? (
+                <div className="w-10 h-10 rounded-full bg-rose-50 text-rose-600 flex items-center justify-center shrink-0">
+                  <AlertCircle size={18} />
+                </div>
+              ) : restoreJob.phase === 'done' ? (
+                <div className="w-10 h-10 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
+                  <FileCheck size={18} />
+                </div>
+              ) : (
+                <Loader2 size={28} className="animate-spin text-amber-600 shrink-0" />
+              )}
+              <p className="text-sm text-slate-700 leading-relaxed">{restoreMessage}</p>
+            </div>
+            {restoreJob.phase === 'uploading' && typeof restoreJob.percent === 'number' && (
+              <div className="space-y-1.5">
+                <div className="h-2 rounded-full bg-slate-100 overflow-hidden">
+                  <div
+                    className="h-full bg-amber-500 transition-all duration-200"
+                    style={{ width: `${restoreJob.percent}%` }}
+                  />
+                </div>
+                <p className="text-xs text-slate-400 text-right">{restoreJob.percent}%</p>
+              </div>
+            )}
+            {(restoreJob.phase === 'restarting' || (restoreJob.phase === 'uploading' && restoreJob.percent === 100)) && (
+              <div className="h-2 rounded-full bg-slate-100 overflow-hidden">
+                <div className="h-full w-1/3 bg-amber-500/70 animate-pulse" />
+              </div>
+            )}
+            {restoreJob.phase === 'error' && (
+              <button type="button" className="btn-secondary w-full" onClick={() => setRestoreJob(null)}>
+                Close
+              </button>
+            )}
+          </div>
+        </Modal>
+      )}
       {downloadJob && (
         <Modal
           title="Backup download"
@@ -613,9 +725,10 @@ function DatabaseManagement({ flash }: any) {
 
         <div className="rounded-lg bg-amber-50/60 border border-amber-100 p-4">
           <div className="text-sm font-semibold text-slate-700 mb-2">Restore from downloaded backup</div>
-          <div className="flex items-center gap-3 mb-3">
-            <button className="btn-primary" onClick={() => fileRef.current?.click()}>Choose file</button>
-            <span className="text-sm text-slate-500">{fileName}</span>
+          <div className="flex flex-wrap items-center gap-3 mb-3">
+            <button type="button" className="btn-primary" onClick={() => fileRef.current?.click()} disabled={busy}>
+              Choose file
+            </button>
             <input
               ref={fileRef}
               type="file"
@@ -623,13 +736,53 @@ function DatabaseManagement({ flash }: any) {
               className="hidden"
               onChange={onFile}
             />
+            {selectedFile && (
+              <button type="button" className="text-sm text-slate-500 hover:text-rose-600" onClick={clearSelectedFile} disabled={busy}>
+                Clear
+              </button>
+            )}
           </div>
+          {selectedFile ? (
+            <div
+              className={`mb-3 rounded-lg border px-3 py-2.5 flex items-start gap-3 ${
+                selectedFile.status === 'error'
+                  ? 'border-rose-200 bg-rose-50/50'
+                  : selectedFile.status === 'ready'
+                    ? 'border-emerald-200 bg-emerald-50/40'
+                    : 'border-amber-200 bg-white/80'
+              }`}
+            >
+              {selectedFile.status === 'reading' ? (
+                <Loader2 size={18} className="animate-spin text-amber-600 shrink-0 mt-0.5" />
+              ) : selectedFile.status === 'ready' ? (
+                <FileCheck size={18} className="text-emerald-600 shrink-0 mt-0.5" />
+              ) : (
+                <AlertCircle size={18} className="text-rose-600 shrink-0 mt-0.5" />
+              )}
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-medium text-slate-800 truncate">{selectedFile.name}</div>
+                <div className="text-xs text-slate-500 mt-0.5">{fmtSize(selectedFile.size)}</div>
+                <div className="text-xs mt-1 text-slate-600">
+                  {selectedFile.status === 'reading' && 'Reading backup file…'}
+                  {selectedFile.status === 'ready' && 'Ready to upload. Click Upload & Restore below.'}
+                  {selectedFile.status === 'error' && (selectedFile.error || 'Could not use this file.')}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <p className="text-sm text-slate-500 mb-3">No backup file selected.</p>
+          )}
           <p className="text-xs text-slate-500 mb-3">
             Use a panel backup (<code className="text-slate-600">.db</code> / <code className="text-slate-600">.sqlite</code>).
             After upload the API restarts to load it.
           </p>
-          <button className="w-full flex items-center justify-center gap-2 bg-amber-400 hover:bg-amber-500 text-white font-medium py-2.5 rounded-lg disabled:opacity-60" onClick={restore} disabled={busy || !fileData}>
-            <RefreshCw size={16} className={busy ? 'animate-spin' : ''} /> {busy ? 'Restoring…' : 'Upload & Restore'}
+          <button
+            type="button"
+            className="w-full flex items-center justify-center gap-2 bg-amber-400 hover:bg-amber-500 text-white font-medium py-2.5 rounded-lg disabled:opacity-60"
+            onClick={restore}
+            disabled={busy || selectedFile?.status !== 'ready' || !fileData}
+          >
+            <Upload size={16} className={busy ? 'animate-pulse' : ''} /> {busy ? 'Restoring…' : 'Upload & Restore'}
           </button>
         </div>
 
