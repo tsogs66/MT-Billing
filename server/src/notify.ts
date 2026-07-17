@@ -108,6 +108,21 @@ function normalizePhone(n: string): string {
   return digits;
 }
 
+function normalizePhoneE164(n: string): string {
+  const digits = normalizePhone(n);
+  return digits ? `+${digits}` : '';
+}
+
+const SMSGATE_DEFAULT_URL = 'https://api.sms-gate.app/3rdparty/v1/messages';
+
+/** Resolve SMSGate send URL — cloud default or local Android server base. */
+function resolveSmsgateMessagesUrl(apiUrl?: string | null): string {
+  const raw = (apiUrl || SMSGATE_DEFAULT_URL).trim().replace(/\/+$/, '');
+  if (/\/message(s)?$/i.test(raw)) return raw;
+  if (/^https?:\/\//i.test(raw)) return `${raw}/message`;
+  return SMSGATE_DEFAULT_URL;
+}
+
 async function sendEmailSmtp(
   s: NotifySettings,
   to: string,
@@ -200,6 +215,49 @@ async function sendSmsSemaphore(s: NotifySettings, to: string, message: string) 
     return { status: 'sent', detail: `Semaphore: ${statuses || 'ok'}${ids ? ` (#${ids})` : ''}` };
   } catch (e: any) {
     return { status: 'failed', detail: `Semaphore error: ${e?.message || 'unreachable'}` };
+  }
+}
+
+async function sendSmsSmsgate(s: NotifySettings, to: string, message: string) {
+  if (!s.sms_api_user || !s.sms_api_pass) {
+    return { status: 'failed', detail: 'SMSGate: username and password required' };
+  }
+  try {
+    const phone = normalizePhoneE164(to);
+    if (!phone) return { status: 'failed', detail: 'SMSGate: invalid phone number' };
+    const url = resolveSmsgateMessagesUrl(s.sms_api_url);
+    const auth = Buffer.from(`${s.sms_api_user}:${s.sms_api_pass}`).toString('base64');
+    const body: Record<string, unknown> = {
+      textMessage: { text: message },
+      phoneNumbers: [phone],
+    };
+    const sim = Number(s.sms_type);
+    if (sim >= 1 && sim <= 3) body.simNumber = sim;
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Basic ${auth}`,
+      },
+      body: JSON.stringify(body),
+    });
+    const text = (await r.text()).trim();
+    let data: any;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      data = null;
+    }
+    if (!r.ok) {
+      const err = data?.message || data?.error || text.slice(0, 200);
+      return { status: 'failed', detail: `SMSGate: ${err || `HTTP ${r.status}`}` };
+    }
+    const item = Array.isArray(data) ? data[0] : data;
+    const id = item?.id || item?.messageId || item?.message_id;
+    const state = item?.state || item?.status || 'queued';
+    return { status: 'sent', detail: `SMSGate: ${state}${id ? ` (#${id})` : ''}` };
+  } catch (e: any) {
+    return { status: 'failed', detail: `SMSGate error: ${e?.message || 'unreachable'}` };
   }
 }
 
@@ -357,6 +415,7 @@ async function deliver(
   if (channel === 'sms' && s.sms_api_pass) {
     const provider = String(s.sms_provider || 'isms').toLowerCase();
     if (provider === 'semaphore') return sendSmsSemaphore(s, recipient, message);
+    if (provider === 'smsgate' && s.sms_api_user) return sendSmsSmsgate(s, recipient, message);
     if (s.sms_api_url && s.sms_api_user) return sendSmsBulk(s, recipient, message);
   }
 

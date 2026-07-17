@@ -66,11 +66,13 @@ const TABS = [
 const SMS_PROVIDERS = [
   { value: 'isms', label: 'bulksms.com.ph (iSMS)' },
   { value: 'semaphore', label: 'Semaphore (semaphore.co)' },
+  { value: 'smsgate', label: 'SMSGate (sms-gate.app — Android)' },
 ];
 
 const SMS_PROVIDER_DEFAULTS: Record<string, { sms_api_url: string }> = {
   isms: { sms_api_url: 'https://smtpapi.vocotext.com/isms_send_all_id.php' },
   semaphore: { sms_api_url: 'https://semaphore.co/api/v4/messages' },
+  smsgate: { sms_api_url: 'https://api.sms-gate.app/3rdparty/v1/messages' },
 };
 
 export default function Notifications() {
@@ -373,7 +375,40 @@ export default function Notifications() {
               </select>
             </FormField>
 
-            {smsProvider === 'semaphore' ? (
+            {smsProvider === 'smsgate' ? (
+              <>
+                <p className="text-sm text-slate-500">
+                  Use a free <a className="text-brand-600 underline" href="https://sms-gate.app/" target="_blank" rel="noreferrer">SMSGate</a> Android phone as your SMS gateway. Install the app, enable <strong>Cloud</strong> or <strong>Local Server</strong>, then copy the username and password from the app home screen. SMS is sent via your phone SIM (load cost only, no API fees).
+                </p>
+                <FormField label="API Endpoint">
+                  <input
+                    className="input"
+                    placeholder="https://api.sms-gate.app/3rdparty/v1/messages"
+                    value={settings.sms_api_url || SMS_PROVIDER_DEFAULTS.smsgate.sms_api_url}
+                    onChange={(e) => setS({ sms_api_url: e.target.value })}
+                  />
+                  <p className="text-xs text-slate-400 mt-1">
+                    Cloud: leave default. Local mode: use your phone IP, e.g. <code>http://192.168.1.50:8080</code> (MT-Billing server must be on the same LAN).
+                  </p>
+                </FormField>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <FormField label="API Username">
+                    <input className="input" value={settings.sms_api_user || ''} onChange={(e) => setS({ sms_api_user: e.target.value })} />
+                  </FormField>
+                  <FormField label={settings.sms_api_pass_set ? 'API Password (saved)' : 'API Password'}>
+                    <input className="input" type="password" placeholder={settings.sms_api_pass_set ? '••••••• (leave blank to keep)' : ''} value={smsPass} onChange={(e) => setSmsPass(e.target.value)} />
+                  </FormField>
+                </div>
+                <FormField label="SIM slot (optional)">
+                  <select className="input" value={settings.sms_type || 0} onChange={(e) => setS({ sms_type: Number(e.target.value) })}>
+                    <option value={0}>Default SIM</option>
+                    <option value={1}>SIM 1</option>
+                    <option value={2}>SIM 2</option>
+                    <option value={3}>SIM 3</option>
+                  </select>
+                </FormField>
+              </>
+            ) : smsProvider === 'semaphore' ? (
               <>
                 <p className="text-sm text-slate-500">
                   Connect your <a className="text-brand-600 underline" href="https://semaphore.co/" target="_blank" rel="noreferrer">Semaphore</a> account. Get your API key from the Semaphore dashboard. Messages are sent via <code>apikey</code>, <code>number</code>, <code>message</code>, and <code>sendername</code>.
