@@ -1,15 +1,14 @@
 # =============================================================================
-# MT-Billing — MikroTik route to OLT via TP-Link ER7206
+# MT-Billing — OLT access: MikroTik → ER7206 → SG3428X (VLAN 50) → OLT
 # =============================================================================
 # Topology:
-#   [MT-Billing / LAN]  20.0.0.0/24  on MikroTik (20.0.0.1)
-#         |
-#   [MikroTik] 20.0.0.1  ----  20.0.0.5  [ER7206]  50.0.0.1 ---- [OLT 50.0.0.100]
+#   [MT-Billing] 20.0.0.x  →  [MikroTik 20.0.0.1]
+#         →  [ER7206 20.0.0.5]  LAN5  →  [SG3428X VLAN 50]  →  [OLT 50.0.0.100]
 #
-# MikroTik routes 50.0.0.0/24 via ER7206 (20.0.0.5).
+# Gateway for OLT subnet (50.0.0.1) should be on ER7206 LAN5 OR SG3428X L3 SVI —
+# pick ONE device as 50.0.0.1 (recommended: ER7206 LAN5).
 #
-# Upload via Winbox → Files, then:
-#   /import file-name=mikrotik-olt-access.rsc
+# /import file-name=mikrotik-olt-access.rsc
 # =============================================================================
 
 :local er7206Gw "20.0.0.5"
@@ -18,11 +17,8 @@
 :local mgmtNet "20.0.0.0/24"
 :local tag "mt-billing-olt"
 
-:if ([:len [/ip route find where comment=$tag]] = 0) do={
+:if ([:len [/ip route find where comment=$tag and dst-address=$oltNet]] = 0) do={
   /ip route add dst-address=$oltNet gateway=$er7206Gw comment=$tag
-  :log info ("MT-Billing: route " . $oltNet . " via " . $er7206Gw)
-} else={
-  :log info "MT-Billing: OLT route already exists (skipped)"
 }
 
 :if ([:len [/ip firewall filter find where comment=($tag . "-snmp")]] = 0) do={
@@ -45,23 +41,23 @@
   /ip firewall filter add chain=forward action=accept dst-address=$er7206Gw comment=($tag . "-gw") place-before=0
 }
 
-:log info ("MT-Billing: test from MikroTik: /ping " . $oltHost)
+:log info ("MT-Billing: ping OLT from MikroTik: /ping " . $oltHost)
 
-# =============================================================================
-# TERMINAL PASTE (literal IPs) — copy/paste line by line:
-#
+# --- MikroTik terminal paste (literal IPs) -----------------------------------
 # /ip route add dst-address=50.0.0.0/24 gateway=20.0.0.5 comment=mt-billing-olt
-#
 # /ip firewall filter add chain=forward action=accept protocol=udp src-address=20.0.0.0/24 dst-address=50.0.0.100 dst-port=161 comment=mt-billing-olt-snmp place-before=0
 # /ip firewall filter add chain=forward action=accept protocol=tcp src-address=20.0.0.0/24 dst-address=50.0.0.100 dst-port=22,23,80,443,8080 comment=mt-billing-olt-tcp place-before=0
 # /ip firewall filter add chain=forward action=accept src-address=20.0.0.0/24 dst-address=50.0.0.0/24 comment=mt-billing-olt-all place-before=0
-# /ip firewall filter add chain=forward action=accept connection-state=established,related comment=mt-billing-olt-return place-before=0
-# /ip firewall filter add chain=forward action=accept dst-address=20.0.0.5 comment=mt-billing-olt-gw place-before=0
 #
-# Remove old wrong route if added earlier:
-# /ip route remove [find where comment=mt-billing-olt and dst-address=192.168.0.0/24]
+# --- SG3428X (VLAN 50) -------------------------------------------------------
+# 1) L2 → L2 Features → VLAN → 802.1Q VLAN → create VLAN ID 50
+# 2) Add OLT switch port(s) to VLAN 50 UNTAGGED
+# 3) Port to ER7206 LAN5: VLAN 50 UNTAGGED (access) OR TAGGED (trunk) — match ER7206
 #
-# Test: /ping 20.0.0.5  then  /ping 50.0.0.100
+# --- ER7206 LAN5 -------------------------------------------------------------
+# Option A (simple access): LAN5 = 50.0.0.1/24, switch port = access VLAN 50
+# Option B (trunk): ER7206 VLAN sub-interface 50.0.0.1/24 on LAN5 tagged VLAN 50
 #
-# ER7206 OLT side: 50.0.0.1/24  |  OLT gateway: 50.0.0.1  |  MT-Billing OLT host: 50.0.0.100
+# OLT: IP 50.0.0.100, mask 255.255.255.0, gateway 50.0.0.1, SNMP on
+# MT-Billing OLT host: 50.0.0.100
 # =============================================================================
