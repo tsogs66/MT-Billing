@@ -53,7 +53,18 @@
 :log info ("MT-Billing: test from MikroTik: /ping " . $oltHost)
 
 # =============================================================================
-# ER7206 (20.0.0.5 / 192.168.0.1) — configure in Omada / web UI:
+# TERMINAL PASTE (no variables) — if /import fails or you paste line-by-line:
+#
+# /ip route add dst-address=192.168.0.0/24 gateway=20.0.0.5 comment=mt-billing-olt
+#
+# /ip firewall filter add chain=forward action=accept protocol=udp src-address=20.0.0.0/24 dst-address=192.168.0.100 dst-port=161 comment=mt-billing-olt-snmp place-before=0
+# /ip firewall filter add chain=forward action=accept protocol=tcp src-address=20.0.0.0/24 dst-address=192.168.0.100 dst-port=22,23,80,443,8080 comment=mt-billing-olt-tcp place-before=0
+# /ip firewall filter add chain=forward action=accept src-address=20.0.0.0/24 dst-address=192.168.0.0/24 comment=mt-billing-olt-all place-before=0
+# /ip firewall filter add chain=forward action=accept connection-state=established,related comment=mt-billing-olt-return place-before=0
+# /ip firewall filter add chain=forward action=accept dst-address=20.0.0.5 comment=mt-billing-olt-gw place-before=0
+#
+# Test: /ping 20.0.0.5  then  /ping 192.168.0.100
+# =============================================================================
 #
 # 1) Interfaces
 #    - Port to MikroTik: IP 20.0.0.5/24, gateway 20.0.0.1 (optional)
