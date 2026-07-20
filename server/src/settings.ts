@@ -366,7 +366,7 @@ settingsRouter.post('/db/restore', (req, res) => {
     const msg = String(e?.message || 'restore failed');
     if (/entity too large|request entity too large|413/i.test(msg)) {
       return res.status(413).json({
-        error: 'Backup too large for the reverse proxy. On the host run: sudo sed -i "s/server {/server {\\n    client_max_body_size 64m;/" /etc/nginx/sites-available/mt-billing && sudo nginx -t && sudo systemctl reload nginx',
+        error: 'Backup too large for the reverse proxy. On the host run: sudo sed -i "s/client_max_body_size[[:space:]]*[0-9]*m;/client_max_body_size 100m;/g" /etc/nginx/sites-available/mt-billing && sudo nginx -t && sudo systemctl reload nginx',
       });
     }
     res.status(500).json({ error: msg });
