@@ -307,12 +307,11 @@ run systemctl start mt-billing-api
 # Allow DB restore / logo / QR uploads (nginx defaults to 1m → HTTP 413)
 NGINX_SITE="/etc/nginx/sites-available/mt-billing"
 if [[ -f "$NGINX_SITE" ]]; then
-  if ! grep -q 'client_max_body_size' "$NGINX_SITE"; then
-    log_info "Raising nginx client_max_body_size for DB restore / image uploads"
-    sed -i 's/server {/server {\n    client_max_body_size 64m;/' "$NGINX_SITE" || true
+  log_info "Ensuring nginx client_max_body_size 64m (DB restore / uploads)"
+  if grep -q 'client_max_body_size' "$NGINX_SITE"; then
+    sed -i 's/client_max_body_size[[:space:]]*[0-9]*m;/client_max_body_size 64m;/g' "$NGINX_SITE" || true
   else
-    # Bump older 25m installs so large .db restores succeed
-    sed -i 's/client_max_body_size 25m;/client_max_body_size 64m;/' "$NGINX_SITE" || true
+    sed -i 's/server {/server {\n    client_max_body_size 64m;/' "$NGINX_SITE" || true
   fi
 fi
 if nginx -t 2>/dev/null; then
