@@ -161,7 +161,7 @@ server {
     listen ${PANEL_PORT};
     listen [::]:${PANEL_PORT};
     server_name _;
-    client_max_body_size 64m;
+    client_max_body_size 100m;
 
     root ${INSTALL_DIR}/client/dist;
     index index.html;

@@ -222,7 +222,7 @@ server {
     root ${INSTALL_DIR}/client/dist;
     index index.html;
     # DB restore / logo / QR uploads (nginx default 1m rejects most .db backups)
-    client_max_body_size 64m;
+    client_max_body_size 100m;
 
     location /api/ {
         proxy_pass http://127.0.0.1:${API_PORT}/api/;
@@ -234,7 +234,7 @@ server {
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
         proxy_read_timeout 86400;
-        client_max_body_size 64m;
+        client_max_body_size 100m;
     }
 
     location / {

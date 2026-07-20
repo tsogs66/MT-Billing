@@ -538,7 +538,7 @@ function DatabaseManagement({ flash }: any) {
       const msg =
         e?.response?.data?.error ||
         (status === 413
-          ? 'Upload rejected (file too large). Raise nginx client_max_body_size to 64m and retry.'
+          ? 'Upload rejected (file too large). Raise nginx client_max_body_size to 100m and retry.'
           : e?.message || 'Restore failed.');
       setRestoreJob({ fileName: selectedFile.name, phase: 'error', error: msg });
       flash(msg);
