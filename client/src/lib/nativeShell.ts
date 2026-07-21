@@ -7,6 +7,8 @@ let sidebarOpen = false;
 let setSidebarOpenFn: ((open: boolean) => void) | null = null;
 let moreMenuOpen = false;
 let closeMoreMenuFn: (() => void) | null = null;
+let nativeSheetOpen = false;
+let closeNativeSheetFn: (() => void) | null = null;
 
 /** Layout registers sidebar state so the hardware back button can close the drawer. */
 export function registerSidebarControl(open: boolean, setter: (v: boolean) => void) {
@@ -18,6 +20,12 @@ export function registerSidebarControl(open: boolean, setter: (v: boolean) => vo
 export function registerMoreMenuControl(open: boolean, close: () => void) {
   moreMenuOpen = open;
   closeMoreMenuFn = close;
+}
+
+/** Live traffic / other full-screen sheets — back button closes before More menu. */
+export function registerNativeSheet(open: boolean, close: () => void) {
+  nativeSheetOpen = open;
+  closeNativeSheetFn = close;
 }
 
 export function initNativeShell() {
@@ -59,6 +67,10 @@ async function initBackButton() {
   try {
     const { App } = await import('@capacitor/app');
     App.addListener('backButton', ({ canGoBack }) => {
+      if (nativeSheetOpen && closeNativeSheetFn) {
+        closeNativeSheetFn();
+        return;
+      }
       if (moreMenuOpen && closeMoreMenuFn) {
         closeMoreMenuFn();
         return;

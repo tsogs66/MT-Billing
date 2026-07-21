@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { Activity, Globe2, RefreshCw, Users, X } from 'lucide-react';
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import Layout from '../components/Layout';
+import LiveTrafficDetailSheet from '../components/LiveTrafficDetailSheet';
 import { Card, TabBar, Toolbar, DataTable } from '../components/ui';
 import { api } from '../api';
 import { formatBps } from '../lib/traffic';
@@ -216,19 +217,19 @@ export default function UsageStats() {
     }
   };
 
-  const openUser = async (u: any) => {
+  const openUser = (u: any) => {
     setSelected(u);
     setHistory([]);
     setTrafficSeries([]);
     setLiveServices([]);
     setLive(null);
     setServicesNote('');
-    if (!u?.username) return;
-    await loadDetail(u.username);
   };
 
-  // Live traffic + graph refresh every 1s while a user is selected (pause when tab hidden)
+  /* Detail polling + chart UI moved to LiveTrafficDetailSheet (mobile-safe bottom sheet). */
+  const _legacyDetailPollingDisabled = true;
   useEffect(() => {
+    if (_legacyDetailPollingDisabled) return;
     if (!selected?.username || tab !== 'users') return;
     let cancelled = false;
     let timer: number | null = null;
@@ -287,7 +288,6 @@ export default function UsageStats() {
           (d.bytesDelta != null ? ` · +${formatBytes(d.bytesDelta)} since last poll` : '')
       );
       load();
-      if (selected?.username) await loadDetail(selected.username, { silent: true });
     } catch (e: any) {
       setToast(e?.response?.data?.error || 'Sample failed — check router API credentials');
     } finally {
@@ -433,240 +433,11 @@ export default function UsageStats() {
                 'Download/Upload totals are real traffic measured from each subscriber’s <pppoe-*> interface since sampling started. First sample sets a baseline; usage accumulates after that.'}{' '}
               Click a subscriber for live traffic graph and services.
             </p>
-            <div
-              className={`flex flex-col gap-4 items-stretch transition-all duration-300 ease-out ${
-                selected ? 'lg:flex-row lg:gap-4' : ''
-              }`}
-            >
-              <div
-                className={`min-w-0 transition-all duration-300 ease-out ${
-                  selected ? 'w-full lg:flex-1 lg:max-w-[calc(100%-28rem)]' : 'w-full'
-                }`}
-              >
-                <DataTable
-                  columns={userColumns}
-                  rows={userRows}
-                  emptyMessage="No usage yet. Online PPPoE sessions are sampled every minute — click Sample now while clients are connected."
-                />
-              </div>
-
-              {/* Invisible slot reserves the card’s right column so the floating panel looks inside the container. */}
-              {selected && (
-                <div
-                  ref={panelSlotRef}
-                  className="hidden lg:block w-[26rem] max-w-[42%] shrink-0 pointer-events-none"
-                  aria-hidden
-                  style={{ minHeight: 1 }}
-                />
-              )}
-            </div>
-
-            {selected &&
-              createPortal(
-                <aside
-                  className={
-                    panelBox?.anchored
-                      ? 'usage-detail-panel fixed z-[80] top-1/2 -translate-y-1/2 max-h-[88vh] overflow-y-auto rounded-2xl border border-slate-200 bg-white/95 backdrop-blur-sm shadow-2xl p-5'
-                      : 'usage-detail-panel fixed z-[80] right-3 sm:right-5 left-3 sm:left-auto top-1/2 -translate-y-1/2 w-auto sm:w-[min(460px,calc(100vw-1.25rem))] max-h-[88vh] overflow-y-auto rounded-2xl border border-slate-200 bg-white/95 backdrop-blur-sm shadow-2xl p-5'
-                  }
-                  style={
-                    panelBox?.anchored
-                      ? { left: panelBox.left, width: panelBox.width, right: 'auto' }
-                      : undefined
-                  }
-                  role="dialog"
-                  aria-label={`Usage for ${selected.username}`}
-                >
-                  <div className="flex items-center gap-2 font-semibold text-slate-800 mb-3">
-                    <Activity size={16} />
-                    <span className="truncate flex-1">{selected.username}</span>
-                    <button
-                      type="button"
-                      className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100"
-                      title="Close"
-                      onClick={closeDetail}
-                    >
-                      <X size={14} />
-                    </button>
-                  </div>
-
-                  <div className="space-y-4">
-                    {selected.customer && (
-                      <div className="text-xs text-slate-500 -mt-2">{selected.customer}</div>
-                    )}
-
-                    <div className="flex flex-wrap items-center gap-3 text-xs">
-                      <span
-                        className={`px-2 py-0.5 rounded-full font-medium ${
-                          live?.online
-                            ? 'bg-emerald-100 text-emerald-700'
-                            : 'bg-slate-200 text-slate-600'
-                        }`}
-                      >
-                        {live?.online ? 'Online' : 'Offline'}
-                      </span>
-                      {live?.address && (
-                        <span className="font-mono text-slate-600">{live.address}</span>
-                      )}
-                      {live?.uptime && <span className="text-slate-400">up {live.uptime}</span>}
-                      {detailBusy && <RefreshCw size={12} className="animate-spin text-slate-400" />}
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-2">
-                      <div className="rounded-lg bg-slate-50 border border-slate-100 px-3 py-2">
-                        <div className="text-[10px] uppercase tracking-wide text-slate-400">Download</div>
-                        <div className="text-sm font-bold text-emerald-700">
-                          {formatBps(live?.downloadBps ?? selected.downloadBps ?? 0)}
-                        </div>
-                      </div>
-                      <div className="rounded-lg bg-slate-50 border border-slate-100 px-3 py-2">
-                        <div className="text-[10px] uppercase tracking-wide text-slate-400">Upload</div>
-                        <div className="text-sm font-bold text-sky-700">
-                          {formatBps(live?.uploadBps ?? selected.uploadBps ?? 0)}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div>
-                      <div className="text-xs font-semibold text-slate-700 mb-2 flex items-center gap-2">
-                        Traffic
-                        <span className="font-normal text-slate-400">download / upload · last samples</span>
-                      </div>
-                      <div className="h-52 rounded-lg bg-slate-50 border border-slate-100 px-1 pt-2">
-                        {trafficSeries.length > 1 ? (
-                          <ResponsiveContainer width="100%" height="100%">
-                            <AreaChart data={trafficSeries} margin={{ top: 4, right: 6, left: 0, bottom: 0 }}>
-                              <defs>
-                                <linearGradient id="usageDl" x1="0" y1="0" x2="0" y2="1">
-                                  <stop offset="0%" stopColor="#059669" stopOpacity={0.35} />
-                                  <stop offset="100%" stopColor="#059669" stopOpacity={0} />
-                                </linearGradient>
-                                <linearGradient id="usageUl" x1="0" y1="0" x2="0" y2="1">
-                                  <stop offset="0%" stopColor="#0284c7" stopOpacity={0.3} />
-                                  <stop offset="100%" stopColor="#0284c7" stopOpacity={0} />
-                                </linearGradient>
-                              </defs>
-                              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
-                              <XAxis
-                                dataKey="label"
-                                tick={{ fontSize: 9, fill: '#94a3b8' }}
-                                interval="preserveStartEnd"
-                                minTickGap={24}
-                              />
-                              <YAxis
-                                tickFormatter={fmtAxis}
-                                tick={{ fontSize: 9, fill: '#94a3b8' }}
-                                width={36}
-                              />
-                              <Tooltip
-                                formatter={(v: number, name: string) => [
-                                  formatBps(Number(v) || 0),
-                                  name === 'downloadBps' ? 'Download' : 'Upload',
-                                ]}
-                                labelFormatter={(l) => String(l)}
-                                contentStyle={{
-                                  fontSize: 12,
-                                  borderRadius: 8,
-                                  border: '1px solid #e2e8f0',
-                                }}
-                              />
-                              <Area
-                                type="monotone"
-                                dataKey="downloadBps"
-                                stroke="#059669"
-                                fill="url(#usageDl)"
-                                strokeWidth={1.5}
-                                isAnimationActive={false}
-                              />
-                              <Area
-                                type="monotone"
-                                dataKey="uploadBps"
-                                stroke="#0284c7"
-                                fill="url(#usageUl)"
-                                strokeWidth={1.5}
-                                isAnimationActive={false}
-                              />
-                            </AreaChart>
-                          </ResponsiveContainer>
-                        ) : (
-                          <div className="h-full flex items-center justify-center text-xs text-slate-400 px-3 text-center">
-                            {detailBusy
-                              ? 'Loading traffic…'
-                              : 'No traffic samples yet. Keep the user online and click Sample now.'}
-                          </div>
-                        )}
-                      </div>
-                      <div className="flex gap-3 mt-1.5 text-[10px] text-slate-500">
-                        <span className="inline-flex items-center gap-1">
-                          <span className="w-2 h-2 rounded-full bg-emerald-600" /> Download
-                        </span>
-                        <span className="inline-flex items-center gap-1">
-                          <span className="w-2 h-2 rounded-full bg-sky-600" /> Upload
-                        </span>
-                      </div>
-                    </div>
-
-                    <div>
-                      <div className="text-xs font-semibold text-slate-700 mb-2 flex items-center gap-2">
-                        <Globe2 size={13} /> Internet services in use
-                      </div>
-                      {servicesNote && (
-                        <div className="text-[11px] text-slate-400 mb-2">{servicesNote}</div>
-                      )}
-                      <div className="space-y-1.5 max-h-48 overflow-auto">
-                        {liveServices.map((s) => {
-                          const pct = Math.max(6, (Number(s.hits) / maxLiveHits) * 100);
-                          return (
-                            <div
-                              key={s.id}
-                              className="rounded-lg bg-slate-50 border border-slate-100 px-3 py-2"
-                              title={s.destinations?.join(', ') || undefined}
-                            >
-                              <div className="flex items-center justify-between gap-2">
-                                <div className="min-w-0">
-                                  <div className="text-sm font-semibold text-slate-800 truncate">{s.name}</div>
-                                  <div className="text-[10px] text-slate-400">{s.category}</div>
-                                </div>
-                                <div className="text-xs font-medium text-slate-600 shrink-0">{s.hits}</div>
-                              </div>
-                              <div className="mt-1.5 h-1.5 rounded-full bg-slate-100 overflow-hidden">
-                                <div className="h-full rounded-full bg-amber-500" style={{ width: `${pct}%` }} />
-                              </div>
-                            </div>
-                          );
-                        })}
-                        {!detailBusy && liveServices.length === 0 && (
-                          <div className="text-sm text-slate-400 py-2">
-                            {live?.online
-                              ? 'No classified destinations in connection tracking right now.'
-                              : 'User is offline — services appear when the session is active.'}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    <div>
-                      <div className="text-xs font-semibold text-slate-700 mb-2">Daily totals</div>
-                      <div className="space-y-1.5 max-h-36 overflow-auto">
-                        {history.map((h) => (
-                          <div
-                            key={h.day}
-                            className="flex justify-between text-xs bg-slate-50 rounded-lg px-3 py-2 border border-slate-100 gap-2"
-                          >
-                            <span className="font-medium text-slate-700">{h.day}</span>
-                            <span className="text-emerald-700">{formatBytes(h.rxBytes)} ↓</span>
-                            <span className="text-sky-700">{formatBytes(h.txBytes)} ↑</span>
-                          </div>
-                        ))}
-                        {history.length === 0 && (
-                          <div className="text-sm text-slate-400">No daily history yet — keep sampling while online.</div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </aside>,
-                document.body
-              )}
+            <DataTable
+              columns={userColumns}
+              rows={userRows}
+              emptyMessage="No usage yet. Online PPPoE sessions are sampled every minute — click Sample now while clients are connected."
+            />
           </div>
         )}
 
@@ -684,6 +455,18 @@ export default function UsageStats() {
           </div>
         )}
       </Card>
+
+      {selected && tab === 'users' && (
+        <LiveTrafficDetailSheet
+          open
+          username={selected.username}
+          customer={selected.customer}
+          routerId={current?.id}
+          seedDownloadBps={Number(selected.downloadBps) || 0}
+          seedUploadBps={Number(selected.uploadBps) || 0}
+          onClose={closeDetail}
+        />
+      )}
     </Layout>
   );
 }

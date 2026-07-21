@@ -11,6 +11,7 @@ import { useRouterDevice } from '../context/RouterContext';
 import { TrafficPair, UsagePair } from '../lib/traffic';
 import { copyTextOrPrompt } from '../lib/clipboard';
 import ReceiptPrintModal from '../components/ReceiptPrintModal';
+import LiveTrafficDetailSheet from '../components/LiveTrafficDetailSheet';
 import { openReceiptForPrint } from '../lib/receiptPrint';
 
 interface PUser {
@@ -144,6 +145,12 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
     autodisableEnabled: boolean;
   } | null>(null);
   const [recheckResult, setRecheckResult] = useState<any | null>(null);
+  const [activeTraffic, setActiveTraffic] = useState<{
+    username: string;
+    customer?: string;
+    downloadBps: number;
+    uploadBps: number;
+  } | null>(null);
   const { current } = useRouterDevice();
 
   const routerQ = current?.id ? `&routerId=${current.id}` : '';
@@ -840,6 +847,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
         .map((a, i) => {
           const down = Number(a.downloadBps) || 0;
           const up = Number(a.uploadBps) || 0;
+          const isTrafficOpen = activeTraffic?.username === a.username;
           return {
             key: String(a.username || a.address || i),
             sortValues: {
@@ -852,7 +860,21 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
               caller: a.caller,
             },
             cells: [
-              <span key="u" className="font-semibold text-slate-800">{a.username}</span>,
+              <button
+                type="button"
+                key="u"
+                className={`usage-user-btn text-left w-full ${isTrafficOpen ? 'is-selected' : ''}`}
+                onClick={() =>
+                  setActiveTraffic({
+                    username: a.username,
+                    customer: a.customer,
+                    downloadBps: down,
+                    uploadBps: up,
+                  })
+                }
+              >
+                <span className="usage-user-name font-semibold text-slate-800">{a.username}</span>
+              </button>,
               a.customer,
               <span key="p" className="font-mono text-xs text-slate-700" title="MikroTik /ppp/secret profile">
                 {a.profile || '—'}
@@ -864,7 +886,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
             ],
           };
         }),
-    [active, activeSearch]
+    [active, activeSearch, activeTraffic?.username]
   );
 
   const deleteProfile = async (p: any) => {
@@ -994,6 +1016,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
               }
             />
             <div className="p-4 pt-0 space-y-3">
+              <p className="text-xs text-slate-400">Tap a username for the live traffic graph.</p>
               {!current && (
                 <div className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
                   Select a MikroTik router in the top bar to load live PPP active sessions.
@@ -1515,6 +1538,18 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
       )}
 
       <Toast message={toast} />
+
+      {activeTraffic && (
+        <LiveTrafficDetailSheet
+          open
+          username={activeTraffic.username}
+          customer={activeTraffic.customer}
+          routerId={current?.id}
+          seedDownloadBps={activeTraffic.downloadBps}
+          seedUploadBps={activeTraffic.uploadBps}
+          onClose={() => setActiveTraffic(null)}
+        />
+      )}
     </Layout>
   );
 }
