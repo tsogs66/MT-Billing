@@ -9,6 +9,7 @@ import { useTheme, type ThemeId } from '../context/ThemeContext';
 import { useLayout } from './Layout';
 import { PRODUCT_TITLE } from '../branding';
 import { api } from '../api';
+import { isNativeApp } from '../config';
 
 const THEMES: { key: ThemeId; label: string; Icon: typeof Sun; hint: string }[] = [
   { key: 'light', label: 'Light', Icon: Sun, hint: 'Clean daylight panel' },
@@ -34,6 +35,7 @@ export default function Topbar({ title }: { title: string }) {
   const routerRef = useRef<HTMLDivElement>(null);
   const themeRef = useRef<HTMLDivElement>(null);
   const userRef = useRef<HTMLDivElement>(null);
+  const nativeShell = isNativeApp();
 
   useEffect(() => {
     const close = (e: Event) => {
@@ -56,14 +58,16 @@ export default function Topbar({ title }: { title: string }) {
   return (
     <header className="theme-topbar sticky top-0 z-30 min-h-16 h-16 flex items-center justify-between gap-2 px-3 sm:px-6 lg:px-8 pt-[env(safe-area-inset-top)]">
       <div className="flex items-center gap-3 min-w-0">
-        <button
-          type="button"
-          onClick={toggleSidebar}
-          className="theme-topbar-icon-btn lg:hidden p-2"
-          aria-label="Open menu"
-        >
-          <Menu size={20} />
-        </button>
+        {!nativeShell && (
+          <button
+            type="button"
+            onClick={toggleSidebar}
+            className="theme-topbar-icon-btn lg:hidden p-2"
+            aria-label="Open menu"
+          >
+            <Menu size={20} />
+          </button>
+        )}
         <div className="min-w-0">
           <h1 className="theme-topbar-title text-lg sm:text-xl font-bold tracking-tight truncate">{title}</h1>
           <p className="theme-topbar-subtitle text-[11px] hidden lg:block truncate max-w-[420px]" title={PRODUCT_TITLE}>

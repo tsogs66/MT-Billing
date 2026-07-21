@@ -1,74 +1,11 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
-import {
-  LayoutDashboard, Bot, TerminalSquare, Network, Users, Share2, Map,
-  BarChart3, Boxes, Wifi, FileCode2, Globe, Building2, Settings, ShieldCheck,
-  DownloadCloud, ServerCog, ScrollText, KeyRound, Activity, Bell, ChevronDown,
-  X, Link2, PieChart, ShieldAlert, Cloud, Satellite, RadioTower,
-} from 'lucide-react';
-import type { LucideIcon } from 'lucide-react';
+import { ChevronDown, X } from 'lucide-react';
 import Logo from './Logo';
 import { useLayout } from './Layout';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
-
-type NavItem = { to: string; label: string; icon: LucideIcon; end?: boolean; permission: string };
-type NavSection = { title: string; items: NavItem[] };
-
-const NAV_SECTIONS: NavSection[] = [
-  {
-    title: 'Overview',
-    items: [
-      { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true, permission: 'dashboard' },
-    ],
-  },
-  {
-    title: 'Subscribers',
-    items: [
-      { to: '/pppoe', label: 'PPPoE Management', icon: Users, permission: 'pppoe' },
-      { to: '/ipoe', label: 'IPoE Management', icon: Share2, permission: 'ipoe' },
-      { to: '/hotspot', label: 'Hotspot', icon: Wifi, permission: 'hotspot' },
-      { to: '/usage', label: 'Usage Stats', icon: PieChart, permission: 'pppoe' },
-      { to: '/fair-use', label: 'Fair Use Alerts', icon: ShieldAlert, permission: 'pppoe' },
-    ],
-  },
-  {
-    title: 'Network',
-    items: [
-      { to: '/network', label: 'Network', icon: Network, permission: 'network' },
-      { to: '/map', label: 'Topology', icon: Map, permission: 'map' },
-      { to: '/terminal', label: 'Terminal', icon: TerminalSquare, permission: 'terminal' },
-      { to: '/ai-scripting', label: 'AI Scripting', icon: Bot, permission: 'ai' },
-      { to: '/files', label: 'Mikrotik Files', icon: FileCode2, permission: 'files' },
-      { to: '/zerotier', label: 'ZeroTier', icon: Globe, permission: 'zerotier' },
-      { to: '/super-router', label: 'Super Router', icon: ServerCog, permission: 'super-router' },
-    ],
-  },
-  {
-    title: 'Billing',
-    items: [
-      { to: '/sales', label: 'Sales Report', icon: BarChart3, permission: 'sales' },
-      { to: '/pay-portal', label: 'Payment Links', icon: Link2, permission: 'sales' },
-      { to: '/inventory', label: 'Stock & Inventory', icon: Boxes, permission: 'inventory' },
-      { to: '/notifications', label: 'Notifications', icon: Bell, permission: 'notifications' },
-    ],
-  },
-  {
-    title: 'System',
-    items: [
-      { to: '/company', label: 'Company', icon: Building2, permission: 'company' },
-      { to: '/cloudflare', label: 'Cloudflare Access', icon: Cloud, permission: 'settings' },
-      { to: '/settings', label: 'System Settings', icon: Settings, permission: 'settings' },
-      { to: '/roles', label: 'Panel Roles', icon: ShieldCheck, permission: 'roles' },
-      { to: '/uptime', label: 'Uptime Monitor', icon: Activity, permission: 'uptime' },
-      { to: '/status-hub', label: 'Status Hub', icon: Satellite, permission: 'uptime' },
-      { to: '/outage-monitor', label: 'Outage Monitor', icon: RadioTower, permission: 'uptime' },
-      { to: '/logs', label: 'System Logs', icon: ScrollText, permission: 'logs' },
-      { to: '/updater', label: 'Updater', icon: DownloadCloud, permission: 'updater' },
-      { to: '/license', label: 'License', icon: KeyRound, permission: 'license' },
-    ],
-  },
-];
+import { buildNavSections } from '../navConfig';
 
 /** Survives Layout remounts (each page wraps its own <Layout>). */
 let savedSidebarScroll = 0;
@@ -124,16 +61,7 @@ export default function Sidebar() {
     setCollapsed((prev) => ({ ...prev, [title]: !prev[title] }));
   };
 
-  const sections = NAV_SECTIONS.map((section) => ({
-    ...section,
-    items: section.items
-      .filter((item) => canAccess(item.permission))
-      .map((item) =>
-        item.to === '/'
-          ? { ...item, label: user?.licenseActivated ? 'Dashboard' : 'System Overview' }
-          : item
-      ),
-  })).filter((s) => s.items.length > 0);
+  const sections = buildNavSections(canAccess, user);
 
   return (
     <aside
@@ -251,39 +179,4 @@ export default function Sidebar() {
       </div>
     </aside>
   );
-}
-
-/** Map pathname → permission key for route guards */
-export function permissionForPath(pathname: string): string {
-  if (pathname === '/' || pathname === '') return 'dashboard';
-  const map: Record<string, string> = {
-    '/terminal': 'terminal',
-    '/ai-scripting': 'ai',
-    '/routers': 'network',
-    '/network': 'network',
-    '/pppoe': 'pppoe',
-    '/ipoe': 'ipoe',
-    '/map': 'map',
-    '/zerotier': 'zerotier',
-    '/super-router': 'super-router',
-    '/files': 'files',
-    '/sales': 'sales',
-    '/pay-portal': 'sales',
-    '/usage': 'pppoe',
-    '/fair-use': 'pppoe',
-    '/inventory': 'inventory',
-    '/hotspot': 'hotspot',
-    '/notifications': 'notifications',
-    '/uptime': 'uptime',
-    '/status-hub': 'uptime',
-    '/outage-monitor': 'uptime',
-    '/logs': 'logs',
-    '/company': 'company',
-    '/cloudflare': 'settings',
-    '/settings': 'settings',
-    '/roles': 'roles',
-    '/updater': 'updater',
-    '/license': 'license',
-  };
-  return map[pathname] || 'dashboard';
 }

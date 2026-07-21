@@ -3,8 +3,10 @@ import { Link } from 'react-router-dom';
 import { KeyRound } from 'lucide-react';
 import Sidebar from './Sidebar';
 import Topbar from './Topbar';
+import BottomNav from './BottomNav';
 import NativeAppBridge from './NativeAppBridge';
 import { useAuth } from '../context/AuthContext';
+import { isNativeApp } from '../config';
 
 type LayoutContextValue = {
   sidebarOpen: boolean;
@@ -37,6 +39,7 @@ export default function Layout({
   const { canWrite, user } = useAuth();
   const readOnly = !!user && !canWrite && !allowWrite;
   const roleViewer = !!user?.readOnly && !!user?.licenseActivated;
+  const nativeShell = isNativeApp();
 
   return (
     <LayoutContext.Provider
@@ -48,7 +51,7 @@ export default function Layout({
     >
       <div className="flex h-[100dvh] max-h-[100dvh] bg-slate-100 bg-mesh-light theme-main overflow-hidden">
         <NativeAppBridge />
-        {sidebarOpen && (
+        {sidebarOpen && !nativeShell && (
           <button
             type="button"
             aria-label="Close menu"
@@ -57,7 +60,7 @@ export default function Layout({
           />
         )}
 
-        <Sidebar />
+        {!nativeShell && <Sidebar />}
 
         <div className="flex-1 flex flex-col min-h-0 min-w-0 w-full overflow-hidden lg:pl-0">
           <Topbar title={title} />
@@ -83,7 +86,11 @@ export default function Layout({
             className={
               fullBleed
                 ? `flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden p-0 page-enter ${readOnly ? 'panel-readonly' : ''}`
-                : `flex-1 min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-y-contain p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:p-6 lg:p-8 page-enter ${readOnly ? 'panel-readonly' : ''}`
+                : `flex-1 min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-y-contain p-3 sm:p-6 lg:p-8 page-enter ${readOnly ? 'panel-readonly' : ''} ${
+                    nativeShell
+                      ? 'pb-[calc(3.75rem+env(safe-area-inset-bottom))] sm:pb-[calc(3.75rem+env(safe-area-inset-bottom))]'
+                      : 'pb-[max(0.75rem,env(safe-area-inset-bottom))]'
+                  }`
             }
             aria-readonly={readOnly || undefined}
           >
@@ -93,6 +100,7 @@ export default function Layout({
               <div className="max-w-[1600px] mx-auto w-full min-w-0">{children}</div>
             )}
           </main>
+          {nativeShell && <BottomNav />}
         </div>
       </div>
     </LayoutContext.Provider>

@@ -19,6 +19,11 @@
   --sidebar-active-bg: rgba(249, 115, 22, 0.12);
   --sidebar-active-fg: #c2410c;
   --sidebar-icon-bg: #f1f5f9;
+  --bottom-nav-bg: #ffffff;
+  --bottom-nav-border: #e2e8f0;
+  --bottom-nav-fg: #64748b;
+  --bottom-nav-active-fg: #c2410c;
+  --bottom-nav-sheet-bg: #ffffff;
   --topbar-bg: rgba(255, 255, 255, 0.88);
   --topbar-border: rgba(226, 232, 240, 0.7);
   --topbar-fg: #0f172a;
@@ -74,6 +79,7 @@ body {
 }
 .native-app .theme-topbar-icon-btn,
 .native-app .theme-sidebar-link,
+.native-app .theme-bottom-nav-item,
 .native-app .btn-primary,
 .native-app .btn-secondary {
   touch-action: manipulation;
@@ -210,6 +216,28 @@ body {
 }
 .theme-sidebar-user-meta {
   color: var(--sidebar-muted);
+}
+
+/* ── Native bottom navigation (Capacitor Android) ── */
+.theme-bottom-nav {
+  background: color-mix(in srgb, var(--bottom-nav-bg) 94%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  color: var(--bottom-nav-fg);
+}
+.theme-bottom-nav-item {
+  color: var(--bottom-nav-fg);
+}
+.theme-bottom-nav-item.is-active {
+  color: var(--bottom-nav-active-fg);
+}
+.theme-bottom-nav-sheet {
+  background: var(--bottom-nav-sheet-bg);
+  color: var(--sidebar-fg);
+  border-top: 1px solid var(--bottom-nav-border);
+}
+.theme-bottom-nav-sheet-header {
+  color: var(--sidebar-fg);
 }
 
 /* ── Topbar (theme-aware; matches header chrome across themes) ── */
@@ -361,6 +389,11 @@ body {
   --sidebar-active-bg: rgba(251, 146, 60, 0.15);
   --sidebar-active-fg: #fdba74;
   --sidebar-icon-bg: rgba(30, 41, 59, 0.55);
+  --bottom-nav-bg: #0f172a;
+  --bottom-nav-border: #1e293b;
+  --bottom-nav-fg: #94a3b8;
+  --bottom-nav-active-fg: #fdba74;
+  --bottom-nav-sheet-bg: #0f172a;
   --topbar-bg: rgba(15, 23, 42, 0.92);
   --topbar-border: rgba(51, 65, 85, 0.85);
   --topbar-fg: #f8fafc;
@@ -469,6 +502,11 @@ body {
   --sidebar-active-bg: rgba(232, 185, 35, 0.16);
   --sidebar-active-fg: #f5d76e;
   --sidebar-icon-bg: rgba(8, 28, 52, 0.75);
+  --bottom-nav-bg: rgba(8, 28, 52, 0.95);
+  --bottom-nav-border: rgba(232, 185, 35, 0.28);
+  --bottom-nav-fg: #94a3b8;
+  --bottom-nav-active-fg: #f5d76e;
+  --bottom-nav-sheet-bg: rgba(8, 28, 52, 0.98);
   --topbar-bg: rgba(8, 28, 52, 0.9);
   --topbar-border: rgba(232, 185, 35, 0.28);
   --topbar-fg: #f8fafc;

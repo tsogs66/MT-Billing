@@ -5,11 +5,19 @@ import { isNativeApp } from '../config';
 
 let sidebarOpen = false;
 let setSidebarOpenFn: ((open: boolean) => void) | null = null;
+let moreMenuOpen = false;
+let closeMoreMenuFn: (() => void) | null = null;
 
 /** Layout registers sidebar state so the hardware back button can close the drawer. */
 export function registerSidebarControl(open: boolean, setter: (v: boolean) => void) {
   sidebarOpen = open;
   setSidebarOpenFn = setter;
+}
+
+/** Bottom "More" sheet on native Android — hardware back closes it first. */
+export function registerMoreMenuControl(open: boolean, close: () => void) {
+  moreMenuOpen = open;
+  closeMoreMenuFn = close;
 }
 
 export function initNativeShell() {
@@ -51,6 +59,10 @@ async function initBackButton() {
   try {
     const { App } = await import('@capacitor/app');
     App.addListener('backButton', ({ canGoBack }) => {
+      if (moreMenuOpen && closeMoreMenuFn) {
+        closeMoreMenuFn();
+        return;
+      }
       if (sidebarOpen && setSidebarOpenFn) {
         setSidebarOpenFn(false);
         return;

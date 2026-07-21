@@ -2,7 +2,7 @@ import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { useAuth } from './context/AuthContext';
 import Layout from './components/Layout';
 import { PageStub } from './components/ui';
-import { permissionForPath } from './components/Sidebar';
+import { permissionForPath } from './navConfig';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import PPPoE from './pages/PPPoE';
