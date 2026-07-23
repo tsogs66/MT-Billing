@@ -28,6 +28,11 @@ USB installer notes:
 - Needs Ethernet/internet during install and again on first boot from the internal disk (MT-Billing firstboot).
 - Console on the stick: `mtadmin` / `mtbilling`. Install log: `/var/log/mt-billing-usb-install.log`.
 
+**Dell Wyse 3040 / Intel Atom thin clients:** if the screen stops at  
+`EFI stub: Loaded initrd…` with a black screen, rebuild the USB image from current `main`  
+(`sudo bash scripts/build-pc-usb-img.sh`) — images now bake in `nomodeset` and i915  
+workarounds. Also use a **USB 2.0** port, disable **Secure Boot**, and try another stick.
+
 Build all:
 
 ```bash

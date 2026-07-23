@@ -264,13 +264,101 @@ chpasswd:
   list: |
     mtadmin:mtbilling
 package_update: false
+write_files:
+  - path: /etc/default/grub.d/99-mt-billing-thinclient.cfg
+    permissions: '0644'
+    content: |
+      GRUB_CMDLINE_LINUX_DEFAULT="${GRUB_CMDLINE_LINUX_DEFAULT} nomodeset i915.alpha_support=1 i915.fastboot=0 loglevel=4 plymouth.enable=0"
+  - path: /etc/kernel/cmdline.d/99-mt-billing.conf
+    permissions: '0644'
+    content: |
+      nomodeset i915.alpha_support=1 i915.fastboot=0 loglevel=4 plymouth.enable=0
 runcmd:
   - [ sh, -c, "systemctl enable --now ssh 2>/dev/null || systemctl enable --now sshd 2>/dev/null || true" ]
+  - [ sh, -c, "update-grub 2>/dev/null || true" ]
 EOF
 
   cat >"$root_mnt/etc/cloud/cloud.cfg.d/99-mt-billing.cfg" <<'EOF'
 datasource_list: [ NoCloud, None ]
 EOF
+}
+
+# Intel Atom thin clients (e.g. Dell Wyse 3040) often hang after "EFI stub: Loaded initrd"
+# unless the installer kernel uses nomodeset / conservative i915 options.
+PC_KERNEL_CMDLINE_EXTRA="${PC_KERNEL_CMDLINE_EXTRA:-nomodeset i915.alpha_support=1 i915.fastboot=0 loglevel=4 plymouth.enable=0}"
+
+patch_grub_cfg_kernel_args() {
+  local f="$1"
+  local args="$2"
+  [[ -f "$f" && -r "$f" ]] || return 0
+  if grep -q 'nomodeset' "$f" 2>/dev/null; then
+    return 0
+  fi
+  sed -i -E \
+    -e "/^[[:space:]]*linux(efi)?[[:space:]]/s/[[:space:]]*$/ ${args}/" \
+    -e "/^[[:space:]]*linux(efi)?[[:space:]]/s/[[:space:]]+$/ ${args}/" \
+    "$f" 2>/dev/null || true
+}
+
+inject_pc_thin_client_boot() {
+  local root_mnt="$1"
+  local boot_mnt="${2:-}"
+  local args="$PC_KERNEL_CMDLINE_EXTRA"
+
+  install -d -m 0755 "$root_mnt/etc/default/grub.d" "$root_mnt/etc/kernel/cmdline.d"
+  cat >"$root_mnt/etc/default/grub.d/99-mt-billing-thinclient.cfg" <<EOF
+# Thin-client / Wyse-class PCs — avoid i915 framebuffer hang on USB installer boot
+GRUB_CMDLINE_LINUX_DEFAULT="\${GRUB_CMDLINE_LINUX_DEFAULT} ${args}"
+EOF
+  cat >"$root_mnt/etc/kernel/cmdline.d/99-mt-billing.conf" <<EOF
+${args}
+EOF
+
+  local f
+  for f in \
+    "$root_mnt/boot/grub/grub.cfg" \
+    "$root_mnt/boot/grub/grub.cfg.new"; do
+    patch_grub_cfg_kernel_args "$f" "$args"
+  done
+  if [[ -n "$boot_mnt" && -d "$boot_mnt" ]]; then
+    for f in \
+      "$boot_mnt/EFI/ubuntu/grub.cfg" \
+      "$boot_mnt/grub/grub.cfg" \
+      "$boot_mnt/EFI/BOOT/grub.cfg"; do
+      patch_grub_cfg_kernel_args "$f" "$args"
+    done
+  fi
+  if [[ -d "$root_mnt/boot/efi" ]]; then
+    for f in \
+      "$root_mnt/boot/efi/EFI/ubuntu/grub.cfg" \
+      "$root_mnt/boot/efi/grub/grub.cfg"; do
+      patch_grub_cfg_kernel_args "$f" "$args"
+    done
+  fi
+
+  if [[ ! -x "$root_mnt/usr/sbin/update-grub" ]]; then
+    echo "PC thin-client: patched grub.cfg files (update-grub not present in image)."
+    return 0
+  fi
+
+  echo "PC thin-client: running update-grub inside image…"
+  mount --bind /dev "$root_mnt/dev"
+  mount -t proc proc "$root_mnt/proc"
+  mount -t sysfs sysfs "$root_mnt/sys"
+  mount -t devpts devpts "$root_mnt/dev/pts" 2>/dev/null || true
+  if [[ -n "$boot_mnt" && -d "$boot_mnt" ]]; then
+    mkdir -p "$root_mnt/boot/efi"
+    if ! mountpoint -q "$root_mnt/boot/efi" 2>/dev/null; then
+      mount --bind "$boot_mnt" "$root_mnt/boot/efi" || true
+    fi
+  fi
+  chroot "$root_mnt" /usr/sbin/update-grub || chroot "$root_mnt" /usr/sbin/grub-mkconfig -o /boot/grub/grub.cfg || true
+  umount "$root_mnt/dev/pts" 2>/dev/null || true
+  umount "$root_mnt/boot/efi" 2>/dev/null || true
+  umount "$root_mnt/sys"
+  umount "$root_mnt/proc"
+  umount "$root_mnt/dev"
+  echo "PC thin-client: kernel cmdline includes: ${args}"
 }
 
 # USB installer image: boot from stick → clone OS onto largest internal disk → power off.
@@ -668,9 +756,11 @@ EOF
   # PC / Ubuntu cloud image: NoCloud seed so the appliance boots without metadata.
   if [[ "$board_name" == "pc" || "$board_name" == "pc-amd64" ]]; then
     inject_nocloud_seed "$root_mnt" "mt-billing-pc" "mt-billing"
+    inject_pc_thin_client_boot "$root_mnt" "$([[ "$boot_mounted" -eq 1 ]] && echo "$boot_mnt" || echo "")"
   elif [[ "$board_name" == "pc-usb-amd64" ]]; then
     inject_nocloud_seed "$root_mnt" "mt-billing-pc-usb" "mt-billing-usb"
     inject_usb_installer "$root_mnt"
+    inject_pc_thin_client_boot "$root_mnt" "$([[ "$boot_mounted" -eq 1 ]] && echo "$boot_mnt" || echo "")"
   fi
 
   cat >"$root_mnt/etc/mt-billing-image.json" <<EOF
