@@ -268,7 +268,7 @@ write_files:
   - path: /etc/default/grub.d/99-mt-billing-thinclient.cfg
     permissions: '0644'
     content: |
-      GRUB_CMDLINE_LINUX_DEFAULT="${GRUB_CMDLINE_LINUX_DEFAULT} nomodeset i915.alpha_support=1 i915.fastboot=0 loglevel=4 plymouth.enable=0"
+      GRUB_CMDLINE_LINUX_DEFAULT="\${GRUB_CMDLINE_LINUX_DEFAULT} nomodeset i915.alpha_support=1 i915.fastboot=0 loglevel=4 plymouth.enable=0"
   - path: /etc/kernel/cmdline.d/99-mt-billing.conf
     permissions: '0644'
     content: |
@@ -555,6 +555,9 @@ inject_firstboot() {
 
   cleanup_mounts() {
     sync || true
+    if [[ -z "${root_mnt:-}" ]]; then
+      return 0
+    fi
     umount "$root_mnt/boot/firmware" 2>/dev/null || true
     umount "$root_mnt/boot/efi" 2>/dev/null || true
     umount "$root_mnt/boot" 2>/dev/null || true
@@ -684,6 +687,7 @@ PY
   mount "$root_loop" "$root_mnt"
   local boot_mounted=0
   if [[ -n "$boot_loop" ]]; then
+    mkdir -p "$root_mnt/boot/efi" "$root_mnt/boot/firmware"
     if [[ -d "$root_mnt/boot/firmware" ]] && mount -t vfat "$boot_loop" "$root_mnt/boot/firmware" 2>/dev/null; then
       boot_mnt="$root_mnt/boot/firmware"
       boot_mounted=1
@@ -695,8 +699,11 @@ PY
       boot_mounted=1
     elif mount -t vfat "$boot_loop" "$boot_mnt" 2>/dev/null; then
       boot_mounted=1
+    elif mount -t vfat "$boot_loop" "$root_mnt/boot/efi" 2>/dev/null; then
+      boot_mnt="$root_mnt/boot/efi"
+      boot_mounted=1
     else
-      echo "Note: FAT/EFI boot partition not mountable here; enabling SSH via first-boot instead."
+      echo "Note: FAT/EFI boot partition not mountable here; patching via root /boot/grub and cloud-init."
       boot_mnt=""
     fi
   else
