@@ -300,12 +300,45 @@ patch_grub_cfg_kernel_args() {
     "$f" 2>/dev/null || true
 }
 
+patch_efi_grub_via_mtools() {
+  local img="$1"
+  local boot_off="$2"
+  local args="$3"
+  [[ -n "$img" && -n "$boot_off" ]] || return 0
+  command -v mcopy >/dev/null 2>&1 || return 0
+  local confdir copied=0 path
+  confdir="$(mktemp -d /tmp/mt-grub.XXXXXX)"
+  for path in ::EFI/ubuntu/grub.cfg ::EFI/BOOT/grub.cfg ::grub/grub.cfg ::grub.cfg; do
+    if mcopy -o -i "${img}@@${boot_off}" "$path" "$confdir/grub.cfg" 2>/dev/null; then
+      copied=1
+      break
+    fi
+  done
+  if [[ "$copied" -ne 1 ]]; then
+    rm -rf "$confdir"
+    echo "Note: could not read EFI grub.cfg via mtools (offset ${boot_off})."
+    return 0
+  fi
+  patch_grub_cfg_kernel_args "$confdir/grub.cfg" "$args"
+  if mcopy -o -i "${img}@@${boot_off}" "$confdir/grub.cfg" ::EFI/ubuntu/grub.cfg 2>/dev/null; then
+    :
+  elif mcopy -o -i "${img}@@${boot_off}" "$confdir/grub.cfg" ::EFI/BOOT/grub.cfg 2>/dev/null; then
+    :
+  else
+    mcopy -o -i "${img}@@${boot_off}" "$confdir/grub.cfg" ::grub.cfg 2>/dev/null || true
+  fi
+  rm -rf "$confdir"
+  echo "Patched EFI grub.cfg on disk image (thin-client kernel args)."
+}
+
 inject_pc_thin_client_boot() {
   local root_mnt="$1"
   local boot_mnt="${2:-}"
+  local img="${3:-}"
+  local boot_off="${4:-}"
   local args="$PC_KERNEL_CMDLINE_EXTRA"
 
-  install -d -m 0755 "$root_mnt/etc/default/grub.d" "$root_mnt/etc/kernel/cmdline.d"
+  install -d -m 0755 "$root_mnt/etc/default/grub.d" "$root_mnt/etc/kernel/cmdline.d" "$root_mnt/boot/grub"
   cat >"$root_mnt/etc/default/grub.d/99-mt-billing-thinclient.cfg" <<EOF
 # Thin-client / Wyse-class PCs — avoid i915 framebuffer hang on USB installer boot
 GRUB_CMDLINE_LINUX_DEFAULT="\${GRUB_CMDLINE_LINUX_DEFAULT} ${args}"
@@ -335,6 +368,8 @@ EOF
       patch_grub_cfg_kernel_args "$f" "$args"
     done
   fi
+
+  patch_efi_grub_via_mtools "$img" "$boot_off" "$args"
 
   if [[ ! -x "$root_mnt/usr/sbin/update-grub" ]]; then
     echo "PC thin-client: patched grub.cfg files (update-grub not present in image)."
@@ -763,11 +798,11 @@ EOF
   # PC / Ubuntu cloud image: NoCloud seed so the appliance boots without metadata.
   if [[ "$board_name" == "pc" || "$board_name" == "pc-amd64" ]]; then
     inject_nocloud_seed "$root_mnt" "mt-billing-pc" "mt-billing"
-    inject_pc_thin_client_boot "$root_mnt" "$([[ "$boot_mounted" -eq 1 ]] && echo "$boot_mnt" || echo "")"
+    inject_pc_thin_client_boot "$root_mnt" "$([[ "$boot_mounted" -eq 1 ]] && echo "$boot_mnt" || echo "")" "$img" "${boot_off:-}"
   elif [[ "$board_name" == "pc-usb-amd64" ]]; then
     inject_nocloud_seed "$root_mnt" "mt-billing-pc-usb" "mt-billing-usb"
     inject_usb_installer "$root_mnt"
-    inject_pc_thin_client_boot "$root_mnt" "$([[ "$boot_mounted" -eq 1 ]] && echo "$boot_mnt" || echo "")"
+    inject_pc_thin_client_boot "$root_mnt" "$([[ "$boot_mounted" -eq 1 ]] && echo "$boot_mnt" || echo "")" "$img" "${boot_off:-}"
   fi
 
   cat >"$root_mnt/etc/mt-billing-image.json" <<EOF
