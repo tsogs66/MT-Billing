@@ -1057,7 +1057,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                   <button type="button" className="btn-secondary" onClick={loadProfiles} disabled={tabBusy}>
                     <RefreshCw size={16} /> Refresh
                   </button>
-                  <button type="button" className="btn-primary" onClick={() => setShowProfileAdd(true)}>
+                  <button type="button" className="btn-primary" onClick={() => { setProfileEdit(null); setShowProfileAdd(true); }}>
                     <Plus size={16} /> Add Profile
                   </button>
                 </>
@@ -1086,7 +1086,7 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
                     peso(p.price),
                     p.type || 'pppoe',
                     <div className="flex justify-end gap-1">
-                      <IconAction icon={Pencil} title="Edit" tone="sky" onClick={() => setProfileEdit(p)} />
+                      <IconAction icon={Pencil} title="Edit" tone="sky" onClick={() => { setShowProfileAdd(false); setProfileEdit(p); }} />
                       <IconAction icon={Trash2} title="Delete" tone="rose" onClick={() => deleteProfile(p)} />
                     </div>,
                   ],
@@ -1241,7 +1241,9 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
 
       {(showProfileAdd || profileEdit) && (
         <ProfileFormModal
+          key={profileEdit ? `edit-${profileEdit.name}` : 'add-profile'}
           initial={profileEdit}
+          mode={profileEdit ? 'edit' : 'add'}
           routerId={current?.id}
           onClose={() => {
             setShowProfileAdd(false);
@@ -1556,16 +1558,18 @@ export default function PPPoE({ service, title }: { service: 'pppoe' | 'ipoe'; t
 
 function ProfileFormModal({
   initial,
+  mode,
   routerId,
   onClose,
   onSaved,
 }: {
   initial: any | null;
+  mode: 'add' | 'edit';
   routerId?: number;
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const isEdit = !!initial?.id && Number.isFinite(Number(initial.id));
+  const isEdit = mode === 'edit';
   const [name, setName] = useState(initial?.name || '');
   const [rateLimit, setRateLimit] = useState(initial?.rateLimit || '');
   const [price, setPrice] = useState(String(initial?.price ?? 0));
@@ -1591,8 +1595,11 @@ function ProfileFormModal({
         routerId,
         mikrotikId: initial?.mikrotikId,
       };
-      if (isEdit) await api.put(`/pppoe/profiles/${initial.id}`, payload);
-      else await api.post('/pppoe/profiles', payload);
+      if (isEdit) {
+        const dbId = Number(initial?.id);
+        const routeId = Number.isFinite(dbId) && dbId > 0 ? dbId : 0;
+        await api.put(`/pppoe/profiles/${routeId}`, payload);
+      } else await api.post('/pppoe/profiles', payload);
       onSaved();
     } catch (e: any) {
       setError(e?.response?.data?.error || 'Save failed');
