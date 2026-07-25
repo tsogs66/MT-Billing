@@ -142,6 +142,10 @@ function addMonthsPreserveDay(iso: string, months: number): string {
 }
 
 const app = express();
+// Standard deployment puts nginx directly in front (see README); trust exactly
+// one hop so req.ip reflects the real client for the audit log instead of
+// always logging localhost.
+app.set('trust proxy', 1);
 
 // CORS_ORIGIN: comma-separated allowlist (e.g. https://billing.example.com).
 // Auth uses a Bearer token (not cookies), so an open CORS policy can't be used
@@ -319,6 +323,53 @@ app.post('/api/public/pay/:token/confirm', async (req, res) => {
 app.get('/api/health', (_req, res) => res.json({ ok: true, ts: Date.now() }));
 
 app.use('/api', requireAuth);
+
+const AUDIT_REDACT_KEYS = /pass|secret|token|key|pin|otp|code/i;
+function redactBodyForAudit(body: unknown): string | null {
+  if (!body || typeof body !== 'object') return null;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(body as Record<string, unknown>)) {
+    if (AUDIT_REDACT_KEYS.test(k)) {
+      out[k] = '[redacted]';
+    } else if (typeof v === 'string' && v.length > 200) {
+      out[k] = v.slice(0, 200) + '…';
+    } else if (v != null && typeof v === 'object') {
+      out[k] = Array.isArray(v) ? `[array:${v.length}]` : '[object]';
+    } else {
+      out[k] = v;
+    }
+  }
+  const json = JSON.stringify(out);
+  return json.length > 2000 ? json.slice(0, 2000) + '…' : json;
+}
+
+/** Records who did what: every mutating /api call, regardless of whether it was
+ *  ultimately allowed (read-only/license-gate rejections are audit-worthy too). */
+app.use('/api', (req: AuthedRequest, res, next) => {
+  const method = req.method.toUpperCase();
+  if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return next();
+  res.on('finish', () => {
+    try {
+      db.prepare(
+        `INSERT INTO audit_log (user_id, username, role, method, path, status_code, ip, body_summary)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        req.user?.id ?? null,
+        req.user?.username ?? null,
+        req.user?.role ?? null,
+        method,
+        req.originalUrl.split('?')[0],
+        res.statusCode,
+        req.ip || null,
+        redactBodyForAudit(req.body)
+      );
+    } catch {
+      // never let audit logging break the request it's observing
+    }
+  });
+  next();
+});
+
 app.use('/api', requireLicenseOrAllowlist);
 app.use('/api', requireRoleWritable);
 
@@ -3363,6 +3414,20 @@ app.get('/api/inventory', (_req, res) => {
 // ---- Logs ----
 app.get('/api/logs', (_req, res) => {
   res.json(db.prepare('SELECT id, level, source, message, created_at AS date FROM logs ORDER BY id DESC LIMIT 200').all());
+});
+
+/** Audit trail of mutating actions (who did what, from where, and whether it was allowed). */
+app.get('/api/audit-log', (req, res) => {
+  const limit = Math.min(Math.max(Number(req.query.limit) || 200, 1), 1000);
+  res.json(
+    db
+      .prepare(
+        `SELECT id, user_id AS userId, username, role, method, path, status_code AS statusCode,
+                ip, body_summary AS bodySummary, created_at AS date
+         FROM audit_log ORDER BY id DESC LIMIT ?`
+      )
+      .all(limit)
+  );
 });
 
 // ---- Company ----
