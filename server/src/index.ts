@@ -1047,6 +1047,34 @@ app.get('/api/pppoe/users', async (req, res) => {
   );
 });
 
+/** CSV export of the current service's users (core billing fields, not live router state).
+ *  Registered before the /:id route below — "export.csv" would otherwise match :id. */
+app.get('/api/pppoe/users/export.csv', (req, res) => {
+  const service = String(req.query.service || 'pppoe');
+  const routerId = req.query.routerId ? Number(req.query.routerId) : null;
+  const rows = (
+    routerId
+      ? db.prepare('SELECT * FROM pppoe_users WHERE service = ? AND router_id = ? ORDER BY id').all(service, routerId)
+      : db.prepare('SELECT * FROM pppoe_users WHERE service = ? ORDER BY id').all(service)
+  ) as any[];
+
+  const columns = [
+    'username', 'customer_name', 'account_number', 'profile', 'status', 'subscription_due',
+    'price', 'address', 'email', 'contact', 'router_id', 'service', 'expiration_profile',
+  ];
+  const csvEscape = (v: unknown) => {
+    const s = v == null ? '' : String(v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const lines = [columns.join(',')];
+  for (const r of rows) lines.push(columns.map((c) => csvEscape((r as any)[c])).join(','));
+  const csv = lines.join('\r\n');
+
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="${service}-users-${new Date().toISOString().slice(0, 10)}.csv"`);
+  res.send(csv);
+});
+
 // Full record for the edit form.
 app.get('/api/pppoe/users/:id', (req, res) => {
   const row = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(Number(req.params.id));
@@ -1064,24 +1092,25 @@ function generateAccountNumber(): string {
   return String(Date.now()).slice(-12).padStart(12, '0');
 }
 
-app.post('/api/pppoe/users', async (req, res) => {
-  const b = req.body || {};
+/** Shared by the single-create route and CSV bulk import — same validation,
+ *  MikroTik secret creation, and rollback-on-failure behavior either way. */
+async function createPppoeUserRecord(b: Record<string, any>): Promise<{ ok: true; row: any } | { ok: false; status: number; error: string }> {
   const {
     username, password, customer_name, profile, status, subscription_due, price, service,
     expiration_profile, contact, email, nap_id, plc_port, address, lat, lng,
   } = b;
-  if (!username) return res.status(400).json({ error: 'username is required' });
-  if (!password) return res.status(400).json({ error: 'password is required to create the MikroTik PPP secret' });
+  if (!username) return { ok: false, status: 400, error: 'username is required' };
+  if (!password) return { ok: false, status: 400, error: 'password is required to create the MikroTik PPP secret' };
   if (!profile || isSystemPppProfileName(profile)) {
-    return res.status(400).json({ error: 'Select a billing plan (not default / non-payments)' });
+    return { ok: false, status: 400, error: 'Select a billing plan (not default / non-payments)' };
   }
 
   const routerId = Number(b.router_id || b.routerId || 0);
   if (!routerId) {
-    return res.status(400).json({ error: 'Select a router first (routerId required to create PPP secret).' });
+    return { ok: false, status: 400, error: 'Select a router first (routerId required to create PPP secret).' };
   }
   const router = getRouterById(routerId);
-  if (!router) return res.status(404).json({ error: 'Router not found' });
+  if (!router) return { ok: false, status: 404, error: 'Router not found' };
 
   const prof = db.prepare('SELECT price FROM profiles WHERE name = ?').get(profile) as { price: number } | undefined;
   const account = generateAccountNumber();
@@ -1118,7 +1147,7 @@ app.post('/api/pppoe/users', async (req, res) => {
     insertedId = Number(info.lastInsertRowid);
   } catch (e: any) {
     if (String(e?.message || '').includes('UNIQUE')) {
-      return res.status(409).json({ error: 'Username already exists' });
+      return { ok: false, status: 409, error: 'Username already exists' };
     }
     throw e;
   }
@@ -1127,10 +1156,11 @@ app.post('/api/pppoe/users', async (req, res) => {
 
   if (!routerHasApi(router)) {
     db.prepare('DELETE FROM pppoe_users WHERE id = ?').run(insertedId);
-    return res.status(400).json({
-      error:
-        'Router API credentials are not configured. Open Router Management, set Host + API user/password, then try again.',
-    });
+    return {
+      ok: false,
+      status: 400,
+      error: 'Router API credentials are not configured. Open Router Management, set Host + API user/password, then try again.',
+    };
   }
 
   try {
@@ -1138,9 +1168,11 @@ app.post('/api/pppoe/users', async (req, res) => {
     const mtProfile = planMeta?.pppProfile || mikrotikProfileForPlan(row.profile);
     if (!mtProfile) {
       db.prepare('DELETE FROM pppoe_users WHERE id = ?').run(insertedId);
-      return res.status(400).json({
+      return {
+        ok: false,
+        status: 400,
         error: `Billing plan "${row.profile}" has no linked MikroTik PPP profile. Edit the plan under Billing Plans and select an existing profile.`,
-      });
+      };
     }
     await addPppSecret(router, {
       name: row.username,
@@ -1152,9 +1184,7 @@ app.post('/api/pppoe/users', async (req, res) => {
     });
   } catch (e: any) {
     db.prepare('DELETE FROM pppoe_users WHERE id = ?').run(insertedId);
-    return res.status(502).json({
-      error: e?.message || 'Failed to create PPP secret on MikroTik',
-    });
+    return { ok: false, status: 502, error: e?.message || 'Failed to create PPP secret on MikroTik' };
   }
 
   db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
@@ -1162,7 +1192,40 @@ app.post('/api/pppoe/users', async (req, res) => {
     'pppoe',
     `Created ${row.service || 'pppoe'} user ${username} (acct ${account}) + MikroTik secret`
   );
-  res.status(201).json(row);
+  return { ok: true, row };
+}
+
+app.post('/api/pppoe/users', async (req, res) => {
+  const result = await createPppoeUserRecord(req.body || {});
+  if (!result.ok) return res.status(result.status).json({ error: result.error });
+  res.status(201).json(result.row);
+});
+
+/** Bulk-create from a parsed CSV (client parses the file and posts row objects). */
+app.post('/api/pppoe/users/import-batch', async (req, res) => {
+  const rows: Record<string, any>[] = Array.isArray(req.body?.users) ? req.body.users : [];
+  if (!rows.length) return res.status(400).json({ error: 'No rows to import' });
+  if (rows.length > 500) return res.status(400).json({ error: 'Import is limited to 500 rows at a time' });
+
+  const created: string[] = [];
+  const failed: { row: number; username: string; error: string }[] = [];
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    try {
+      const result = await createPppoeUserRecord(r);
+      if (result.ok) created.push(result.row.username);
+      else failed.push({ row: i + 1, username: String(r.username || ''), error: result.error });
+    } catch (e: any) {
+      failed.push({ row: i + 1, username: String(r.username || ''), error: e?.message || 'Unexpected error' });
+    }
+  }
+
+  db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+    failed.length ? 'warning' : 'info',
+    'pppoe',
+    `CSV import: ${created.length} created, ${failed.length} failed`
+  );
+  res.json({ created: created.length, failed });
 });
 
 app.put('/api/pppoe/users/:id', async (req, res) => {
