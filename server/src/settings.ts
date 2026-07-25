@@ -5,7 +5,7 @@ import path from 'path';
 import { exec, spawn } from 'child_process';
 import { db, backupsDir, dbPath } from './db.js';
 import { probeRouter } from './mikrotik.js';
-import { panelHardwareId, expectedPasswordResetCode, normalizeCode } from './panelId.js';
+import { panelHardwareId, verifyPasswordResetCode } from './panelId.js';
 
 export const settingsRouter = express.Router();
 
@@ -416,9 +416,7 @@ settingsRouter.post('/account/reset-password', (req: any, res) => {
   }
   if (!authorized && hasRecovery) {
     const hwid = panelHardwareId();
-    const expected = normalizeCode(expectedPasswordResetCode(hwid));
-    const provided = normalizeCode(String(recoveryKey));
-    authorized = provided === expected;
+    authorized = verifyPasswordResetCode(hwid, String(recoveryKey));
     if (!authorized) {
       db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
         'warning',

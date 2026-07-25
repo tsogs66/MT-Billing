@@ -1,9 +1,47 @@
 import jwt from 'jsonwebtoken';
+import fs from 'fs';
+import path from 'path';
+import crypto from 'crypto';
 import type { Request, Response, NextFunction } from 'express';
-import { db } from './db.js';
+import { db, dataDir } from './db.js';
 import { ALL_PERMISSIONS, getLicenseStatus } from './extra.js';
 
-const SECRET = process.env.JWT_SECRET || 'change-me-in-production';
+/** Historical hardcoded default — treated as "unset" so old .env files don't silently stay weak. */
+const KNOWN_WEAK_DEFAULTS = new Set(['change-me-in-production', '']);
+
+/**
+ * Resolve the JWT signing secret. Prefers `JWT_SECRET` from the environment; if
+ * that's unset (or still the old hardcoded default), falls back to a random
+ * secret generated on first boot and persisted locally so tokens survive
+ * restarts. That file is gitignored and unique per install, so it's never
+ * shipped in source the way a hardcoded fallback would be.
+ */
+function resolveSecret(): string {
+  const fromEnv = process.env.JWT_SECRET;
+  if (fromEnv && !KNOWN_WEAK_DEFAULTS.has(fromEnv)) return fromEnv;
+
+  const secretPath = path.join(dataDir, '.jwt-secret');
+  try {
+    const existing = fs.readFileSync(secretPath, 'utf8').trim();
+    if (existing) return existing;
+  } catch {
+    // fall through to generation
+  }
+  const generated = crypto.randomBytes(48).toString('hex');
+  try {
+    fs.writeFileSync(secretPath, generated, { mode: 0o600 });
+  } catch (e) {
+    console.warn('[auth] could not persist generated JWT secret, tokens will invalidate on restart:', e);
+  }
+  console.warn(
+    '[auth] JWT_SECRET not set in server/.env — generated and persisted a random secret at ' +
+      secretPath +
+      '. Set JWT_SECRET explicitly if you run multiple server instances behind a load balancer.'
+  );
+  return generated;
+}
+
+const SECRET = resolveSecret();
 
 export interface AuthedRequest extends Request {
   user?: { id: number; username: string; role: string };

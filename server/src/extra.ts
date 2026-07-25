@@ -3,7 +3,6 @@ import bcrypt from 'bcryptjs';
 import { db } from './db.js';
 import {
   panelHardwareId,
-  expectedLicenseKey,
   validateLicenseKey,
   expiresAtFromDuration,
   LICENSE_DURATIONS,
@@ -982,9 +981,6 @@ extraRouter.get('/logs/email', (req, res) => {
 // ---------------- License ----------------
 function hardwareId(): string {
   return panelHardwareId();
-}
-export function expectedKeyFor(hwid: string): string {
-  return expectedLicenseKey(hwid);
 }
 
 export function getLicenseStatus(): {

@@ -9,7 +9,7 @@ import bcrypt from 'bcryptjs';
 import si from 'systeminformation';
 import { db, initSchema, seed, migrate } from './db.js';
 import { signToken, requireAuth, sessionPayload, requireLicenseOrAllowlist, requireRoleWritable, type AuthedRequest } from './auth.js';
-import { panelHardwareId, expectedPasswordResetCode, normalizeCode } from './panelId.js';
+import { panelHardwareId, verifyPasswordResetCode, normalizeCode } from './panelId.js';
 import {
   tryLiveResource,
   withRouter,
@@ -142,7 +142,26 @@ function addMonthsPreserveDay(iso: string, months: number): string {
 }
 
 const app = express();
-app.use(cors());
+
+// CORS_ORIGIN: comma-separated allowlist (e.g. https://billing.example.com).
+// Auth uses a Bearer token (not cookies), so an open CORS policy can't be used
+// to ride a victim's session — but it still lets any site's JS read panel API
+// responses if it can obtain a token, so restrict it once you have a fixed
+// public origin. Left permissive by default so fresh installs aren't broken
+// before the operator sets a public hostname.
+const corsOrigins = (process.env.CORS_ORIGIN || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+if (corsOrigins.length) {
+  app.use(cors({ origin: corsOrigins }));
+} else {
+  console.warn(
+    '[cors] CORS_ORIGIN not set in server/.env — the API accepts cross-origin requests from any site. ' +
+      'Set CORS_ORIGIN=https://billing.example.com (comma-separated for multiple) to restrict it.'
+  );
+  app.use(cors());
+}
 // Company logo + GCash/Maya QR images are stored as data-URLs in JSON
 // DB restore uploads arrive as base64 data-URLs (~33% larger than the .db file).
 app.use(express.json({ limit: '100mb' }));
@@ -197,9 +216,8 @@ app.get('/api/company/branding', (_req, res) => {
 app.post('/api/auth/forgot-password-reset', (req, res) => {
   const hwid = panelHardwareId();
   const provided = normalizeCode(req.body?.code);
-  const expected = normalizeCode(expectedPasswordResetCode(hwid));
   if (!provided) return res.status(400).json({ error: 'Reset code is required.' });
-  if (provided !== expected) {
+  if (!verifyPasswordResetCode(hwid, provided)) {
     db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
       'warning',
       'auth',
