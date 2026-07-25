@@ -125,6 +125,26 @@ import {
   sendPaymentReceiptEmail,
 } from './notify.js';
 
+/**
+ * Last-resort safety net. node-routeros's underlying Connector can emit a
+ * stray 'error' on itself after its own connect-phase listeners already fired
+ * once and were removed (e.g. an OS-level socket error arriving after the
+ * app-level connect timeout already rejected) — observed crashing the entire
+ * panel (billing, PPPoE, everything) from ONE unreachable/flaky router, which
+ * is an ordinary, frequent condition for an ISP (WAN flaps, reboots, a
+ * mistyped IP), not an exceptional one. mikrotik.ts's withRouter now also
+ * attaches a listener at the actual emission point, but this stays as a
+ * backstop against the same class of event-emitter quirk elsewhere.
+ * systemd's Restart=on-failure remains the fallback for genuinely fatal
+ * conditions this doesn't (and shouldn't try to) paper over.
+ */
+process.on('uncaughtException', (err) => {
+  console.error('[fatal] uncaughtException (panel kept running):', err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[fatal] unhandledRejection (panel kept running):', reason);
+});
+
 initSchema();
 migrate();
 seed();
