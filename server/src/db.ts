@@ -461,6 +461,15 @@ export function migrate() {
   if (!columnExists('transactions', 'receipt_json')) {
     db.exec('ALTER TABLE transactions ADD COLUMN receipt_json TEXT');
   }
+
+  const userCols: [string, string][] = [
+    ['totp_secret', 'TEXT'],
+    ['totp_enabled', 'INTEGER DEFAULT 0'],
+    ['totp_backup_codes', 'TEXT'],
+  ];
+  for (const [col, type] of userCols) {
+    if (!columnExists('users', col)) db.exec(`ALTER TABLE users ADD COLUMN ${col} ${type}`);
+  }
 }
 
 /** Wipe seeded demo rows (routers, clients, sales, map, logs, etc.) once per database. Inventory is preserved. */

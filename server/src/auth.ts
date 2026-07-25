@@ -51,8 +51,29 @@ export function signToken(payload: { id: number; username: string; role: string 
   return jwt.sign(payload, SECRET, { expiresIn: '12h' });
 }
 
+/** Short-lived token issued after password check when 2FA is enabled — proves
+ *  "who", not "logged in". Only /api/login/totp accepts it (see
+ *  verifyPendingTotpToken); requireAuth explicitly rejects anything carrying a
+ *  `purpose` claim so this can never be replayed against the general API even
+ *  with reduced permissions. */
+export function signPendingTotpToken(userId: number) {
+  return jwt.sign({ id: userId, purpose: 'totp-pending' }, SECRET, { expiresIn: '5m' });
+}
+
+export function verifyPendingTotpToken(token: string): number | null {
+  try {
+    const payload = jwt.verify(token, SECRET) as { id?: number; purpose?: string };
+    if (payload?.purpose !== 'totp-pending' || !payload.id) return null;
+    return Number(payload.id);
+  } catch {
+    return null;
+  }
+}
+
 export function verifyToken(token: string): AuthedRequest['user'] {
-  return jwt.verify(token, SECRET) as AuthedRequest['user'];
+  const payload = jwt.verify(token, SECRET) as AuthedRequest['user'] & { purpose?: string };
+  if (payload?.purpose) throw new Error('Token is not a session token');
+  return payload;
 }
 
 export function requireAuth(req: AuthedRequest, res: Response, next: NextFunction) {

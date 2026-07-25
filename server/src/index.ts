@@ -8,7 +8,11 @@ import cors from 'cors';
 import bcrypt from 'bcryptjs';
 import si from 'systeminformation';
 import { db, initSchema, seed, migrate } from './db.js';
-import { signToken, requireAuth, sessionPayload, requireLicenseOrAllowlist, requireRoleWritable, type AuthedRequest } from './auth.js';
+import {
+  signToken, requireAuth, sessionPayload, requireLicenseOrAllowlist, requireRoleWritable,
+  signPendingTotpToken, verifyPendingTotpToken, type AuthedRequest,
+} from './auth.js';
+import { verifyTotpToken } from './totp.js';
 import { panelHardwareId, verifyPasswordResetCode, normalizeCode } from './panelId.js';
 import {
   tryLiveResource,
@@ -177,13 +181,62 @@ const PORT = Number(process.env.PORT) || 4000;
 app.post('/api/login', (req, res) => {
   const { username, password } = req.body || {};
   const row = db.prepare('SELECT * FROM users WHERE username = ?').get(username) as
-    | { id: number; username: string; password_hash: string; role: string }
+    | { id: number; username: string; password_hash: string; role: string; totp_enabled?: number }
     | undefined;
   if (!row || !bcrypt.compareSync(password || '', row.password_hash)) {
     return res.status(401).json({ error: 'Invalid username or password' });
   }
+  if (row.totp_enabled) {
+    return res.json({ requiresTotp: true, pendingToken: signPendingTotpToken(row.id) });
+  }
   const token = signToken({ id: row.id, username: row.username, role: row.role });
   const session = sessionPayload(row);
+  res.json({ token, ...session });
+});
+
+/** Completes login after /api/login returned requiresTotp: verifies the 6-digit
+ *  code (or a one-time backup code) against the pendingToken's user. */
+app.post('/api/login/totp', (req, res) => {
+  const { pendingToken, code } = req.body || {};
+  const userId = verifyPendingTotpToken(String(pendingToken || ''));
+  if (!userId) return res.status(401).json({ error: 'Login session expired, please sign in again.' });
+
+  const row = db.prepare('SELECT * FROM users WHERE id = ?').get(userId) as
+    | { id: number; username: string; role: string; totp_secret?: string; totp_backup_codes?: string }
+    | undefined;
+  if (!row || !row.totp_secret) return res.status(401).json({ error: 'Two-factor is not set up for this account.' });
+
+  const trimmed = String(code || '').trim();
+  let usedBackupCode = false;
+  let ok = verifyTotpToken(row.totp_secret, trimmed);
+  if (!ok && trimmed) {
+    const codes: string[] = JSON.parse(row.totp_backup_codes || '[]');
+    const idx = codes.findIndex((hash) => bcrypt.compareSync(trimmed.toUpperCase(), hash));
+    if (idx !== -1) {
+      ok = true;
+      usedBackupCode = true;
+      codes.splice(idx, 1);
+      db.prepare('UPDATE users SET totp_backup_codes = ? WHERE id = ?').run(JSON.stringify(codes), row.id);
+    }
+  }
+  if (!ok) {
+    db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+      'warning',
+      'auth',
+      `Failed 2FA code for ${row.username}`
+    );
+    return res.status(401).json({ error: 'Invalid authentication code.' });
+  }
+
+  const token = signToken({ id: row.id, username: row.username, role: row.role });
+  const session = sessionPayload(row);
+  if (usedBackupCode) {
+    db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
+      'warning',
+      'auth',
+      `${row.username} logged in using a 2FA backup code`
+    );
+  }
   res.json({ token, ...session });
 });
 
