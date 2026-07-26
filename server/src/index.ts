@@ -92,6 +92,7 @@ import {
   mikrotikProfileForPlan,
   bulkChangePppoeMikrotikProfiles,
   cancelRouterExpirySchedule,
+  withTimeout,
 } from './billing.js';
 import {
   startUsageScheduler,
@@ -1576,20 +1577,32 @@ app.post('/api/pppoe/users/:id/payment', async (req, res) => {
       discount_days: b.discount_days,
       source: 'admin',
     });
+    // A slow SMTP/SMS gateway must not hold up the response either — same
+    // reasoning as the router-sync budget inside recordPppoePayment. The
+    // send itself still completes in the background; it just won't be
+    // reflected in `emailed`/`smsSent` if it was still in flight past the budget.
     let emailed = false;
     if (b.send_receipt && result.user?.email) {
       const receipt = result.receipt;
-      const r = await sendPaymentReceiptEmail({
-        to: result.user.email,
-        clientId: id,
-        customerName: result.user.customer_name || receipt?.customer,
-        receipt,
-      });
+      const r = await withTimeout(
+        sendPaymentReceiptEmail({
+          to: result.user.email,
+          clientId: id,
+          customerName: result.user.customer_name || receipt?.customer,
+          receipt,
+        }),
+        8000,
+        { sent: false, detail: 'timed out — continuing in the background' }
+      );
       emailed = r.sent;
     }
     let smsSent = false;
     if (b.send_sms && result.user?.contact) {
-      const r = await sendPaymentConfirmationSms(result.user, result.total);
+      const r = await withTimeout(
+        sendPaymentConfirmationSms(result.user, result.total),
+        8000,
+        { sent: false, detail: 'timed out — continuing in the background' }
+      );
       smsSent = r.sent;
     }
     res.json({ ...result, emailed, smsSent });
