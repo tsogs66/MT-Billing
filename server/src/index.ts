@@ -91,6 +91,7 @@ import {
   getBillingPlan,
   mikrotikProfileForPlan,
   bulkChangePppoeMikrotikProfiles,
+  cancelRouterExpirySchedule,
 } from './billing.js';
 import {
   startUsageScheduler,
@@ -123,6 +124,7 @@ import {
   isNonPaymentAccount,
   isBillingActiveAccount,
   sendPaymentReceiptEmail,
+  sendPaymentConfirmationSms,
 } from './notify.js';
 
 /**
@@ -1406,6 +1408,9 @@ app.post('/api/pppoe/users/:id/toggle-enabled', async (req, res) => {
       return res.status(502).json({ error: e?.message || 'Could not update PPP secret on MikroTik' });
     }
   }
+  // A manual toggle overrides whatever the automatic grace/expiry schedule had
+  // queued on the router — cancel it so it can't act against this override later.
+  cancelRouterExpirySchedule(u).catch(() => undefined);
   if (disabling) {
     db.prepare("UPDATE pppoe_users SET status = 'disabled', online = 0 WHERE id = ?").run(id);
   } else {
@@ -1438,6 +1443,8 @@ app.delete('/api/pppoe/users/:id', async (req, res) => {
     } catch {
       /* still delete from panel if secret already gone */
     }
+    // Don't leave a scheduled grace/disable pointed at a now-deleted username.
+    cancelRouterExpirySchedule(existing).catch(() => undefined);
   }
 
   db.prepare('DELETE FROM pppoe_users WHERE id = ?').run(id);
@@ -1580,7 +1587,12 @@ app.post('/api/pppoe/users/:id/payment', async (req, res) => {
       });
       emailed = r.sent;
     }
-    res.json({ ...result, emailed });
+    let smsSent = false;
+    if (b.send_sms && result.user?.contact) {
+      const r = await sendPaymentConfirmationSms(result.user, result.total);
+      smsSent = r.sent;
+    }
+    res.json({ ...result, emailed, smsSent });
   } catch (e: any) {
     const code = /not found/i.test(e?.message || '') ? 404 : 400;
     res.status(code).json({ error: e?.message || 'Payment failed' });
