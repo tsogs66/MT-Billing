@@ -1,4 +1,6 @@
 activator/dist/
+activator/keys/
+*.pem
 build/
 coverage/
 dist/
@@ -10,7 +12,10 @@ server/data/backups/
 server/data/*.db
 server/data/*.db-*
 server/data/pay-proofs/
-!server/data/mt-billing.db
+server/data/.jwt-secret
+*.sqlite
+*.sqlite3
+*.db
 *.tsbuildinfo
 
 # Capacitor / Android local tooling

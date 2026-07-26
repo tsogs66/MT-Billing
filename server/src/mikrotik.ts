@@ -29,6 +29,15 @@ export async function withRouter<T>(
     // 4s was too aggressive for WAN/API-over-VPN boards and multi-step writes.
     timeout: opts?.timeoutSec ?? 15,
   });
+  // node-routeros re-emits late/stray socket errors as 'error' on this instance
+  // after its connect-phase listeners already fired once and were removed (e.g.
+  // an OS-level socket error arriving after the app-level connect timeout already
+  // rejected). Node's EventEmitter throws — crashing the whole process, not just
+  // this request — on an 'error' event with no listener. An unreachable router is
+  // an entirely normal condition (WAN down, reboot, wrong IP), so this must never
+  // be allowed to take the panel down; connect()/fn() rejecting is how callers
+  // actually observe the failure.
+  api.on('error', () => {});
   await api.connect();
   try {
     return await fn(api);
