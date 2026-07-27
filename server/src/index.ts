@@ -93,6 +93,9 @@ import {
   bulkChangePppoeMikrotikProfiles,
   cancelRouterExpirySchedule,
   withTimeout,
+  enqueueRouterSync,
+  resolveRouterSync,
+  startRouterSyncScheduler,
 } from './billing.js';
 import {
   startUsageScheduler,
@@ -177,6 +180,13 @@ function addMonthsPreserveDay(iso: string, months: number): string {
 // so a short race here just means "possibly a few seconds stale" instead of
 // "blocked for 15+ seconds", with `live: false` in the response marking it.
 const LIVE_READ_BUDGET_MS = 4000;
+
+// Cap how long a manual write (enable/disable a user, etc.) will wait on the
+// router before recording the intent anyway and queuing it for the
+// background router-sync poller to retry — same "commit the intent, sync
+// later" reasoning as recordPppoePayment, just with a more generous budget
+// than reads since a write is worth waiting a bit longer for.
+const WRITE_SYNC_BUDGET_MS = 8000;
 
 const app = express();
 // Standard deployment puts nginx directly in front (see README); trust exactly
@@ -1418,26 +1428,16 @@ app.put('/api/pppoe/users/:id', async (req, res) => {
 });
 
 // Enable/disable the client account on MikroTik (/ppp/secret) and in the DB.
+// The DB status always commits — a slow/unreachable router must never block
+// an admin's intent from being recorded (same reasoning as the payment
+// route). If the live push fails, it's queued and retried automatically by
+// the router-sync poller once the router is reachable again.
 app.post('/api/pppoe/users/:id/toggle-enabled', async (req, res) => {
   const id = Number(req.params.id);
   const u = db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(id) as any;
   if (!u) return res.status(404).json({ error: 'not found' });
   const disabling = u.status !== 'disabled';
-  const router = getRouterById(u.router_id);
-  if (router?.host && router?.api_user) {
-    try {
-      await setPppSecretEnabled(router, u.username, !disabling);
-      if (disabling) {
-        try {
-          await removePppActiveByName(router, u.username);
-        } catch {
-          /* session drop is best-effort */
-        }
-      }
-    } catch (e: any) {
-      return res.status(502).json({ error: e?.message || 'Could not update PPP secret on MikroTik' });
-    }
-  }
+
   // A manual toggle overrides whatever the automatic grace/expiry schedule had
   // queued on the router — cancel it so it can't act against this override later.
   cancelRouterExpirySchedule(u).catch(() => undefined);
@@ -1446,19 +1446,70 @@ app.post('/api/pppoe/users/:id/toggle-enabled', async (req, res) => {
   } else {
     db.prepare("UPDATE pppoe_users SET status = 'Active', online = 0, nonpayment_since = NULL WHERE id = ?").run(id);
   }
+
+  const router = getRouterById(u.router_id);
+  let routerSynced = false;
+  let routerError: string | null = null;
+  if (router?.host && router?.api_user) {
+    try {
+      const ok = await withTimeout(
+        (async () => {
+          await setPppSecretEnabled(router, u.username, !disabling);
+          if (disabling) {
+            try {
+              await removePppActiveByName(router, u.username);
+            } catch {
+              /* session drop is best-effort */
+            }
+          }
+          return true;
+        })(),
+        WRITE_SYNC_BUDGET_MS,
+        null
+      );
+      if (!ok) throw new Error('Router is slow to respond');
+      routerSynced = true;
+      resolveRouterSync(u.router_id, id);
+    } catch (e: any) {
+      routerError = e?.message || 'Could not update PPP secret on MikroTik';
+      enqueueRouterSync(u.router_id, id, routerError || 'unknown error');
+    }
+  }
+
   db.prepare('INSERT INTO logs (level, source, message) VALUES (?, ?, ?)').run(
-    'info',
+    routerSynced || !router?.host ? 'info' : 'warning',
     'mikrotik',
-    `${disabling ? 'Disabled' : 'Enabled'} ${u.service} secret for ${u.username}`
+    `${disabling ? 'Disabled' : 'Enabled'} ${u.service} secret for ${u.username}` +
+      (router?.host && !routerSynced ? ` — router sync failed (${routerError}), queued for automatic retry` : '')
   );
   res.json({
     ok: true,
     status: disabling ? 'disabled' : 'Active',
     action: disabling ? 'disabled' : 'enabled',
+    routerSynced,
+    routerError,
     username: u.username,
     customer: u.customer_name,
     user: db.prepare('SELECT * FROM pppoe_users WHERE id = ?').get(id),
   });
+});
+
+// Users/routers with a MikroTik state change that couldn't be pushed live —
+// queued for the background router-sync poller (startRouterSyncScheduler).
+app.get('/api/router-sync-queue', (_req, res) => {
+  const rows = db
+    .prepare(
+      `SELECT q.id, q.router_id AS routerId, r.name AS routerName,
+              q.pppoe_user_id AS pppoeUserId, u.username, u.customer_name AS customer,
+              q.reason, q.attempts, q.last_error AS lastError,
+              q.created_at AS createdAt, q.last_attempt_at AS lastAttemptAt, q.next_attempt_at AS nextAttemptAt
+       FROM router_sync_queue q
+       JOIN pppoe_users u ON u.id = q.pppoe_user_id
+       LEFT JOIN routers r ON r.id = q.router_id
+       ORDER BY q.created_at DESC`
+    )
+    .all();
+  res.json({ pending: rows });
 });
 
 app.delete('/api/pppoe/users/:id', async (req, res) => {
@@ -4024,4 +4075,5 @@ server.listen(PORT, () => {
   startOutageMonitor(3 * 60_000);
   startNotifyScheduler(5 * 60 * 1000);
   startUsageScheduler(60_000);
+  startRouterSyncScheduler(3 * 60 * 1000);
 });
