@@ -1597,6 +1597,7 @@ app.post('/api/pppoe/users/:id/payment', async (req, res) => {
       emailed = r.sent;
     }
     let smsSent = false;
+    let smsDetail: string | null = null;
     if (b.send_sms && result.user?.contact) {
       const r = await withTimeout(
         sendPaymentConfirmationSms(result.user, result.total),
@@ -1604,8 +1605,9 @@ app.post('/api/pppoe/users/:id/payment', async (req, res) => {
         { sent: false, detail: 'timed out — continuing in the background' }
       );
       smsSent = r.sent;
+      smsDetail = r.sent ? null : r.detail;
     }
-    res.json({ ...result, emailed, smsSent });
+    res.json({ ...result, emailed, smsSent, smsDetail });
   } catch (e: any) {
     const code = /not found/i.test(e?.message || '') ? 404 : 400;
     res.status(code).json({ error: e?.message || 'Payment failed' });
