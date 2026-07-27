@@ -3151,7 +3151,7 @@ app.get('/api/map', async (req, res) => {
   const naps = db.prepare(
     `SELECT id, name, kind, lat, lng, ports, parent_id AS parentId,
             code, status, address, splitter_ratio AS splitterRatio, splitter_type AS splitterType,
-            tx_dbm AS txDbm, pon_port AS ponPort,
+            fbtc_leg AS fbtcLeg, tx_dbm AS txDbm, pon_port AS ponPort,
             host, snmp_port AS snmpPort, snmp_community AS snmpCommunity,
             vendor, model, sys_name AS sysName, firmware, last_probe_at AS lastProbeAt, probe_error AS probeError
      FROM naps`
@@ -3462,7 +3462,7 @@ app.get('/api/naps', (req, res) => {
     .prepare(
       `SELECT n.id, n.name, n.kind, n.ports, n.lat, n.lng, n.parent_id AS parentId,
               n.code, n.status, n.address, n.splitter_ratio AS splitterRatio, n.splitter_type AS splitterType,
-              n.tx_dbm AS txDbm, n.pon_port AS ponPort,
+              n.fbtc_leg AS fbtcLeg, n.tx_dbm AS txDbm, n.pon_port AS ponPort,
               (SELECT name FROM naps o WHERE o.id = n.parent_id) AS oltName,
               (SELECT kind FROM naps o WHERE o.id = n.parent_id) AS parentKind
        FROM naps n ${where} ORDER BY n.kind DESC, n.id`
@@ -3477,8 +3477,8 @@ app.post('/api/naps', (req, res) => {
   if (!b.name?.trim()) return res.status(400).json({ error: 'name is required' });
   const info = db
     .prepare(
-      `INSERT INTO naps (name, kind, lat, lng, ports, parent_id, code, status, address, splitter_ratio, splitter_type, tx_dbm, pon_port, host, snmp_port, snmp_community)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO naps (name, kind, lat, lng, ports, parent_id, code, status, address, splitter_ratio, splitter_type, fbtc_leg, tx_dbm, pon_port, host, snmp_port, snmp_community)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       String(b.name).trim(),
@@ -3492,6 +3492,7 @@ app.post('/api/naps', (req, res) => {
       b.address ? String(b.address).trim() : null,
       b.splitterRatio ? String(b.splitterRatio).trim() : null,
       b.splitterType ? String(b.splitterType).trim() : null,
+      b.fbtcLeg === 'tap' ? 'tap' : 'through',
       b.txDbm != null && b.txDbm !== '' ? Number(b.txDbm) : null,
       b.ponPort != null && b.ponPort !== '' ? Number(b.ponPort) : null,
       b.host ? String(b.host).trim() : null,
@@ -3502,7 +3503,7 @@ app.post('/api/naps', (req, res) => {
     db
       .prepare(
         `SELECT id, name, kind, lat, lng, ports, parent_id AS parentId, code, status, address,
-                splitter_ratio AS splitterRatio, splitter_type AS splitterType, tx_dbm AS txDbm,
+                splitter_ratio AS splitterRatio, splitter_type AS splitterType, fbtc_leg AS fbtcLeg, tx_dbm AS txDbm,
                 pon_port AS ponPort, host, snmp_port AS snmpPort,
                 snmp_community AS snmpCommunity, vendor, model, sys_name AS sysName, firmware,
                 last_probe_at AS lastProbeAt, probe_error AS probeError FROM naps WHERE id = ?`
@@ -3517,7 +3518,7 @@ app.put('/api/naps/:id', (req, res) => {
   if (!ex) return res.status(404).json({ error: 'not found' });
   const b = req.body || {};
   db.prepare(
-    `UPDATE naps SET name=?, kind=?, lat=?, lng=?, ports=?, parent_id=?, code=?, status=?, address=?, splitter_ratio=?, splitter_type=?, tx_dbm=?, pon_port=?,
+    `UPDATE naps SET name=?, kind=?, lat=?, lng=?, ports=?, parent_id=?, code=?, status=?, address=?, splitter_ratio=?, splitter_type=?, fbtc_leg=?, tx_dbm=?, pon_port=?,
       host=?, snmp_port=?, snmp_community=? WHERE id=?`
   ).run(
     b.name ?? ex.name,
@@ -3539,6 +3540,7 @@ app.put('/api/naps/:id', (req, res) => {
         ? String(b.splitterType).trim()
         : null
       : ex.splitter_type,
+    b.fbtcLeg !== undefined ? (b.fbtcLeg === 'tap' ? 'tap' : 'through') : ex.fbtc_leg ?? 'through',
     b.txDbm !== undefined
       ? b.txDbm != null && b.txDbm !== ''
         ? Number(b.txDbm)
@@ -3558,7 +3560,7 @@ app.put('/api/naps/:id', (req, res) => {
     db
       .prepare(
         `SELECT id, name, kind, lat, lng, ports, parent_id AS parentId, code, status, address,
-                splitter_ratio AS splitterRatio, splitter_type AS splitterType, tx_dbm AS txDbm,
+                splitter_ratio AS splitterRatio, splitter_type AS splitterType, fbtc_leg AS fbtcLeg, tx_dbm AS txDbm,
                 pon_port AS ponPort, host, snmp_port AS snmpPort,
                 snmp_community AS snmpCommunity, vendor, model, sys_name AS sysName, firmware,
                 last_probe_at AS lastProbeAt, probe_error AS probeError FROM naps WHERE id = ?`
