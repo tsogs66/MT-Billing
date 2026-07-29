@@ -501,6 +501,10 @@ function parseRouterId(raw: unknown): number | null {
   return n != null && Number.isFinite(n) && n > 0 ? n : null;
 }
 
+function parseProbeMode(raw: unknown): 'auto' | 'router' | 'panel' {
+  return raw === 'router' || raw === 'panel' ? raw : 'auto';
+}
+
 function routerConnForId(routerId: number | null) {
   if (!routerId) return null;
   const r = getRouter(routerId);
@@ -3912,9 +3916,10 @@ app.get('/api/uptime', (req, res) => {
 app.post('/api/uptime/check', async (req, res) => {
   const scope = setActiveScope(String(req.body?.scope || req.query.scope || getActiveScope())) as UptimeScope;
   const routerId = parseRouterId(req.body?.routerId ?? req.query.routerId);
+  const probeMode = parseProbeMode(req.body?.probeMode ?? req.query.probeMode);
   setActiveRouterId(routerId);
   const conn = scope === 'local' ? routerConnForId(routerId) : null;
-  await runUptimeChecks(scope, conn, routerId);
+  await runUptimeChecks(scope, conn, routerId, probeMode);
   const router = routerId ? getRouter(routerId) : null;
   res.json({
     summary: getUptimeSummary(scope, routerId),
@@ -3922,6 +3927,7 @@ app.post('/api/uptime/check', async (req, res) => {
     scopes: getUptimeScopes(),
     routerId,
     routerName: router?.name ?? null,
+    probeMode,
   });
 });
 
@@ -3943,21 +3949,23 @@ app.get('/api/status-hub/uplink', (req, res) => {
 app.get('/api/status-hub/check', async (req, res) => {
   try {
     const routerId = parseRouterId(req.query.routerId);
+    const probeMode = parseProbeMode(req.query.probeMode);
     setStatusHubRouterId(routerId);
     const conn = routerConnForId(routerId);
     const wait = String(req.query.wait || '') === '1';
     if (wait) {
-      await runStatusChecks(undefined, conn, routerId);
+      await runStatusChecks(undefined, conn, routerId, probeMode);
       const router = routerId ? getRouter(routerId) : null;
-      return res.json({ ...listStatusOverview(routerId), routerId, routerName: router?.name ?? null });
+      return res.json({ ...listStatusOverview(routerId), routerId, routerName: router?.name ?? null, probeMode });
     }
-    void runStatusChecks(undefined, conn, routerId).catch(() => undefined);
+    void runStatusChecks(undefined, conn, routerId, probeMode).catch(() => undefined);
     const overview = listStatusOverview(routerId);
     const router = routerId ? getRouter(routerId) : null;
     res.json({
       ...overview,
       routerId,
       routerName: router?.name ?? null,
+      probeMode,
       summary: { ...overview.summary, scanning: true },
     });
   } catch (e: any) {
@@ -3968,21 +3976,23 @@ app.get('/api/status-hub/check', async (req, res) => {
 app.get('/api/status-hub/uplink/check', async (req, res) => {
   try {
     const routerId = parseRouterId(req.query.routerId);
+    const probeMode = parseProbeMode(req.query.probeMode);
     setStatusHubRouterId(routerId);
     const conn = routerConnForId(routerId);
     const wait = String(req.query.wait || '') === '1';
     if (wait) {
-      await runUplinkChecks(conn, routerId);
+      await runUplinkChecks(conn, routerId, probeMode);
       const router = routerId ? getRouter(routerId) : null;
-      return res.json({ ...listUplinkOverview(routerId), routerId, routerName: router?.name ?? null });
+      return res.json({ ...listUplinkOverview(routerId), routerId, routerName: router?.name ?? null, probeMode });
     }
-    void runUplinkChecks(conn, routerId).catch(() => undefined);
+    void runUplinkChecks(conn, routerId, probeMode).catch(() => undefined);
     const overview = listUplinkOverview(routerId);
     const router = routerId ? getRouter(routerId) : null;
     res.json({
       ...overview,
       routerId,
       routerName: router?.name ?? null,
+      probeMode,
       summary: { ...overview.summary, scanning: true },
     });
   } catch (e: any) {
