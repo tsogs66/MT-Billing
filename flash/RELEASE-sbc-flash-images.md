@@ -6,7 +6,7 @@ Published `.img.xz` checksums (binaries live on GitHub Releases, not in git).
 
 | Asset | SHA-256 | Updated (UTC) | Notes |
 |-------|---------|---------------|-------|
-| `mt-billing-pc-usb-amd64.img.xz` | `953182f5ab6672f008ca159368c4c27414be1b8807443bdab2c88ec659f4f9f6` | 2026-07-23 | Wyse 3040 thin-client kernel args in EFI GRUB |
+| `mt-billing-pc-usb-amd64.img.xz` | `2da0a1c4844d4f97f55bfee09d023dcc284160e4e6c91976b7bc38cfc4e088a3` | 2026-07-30 | Fresh Wyse-ready USB installer: MMC modules, apt-lock wait, reuse partitions, unattended-upgrades off |
 
 Rebuild and publish PC USB installer:
 

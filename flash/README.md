@@ -20,18 +20,29 @@ Orange Pi **One** must use `mt-billing-opi-one-armhf*`.
 | Image | What it does |
 |-------|----------------|
 | `mt-billing-pc-amd64*` | Flash to USB/SSD and **run from that drive** (appliance). |
-| `mt-billing-pc-usb-amd64*` | Flash to a USB stick, boot once — **installs onto the largest internal disk** (≥8 GB), then powers off. Unplug USB and boot from the PC disk. |
+| `mt-billing-pc-usb-amd64*` | Flash to a USB stick, boot once — **installs onto the largest internal disk** (≥4 GB; prefers eMMC), then powers off. Unplug USB and boot from the PC disk. |
 
 USB installer notes:
 
 - UEFI boot required; target disk is **wiped**.
 - Needs Ethernet/internet during install and again on first boot from the internal disk (MT-Billing firstboot).
 - Console on the stick: `mtadmin` / `mtbilling`. Install log: `/var/log/mt-billing-usb-install.log`.
+- Target selection prefers **eMMC** (`/dev/mmcblk0`) over USB. Marketing “8 GB” eMMC (Dell Wyse 3040) is accepted (≥4 GiB).
+- Force a disk: `sudo TARGET_DISK=/dev/mmcblk0 /usr/local/lib/mt-billing/usb-install-to-disk.sh`
+- If `lsblk` shows **only the USB stick** (no `mmcblk0`), the cloud image was missing MMC drivers — re-flash the latest release (includes `linux-modules-extra`), or on a networked stick:
 
-**Dell Wyse 3040 / Intel Atom thin clients:** if the screen stops at  
-`EFI stub: Loaded initrd…` with a black screen, rebuild the USB image from current `main`  
-(`sudo bash scripts/build-pc-usb-img.sh`) — images now bake in `nomodeset` and i915  
-workarounds. Also use a **USB 2.0** port, disable **Secure Boot**, and try another stick.
+```bash
+sudo apt-get update
+sudo apt-get install -y linux-modules-extra-$(uname -r)
+sudo modprobe sdhci_acpi sdhci_pci mmc_block
+lsblk -o NAME,SIZE,TYPE,TRAN,MODEL
+```
+
+**Dell Wyse 3040 / Intel Atom thin clients:** re-flash the latest  
+`mt-billing-pc-usb-amd64.img.xz` from the [flash images release](https://github.com/tsogs66/MT-Billing/releases/tag/sbc-flash-images)  
+(SHA-256 in `flash/RELEASE-sbc-flash-images.md`). That image includes MMC drivers,  
+`nomodeset`, apt-lock wait, and partition reuse. Use a **USB 2.0** port and disable **Secure Boot**.
+
 
 Build all:
 

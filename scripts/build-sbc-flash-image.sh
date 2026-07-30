@@ -268,11 +268,12 @@ write_files:
   - path: /etc/default/grub.d/99-mt-billing-thinclient.cfg
     permissions: '0644'
     content: |
-      GRUB_CMDLINE_LINUX_DEFAULT="\${GRUB_CMDLINE_LINUX_DEFAULT} nomodeset i915.alpha_support=1 i915.fastboot=0 loglevel=4 plymouth.enable=0"
+      GRUB_CMDLINE_LINUX_DEFAULT="\${GRUB_CMDLINE_LINUX_DEFAULT} ${PC_KERNEL_CMDLINE_EXTRA}"
+      GRUB_GFXPAYLOAD_LINUX=text
   - path: /etc/kernel/cmdline.d/99-mt-billing.conf
     permissions: '0644'
     content: |
-      nomodeset i915.alpha_support=1 i915.fastboot=0 loglevel=4 plymouth.enable=0
+      ${PC_KERNEL_CMDLINE_EXTRA}
 runcmd:
   - [ sh, -c, "systemctl enable --now ssh 2>/dev/null || systemctl enable --now sshd 2>/dev/null || true" ]
   - [ sh, -c, "update-grub 2>/dev/null || true" ]
@@ -285,19 +286,46 @@ EOF
 
 # Intel Atom thin clients (e.g. Dell Wyse 3040) often hang after "EFI stub: Loaded initrd"
 # unless the installer kernel uses nomodeset / conservative i915 options.
-PC_KERNEL_CMDLINE_EXTRA="${PC_KERNEL_CMDLINE_EXTRA:-nomodeset i915.alpha_support=1 i915.fastboot=0 loglevel=4 plymouth.enable=0}"
+# Keep the EFI framebuffer (do not set video=efifb:off) so tty1 stays visible.
+PC_KERNEL_CMDLINE_EXTRA="${PC_KERNEL_CMDLINE_EXTRA:-nomodeset i915.modeset=0 i915.alpha_support=1 i915.fastboot=0 modprobe.blacklist=i915 plymouth.enable=0 loglevel=4}"
 
+# Append thin-client args to every linux/linuxefi line that lacks nomodeset.
+# Important: recovery entries already contain nomodeset — do NOT treat that as
+# "already patched" for the whole file (that bug left default boot unbroken).
 patch_grub_cfg_kernel_args() {
   local f="$1"
   local args="$2"
-  [[ -f "$f" && -r "$f" ]] || return 0
-  if grep -q 'nomodeset' "$f" 2>/dev/null; then
-    return 0
+  [[ -f "$f" ]] || return 0
+  local tmp patched=0 ec=0
+  tmp="$(mktemp)"
+  # shellcheck disable=SC2016
+  awk -v args="$args" '
+    BEGIN { patched = 0 }
+    /^[[:space:]]*linux(efi)?[[:space:]]/ {
+      if ($0 !~ /nomodeset/) {
+        sub(/[[:space:]]+$/, "")
+        $0 = $0 " " args
+        patched = 1
+      }
+      print
+      next
+    }
+    { print }
+    END { exit(patched ? 10 : 0) }
+  ' "$f" >"$tmp"
+  ec=$?
+  if [[ "$ec" -eq 10 ]]; then
+    cat "$tmp" >"$f"
+    patched=1
+  elif [[ "$ec" -ne 0 ]]; then
+    rm -f "$tmp"
+    return "$ec"
   fi
-  sed -i -E \
-    -e "/^[[:space:]]*linux(efi)?[[:space:]]/s/[[:space:]]*$/ ${args}/" \
-    -e "/^[[:space:]]*linux(efi)?[[:space:]]/s/[[:space:]]+$/ ${args}/" \
-    "$f" 2>/dev/null || true
+  rm -f "$tmp"
+  if [[ "$patched" -eq 1 ]]; then
+    echo "Patched kernel args in $f"
+  fi
+  return 0
 }
 
 patch_efi_grub_via_mtools() {
@@ -342,6 +370,7 @@ inject_pc_thin_client_boot() {
   cat >"$root_mnt/etc/default/grub.d/99-mt-billing-thinclient.cfg" <<EOF
 # Thin-client / Wyse-class PCs — avoid i915 framebuffer hang on USB installer boot
 GRUB_CMDLINE_LINUX_DEFAULT="\${GRUB_CMDLINE_LINUX_DEFAULT} ${args}"
+GRUB_GFXPAYLOAD_LINUX=text
 EOF
   cat >"$root_mnt/etc/kernel/cmdline.d/99-mt-billing.conf" <<EOF
 ${args}
@@ -350,7 +379,8 @@ EOF
   local f
   for f in \
     "$root_mnt/boot/grub/grub.cfg" \
-    "$root_mnt/boot/grub/grub.cfg.new"; do
+    "$root_mnt/boot/grub/grub.cfg.new" \
+    "$root_mnt/grub/grub.cfg"; do
     patch_grub_cfg_kernel_args "$f" "$args"
   done
   if [[ -n "$boot_mnt" && -d "$boot_mnt" ]]; then
@@ -371,6 +401,17 @@ EOF
 
   patch_efi_grub_via_mtools "$img" "$boot_off" "$args"
 
+  # Prefer a direct grub.cfg patch over update-grub: Ubuntu cloud images keep
+  # kernels + grub.cfg on XBOOTLDR (/boot), and chroot update-grub often writes
+  # to the wrong place or no-ops when that partition is not mounted.
+  if [[ -f "$root_mnt/boot/grub/grub.cfg" ]]; then
+    if grep -E '^[[:space:]]*linux(efi)?[[:space:]]' "$root_mnt/boot/grub/grub.cfg" \
+      | grep -v recovery | grep -q 'nomodeset'; then
+      echo "PC thin-client: default GRUB entries include nomodeset (${args})"
+      return 0
+    fi
+  fi
+
   if [[ ! -x "$root_mnt/usr/sbin/update-grub" ]]; then
     echo "PC thin-client: patched grub.cfg files (update-grub not present in image)."
     return 0
@@ -388,12 +429,80 @@ EOF
     fi
   fi
   chroot "$root_mnt" /usr/sbin/update-grub || chroot "$root_mnt" /usr/sbin/grub-mkconfig -o /boot/grub/grub.cfg || true
+  # Re-patch after update-grub in case it regenerated without our args.
+  patch_grub_cfg_kernel_args "$root_mnt/boot/grub/grub.cfg" "$args"
   umount "$root_mnt/dev/pts" 2>/dev/null || true
   umount "$root_mnt/boot/efi" 2>/dev/null || true
   umount "$root_mnt/sys"
   umount "$root_mnt/proc"
   umount "$root_mnt/dev"
   echo "PC thin-client: kernel cmdline includes: ${args}"
+}
+
+# Ubuntu cloud/virtual images omit MMC/SDHCI modules; Dell Wyse 3040 eMMC needs them.
+inject_pc_emmc_modules() {
+  local root_mnt="$1"
+  local kver=""
+  kver="$(ls -1 "$root_mnt/lib/modules" 2>/dev/null | head -1 || true)"
+  if [[ -z "$kver" ]]; then
+    echo "WARNING: no kernel modules dir; skipping eMMC modules-extra." >&2
+    return 0
+  fi
+
+  if compgen -G "$root_mnt/lib/modules/$kver/kernel/drivers/mmc/host/sdhci-acpi.ko*" >/dev/null; then
+    echo "MMC/SDHCI modules already present for $kver."
+  else
+    local ver_pkg deb_extra deb_regdb tmpd abi
+    ver_pkg="$(chroot "$root_mnt" dpkg-query -W -f='${Version}' "linux-modules-${kver}" 2>/dev/null || true)"
+    if [[ -z "$ver_pkg" ]]; then
+      abi="$(echo "$kver" | sed -E 's/^([0-9]+\.[0-9]+\.[0-9]+-[0-9]+).*/\1/')"
+      ver_pkg="${abi}.${abi##*-}"
+    fi
+
+    tmpd="$(mktemp -d /tmp/mt-emmc-mods.XXXXXX)"
+    deb_extra="$tmpd/linux-modules-extra.deb"
+    deb_regdb="$tmpd/wireless-regdb.deb"
+    echo "Fetching linux-modules-extra-${kver} (${ver_pkg}) for Wyse eMMC…"
+    if ! curl -fsSL -o "$deb_extra" \
+      "http://archive.ubuntu.com/ubuntu/pool/main/l/linux/linux-modules-extra-${kver}_${ver_pkg}_amd64.deb"; then
+      echo "WARNING: could not download linux-modules-extra-${kver}; eMMC may be invisible on thin clients." >&2
+      rm -rf "$tmpd"
+      return 0
+    fi
+    curl -fsSL -o "$deb_regdb" \
+      "http://archive.ubuntu.com/ubuntu/pool/main/w/wireless-regdb/wireless-regdb_2026.02.04-0ubuntu1~24.04.1_all.deb" \
+      || curl -fsSL -o "$deb_regdb" \
+      "http://archive.ubuntu.com/ubuntu/pool/main/w/wireless-regdb/wireless-regdb_2026.02.04-0ubuntu1_all.deb" \
+      || true
+
+    mount --bind /dev "$root_mnt/dev"
+    mount -t proc proc "$root_mnt/proc"
+    mount -t sysfs sysfs "$root_mnt/sys"
+    cp -f "$deb_extra" "$root_mnt/tmp/linux-modules-extra.deb"
+    [[ -f "$deb_regdb" ]] && cp -f "$deb_regdb" "$root_mnt/tmp/wireless-regdb.deb"
+    if [[ -f "$root_mnt/tmp/wireless-regdb.deb" ]]; then
+      chroot "$root_mnt" dpkg -i /tmp/wireless-regdb.deb /tmp/linux-modules-extra.deb || \
+        chroot "$root_mnt" dpkg -i --force-depends /tmp/linux-modules-extra.deb || true
+    else
+      chroot "$root_mnt" dpkg -i --force-depends /tmp/linux-modules-extra.deb || true
+    fi
+    chroot "$root_mnt" depmod -a "$kver" || true
+    rm -f "$root_mnt/tmp/linux-modules-extra.deb" "$root_mnt/tmp/wireless-regdb.deb"
+    umount "$root_mnt/sys" 2>/dev/null || true
+    umount "$root_mnt/proc" 2>/dev/null || true
+    umount "$root_mnt/dev" 2>/dev/null || true
+    rm -rf "$tmpd"
+  fi
+
+  install -d -m 0755 "$root_mnt/etc/modules-load.d"
+  cat >"$root_mnt/etc/modules-load.d/mt-billing-emmc.conf" <<'EOF'
+# Dell Wyse 3040 / Cherry Trail eMMC (linux-modules-extra)
+sdhci
+sdhci_acpi
+sdhci_pci
+mmc_block
+EOF
+  echo "Enabled eMMC modules-load for thin clients."
 }
 
 # USB installer image: boot from stick → clone OS onto largest internal disk → power off.
@@ -410,10 +519,13 @@ inject_usb_installer() {
 [Unit]
 Description=MT-Billing USB installer (clone to internal disk)
 Documentation=https://github.com/tsogs66/MT-Billing
-After=network-online.target cloud-init.target cloud-init.service
+DefaultDependencies=no
+# Do not After=cloud-init.* — on Ubuntu cloud images that forms an ordering
+# cycle with multi-user.target; systemd then deletes this job and install never runs.
+After=local-fs.target network-online.target
 Wants=network-online.target
-Conflicts=mt-billing-firstboot.service
-Before=mt-billing-firstboot.service
+Conflicts=shutdown.target mt-billing-firstboot.service
+Before=shutdown.target mt-billing-firstboot.service
 ConditionPathExists=/etc/mt-billing-usb-installer
 ConditionPathExists=/usr/local/lib/mt-billing/usb-install-to-disk.sh
 
@@ -444,8 +556,20 @@ This stick installs Ubuntu + MT-Billing onto the largest internal disk (UEFI).
 All data on that disk will be erased. Keep Ethernet connected.
 When finished the PC powers off — unplug USB, then boot from the internal disk.
 SSH (if needed): mtadmin / mtbilling   Log: /var/log/mt-billing-usb-install.log
+If install does not start automatically:
+  sudo /usr/local/lib/mt-billing/usb-install-to-disk.sh
 
 EOF
+
+  # Prevent unattended-upgrades from locking apt on first USB boot (blocks installer).
+  install -d -m 0755 "$root_mnt/etc/apt/apt.conf.d"
+  cat >"$root_mnt/etc/apt/apt.conf.d/20auto-upgrades" <<'EOF'
+APT::Periodic::Update-Package-Lists "0";
+APT::Periodic::Unattended-Upgrade "0";
+EOF
+  ln -sfn /dev/null "$root_mnt/etc/systemd/system/apt-daily.timer"
+  ln -sfn /dev/null "$root_mnt/etc/systemd/system/apt-daily-upgrade.timer"
+  ln -sfn /dev/null "$root_mnt/etc/systemd/system/unattended-upgrades.service"
 
   echo "Injected USB → internal-disk installer (marker /etc/mt-billing-usb-installer)."
 }
@@ -583,7 +707,7 @@ inject_rpi_boot_userconf() {
 inject_firstboot() {
   local img="$1"
   local board_name="$2"
-  local loop="" boot_loop="" root_loop=""
+  local loop="" boot_loop="" root_loop="" xboot_loop=""
   local boot_mnt root_mnt
   boot_mnt="$(mktemp -d /tmp/mt-boot.XXXXXX)"
   root_mnt="$(mktemp -d /tmp/mt-root.XXXXXX)"
@@ -599,6 +723,7 @@ inject_firstboot() {
     umount "$boot_mnt" 2>/dev/null || true
     umount "$root_mnt" 2>/dev/null || true
     [[ -n "${boot_loop:-}" ]] && losetup -d "$boot_loop" 2>/dev/null || true
+    [[ -n "${xboot_loop:-}" ]] && losetup -d "$xboot_loop" 2>/dev/null || true
     [[ -n "${root_loop:-}" ]] && losetup -d "$root_loop" 2>/dev/null || true
     [[ -n "${loop:-}" ]] && losetup -d "$loop" 2>/dev/null || true
     rmdir "$boot_mnt" "$root_mnt" 2>/dev/null || true
@@ -638,6 +763,7 @@ with open(path, "rb") as f:
         EFI = uuid.UUID("C12A7328-F81F-11D2-BA4B-00A0C93EC93B")
         MSB = uuid.UUID("EBD0A0A2-B9E5-4433-87C0-68B6B72699C7")
         BIOS = uuid.UUID("21686148-6449-6E6F-744E-656564454649")
+        XBOOTLDR = uuid.UUID("BC13C2FF-59E6-4262-A352-B275FD6F7172")
         LINUX_FS = uuid.UUID("0FC63DAF-8483-4772-8E79-3D69D8477DE4")
         LINUX_ROOT = {
             uuid.UUID("4F68BCE3-E8CD-4DB1-96E7-FBCAF984B709"),  # x86-64
@@ -660,6 +786,8 @@ with open(path, "rb") as f:
                 ptype = "bios"
             elif type_guid in (EFI, MSB):
                 ptype = "ef"
+            elif type_guid == XBOOTLDR:
+                ptype = "xboot"
             elif type_guid in LINUX_ROOT:
                 ptype = "83"
             else:
@@ -676,14 +804,18 @@ PY
   )"
   [[ -n "$parts" ]] || { echo "Could not parse partition table on $img" >&2; exit 1; }
 
-  local boot_off="" boot_sz="" root_off="" root_sz=""
+  local boot_off="" boot_sz="" root_off="" root_sz="" xboot_off="" xboot_sz=""
   local ptype off sz
-  # Prefer largest Linux (83) partition as root; first FAT/EFI as boot.
+  # Prefer largest Linux (83) partition as root; first FAT/EFI as boot;
+  # XBOOTLDR (Ubuntu cloud) holds kernels + grub.cfg under /boot.
   while read -r ptype off sz; do
     [[ -n "$ptype" ]] || continue
     case "$ptype" in
       0c|0b|0e|ef)
         if [[ -z "$boot_off" ]]; then boot_off="$off"; boot_sz="$sz"; fi
+        ;;
+      xboot)
+        if [[ -z "$xboot_off" ]]; then xboot_off="$off"; xboot_sz="$sz"; fi
         ;;
       83|8e)
         if [[ -z "$root_off" ]] || [[ "${sz:-0}" -gt "${root_sz:-0}" ]]; then
@@ -714,12 +846,29 @@ PY
   if [[ -n "$boot_off" ]]; then
     boot_loop="$(losetup -f --show --offset "$boot_off" ${boot_sz:+--sizelimit "$boot_sz"} "$img")"
   fi
+  if [[ -n "$xboot_off" ]]; then
+    xboot_loop="$(losetup -f --show --offset "$xboot_off" ${xboot_sz:+--sizelimit "$xboot_sz"} "$img")"
+  fi
 
   if command -v e2fsck >/dev/null 2>&1; then
     e2fsck -fy "$root_loop" >/dev/null 2>&1 || true
+    if [[ -n "$xboot_loop" ]]; then
+      e2fsck -fy "$xboot_loop" >/dev/null 2>&1 || true
+    fi
   fi
 
   mount "$root_loop" "$root_mnt"
+  # Ubuntu cloud images: kernels + real grub.cfg live on XBOOTLDR, not root.
+  if [[ -n "$xboot_loop" ]]; then
+    mkdir -p "$root_mnt/boot"
+    if mount "$xboot_loop" "$root_mnt/boot"; then
+      echo "Mounted XBOOTLDR at ${root_mnt}/boot (kernels + grub.cfg)."
+    else
+      echo "WARNING: could not mount XBOOTLDR; thin-client GRUB patch may miss default boot." >&2
+      losetup -d "$xboot_loop" 2>/dev/null || true
+      xboot_loop=""
+    fi
+  fi
   local boot_mounted=0
   if [[ -n "$boot_loop" ]]; then
     mkdir -p "$root_mnt/boot/efi" "$root_mnt/boot/firmware"
@@ -729,7 +878,7 @@ PY
     elif [[ -d "$root_mnt/boot/efi" ]] && mount -t vfat "$boot_loop" "$root_mnt/boot/efi" 2>/dev/null; then
       boot_mnt="$root_mnt/boot/efi"
       boot_mounted=1
-    elif [[ -d "$root_mnt/boot" ]] && mount -t vfat "$boot_loop" "$root_mnt/boot" 2>/dev/null; then
+    elif [[ -d "$root_mnt/boot" ]] && [[ -z "$xboot_loop" ]] && mount -t vfat "$boot_loop" "$root_mnt/boot" 2>/dev/null; then
       boot_mnt="$root_mnt/boot"
       boot_mounted=1
     elif mount -t vfat "$boot_loop" "$boot_mnt" 2>/dev/null; then
@@ -752,8 +901,12 @@ PY
   cat >"$root_mnt/etc/systemd/system/mt-billing-firstboot.service" <<'EOF'
 [Unit]
 Description=MT-Billing first-boot installer
-After=network-online.target cloud-init.target
+DefaultDependencies=no
+# Avoid After=cloud-init.target — ordering cycle with multi-user.target on cloud images.
+After=local-fs.target network-online.target
 Wants=network-online.target
+Conflicts=shutdown.target
+Before=shutdown.target
 ConditionPathExists=/usr/local/lib/mt-billing/firstboot-mt-billing.sh
 
 [Service]
@@ -761,6 +914,8 @@ Type=oneshot
 ExecStart=/usr/local/lib/mt-billing/firstboot-mt-billing.sh
 RemainAfterExit=yes
 TimeoutStartSec=0
+StandardOutput=journal+console
+StandardError=journal+console
 
 [Install]
 WantedBy=multi-user.target
@@ -798,9 +953,11 @@ EOF
   # PC / Ubuntu cloud image: NoCloud seed so the appliance boots without metadata.
   if [[ "$board_name" == "pc" || "$board_name" == "pc-amd64" ]]; then
     inject_nocloud_seed "$root_mnt" "mt-billing-pc" "mt-billing"
+    inject_pc_emmc_modules "$root_mnt"
     inject_pc_thin_client_boot "$root_mnt" "$([[ "$boot_mounted" -eq 1 ]] && echo "$boot_mnt" || echo "")" "$img" "${boot_off:-}"
   elif [[ "$board_name" == "pc-usb-amd64" ]]; then
     inject_nocloud_seed "$root_mnt" "mt-billing-pc-usb" "mt-billing-usb"
+    inject_pc_emmc_modules "$root_mnt"
     inject_usb_installer "$root_mnt"
     inject_pc_thin_client_boot "$root_mnt" "$([[ "$boot_mounted" -eq 1 ]] && echo "$boot_mnt" || echo "")" "$img" "${boot_off:-}"
   fi
