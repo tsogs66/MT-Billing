@@ -119,6 +119,10 @@ ${svc_user} ALL=(root) NOPASSWD: /bin/bash ${install_dir}/install/mt-billing-net
 ${svc_user} ALL=(root) NOPASSWD: /usr/bin/bash ${install_dir}/install/mt-billing-net-watchdog.sh
 ${svc_user} ALL=(root) NOPASSWD: /bin/bash ${install_dir}/install/mt-billing-net-watchdog.sh *
 ${svc_user} ALL=(root) NOPASSWD: /usr/bin/bash ${install_dir}/install/mt-billing-net-watchdog.sh *
+${svc_user} ALL=(root) NOPASSWD: /bin/bash ${install_dir}/install/mt-billing-boot-heal.sh
+${svc_user} ALL=(root) NOPASSWD: /usr/bin/bash ${install_dir}/install/mt-billing-boot-heal.sh
+${svc_user} ALL=(root) NOPASSWD: /bin/bash ${install_dir}/install/mt-billing-boot-heal.sh *
+${svc_user} ALL=(root) NOPASSWD: /usr/bin/bash ${install_dir}/install/mt-billing-boot-heal.sh *
 ${svc_user} ALL=(root) NOPASSWD: /bin/systemctl start cloudflared-mt-billing.service
 ${svc_user} ALL=(root) NOPASSWD: /bin/systemctl stop cloudflared-mt-billing.service
 ${svc_user} ALL=(root) NOPASSWD: /bin/systemctl restart cloudflared-mt-billing.service
@@ -375,6 +379,10 @@ if [[ "$(id -u)" -eq 0 ]]; then
   if [[ -f "${INSTALL_DIR}/install/mt-billing-net-watchdog.sh" ]]; then
     bash "${INSTALL_DIR}/install/mt-billing-net-watchdog.sh" install || true
   fi
+  if [[ -f "${INSTALL_DIR}/install/mt-billing-boot-heal.sh" ]]; then
+    bash "${INSTALL_DIR}/install/mt-billing-boot-heal.sh" install || true
+  fi
+  ln -sf "${INSTALL_DIR}/install/mt-billing-net-rescue.sh" /usr/local/sbin/mt-billing-rescue 2>/dev/null || true
 fi
 
 log_ok "Update complete (${BEFORE:0:12} → ${AFTER:0:12})"
