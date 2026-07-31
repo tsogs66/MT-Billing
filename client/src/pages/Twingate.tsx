@@ -226,6 +226,31 @@ export default function Twingate() {
         </div>
       </Card>
 
+      {data.tunOk === false && (
+        <Card className="max-w-4xl mb-5 border-rose-200 bg-rose-50/70" interactive>
+          <div className="flex gap-3 text-sm text-rose-950">
+            <AlertTriangle size={18} className="shrink-0 mt-0.5 text-rose-600" />
+            <div className="space-y-1">
+              <p className="font-semibold">Proxmox LXC: /dev/net/tun missing</p>
+              <p>
+                Twingate needs a TUN device. Unprivileged LXCs usually block it — that is why the client stays{' '}
+                <b>not-running</b>. Run this on the <b>Proxmox host</b> (not inside the guest), then retry Install &amp;
+                connect:
+              </p>
+              <pre className="text-xs font-mono bg-white/90 border border-rose-200 rounded-lg px-3 py-2 overflow-x-auto whitespace-pre-wrap">
+                {`# replace CTID with your container id (pct list)
+sudo bash /path/to/MT-Billing/scripts/proxmox-enable-twingate-tun.sh CTID
+
+# or manually:
+echo 'lxc.cgroup2.devices.allow: c 10:200 rwm' >> /etc/pve/lxc/CTID.conf
+echo 'lxc.mount.entry: /dev/net/tun dev/net/tun none bind,create=file' >> /etc/pve/lxc/CTID.conf
+pct reboot CTID`}
+              </pre>
+            </div>
+          </div>
+        </Card>
+      )}
+
       <Card className="max-w-4xl mb-5 border-amber-200 bg-amber-50/60" interactive>
         <div className="flex gap-3 text-sm text-amber-900">
           <AlertTriangle size={18} className="shrink-0 mt-0.5 text-amber-600" />
