@@ -122,6 +122,8 @@ import {
   publicPortalRouter,
   assertNapHasCapacity,
 } from './ispOps.js';
+import { initTwingate, twingateRouter } from './twingate.js';
+import { initNoc, nocRouter, startNocMonitor } from './noc.js';
 import {
   getPublicSettings as getNotifySettings,
   updateSettings as updateNotifySettings,
@@ -164,6 +166,8 @@ migrate();
 seed();
 initExtra();
 initIspOps();
+initTwingate();
+initNoc();
 
 /**
  * Extend an ISO date (YYYY-MM-DD) by a whole number of months, anchored on the
@@ -4271,6 +4275,8 @@ app.use('/api', aiRouter);
 app.use('/api', terminalRouter);
 app.use('/api', extraRouter);
 app.use('/api', ispOpsRouter);
+app.use('/api', twingateRouter);
+app.use('/api', nocRouter);
 
 const server = http.createServer(app);
 initTerminalWs(server);
@@ -4297,6 +4303,7 @@ server.listen(PORT, () => {
   startStatusHub(5 * 60_000);
   startOutageMonitor(3 * 60_000);
   startUptime(90000);
+  startNocMonitor(60_000);
   setTimeout(() => startUsageScheduler(60_000), 15_000);
   setTimeout(() => startRouterSyncScheduler(3 * 60 * 1000), 30_000);
   setTimeout(() => startNotifyScheduler(5 * 60 * 1000), 45_000);
