@@ -1735,6 +1735,7 @@ app.get('/api/payment-links/config', (_req, res) => {
     .get() as any;
   const resolved = resolvePublicBaseUrl();
   const lanBaseUrl = detectLanBaseUrl() || null;
+  const lanIp = detectLanIpv4();
   res.json({
     publicBaseUrl: app?.public_base_url || '',
     envPublicBaseUrl: process.env.PUBLIC_BASE_URL || null,
@@ -1743,8 +1744,11 @@ app.get('/api/payment-links/config', (_req, res) => {
       app?.cf_tunnel_status === 'running'
         ? app?.cf_tunnel_url || (app?.cf_tunnel_hostname ? `https://${app.cf_tunnel_hostname}` : null)
         : null,
-    websiteUrl: resolved.baseUrl ? `${String(resolved.baseUrl).replace(/\/$/, '')}/login` : null,
-    lanIp: detectLanIpv4(),
+    // Pay portal base — not staff login. Staff login stays on LAN (Access/Bot Fight break /api/login).
+    payPortalUrl: resolved.baseUrl ? `${String(resolved.baseUrl).replace(/\/$/, '')}/pay/` : null,
+    websiteUrl: lanBaseUrl ? `${String(lanBaseUrl).replace(/\/$/, '')}/login` : null,
+    adminLoginUrl: lanBaseUrl ? `${String(lanBaseUrl).replace(/\/$/, '')}/login` : lanIp ? `http://${lanIp}/login` : null,
+    lanIp,
     lanBaseUrl,
     effective: resolved.baseUrl || null,
     source: resolved.source,
