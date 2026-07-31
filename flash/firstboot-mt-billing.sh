@@ -25,6 +25,18 @@ echo "Arch: $(uname -m)  Kernel: $(uname -r)"
 
 export DEBIAN_FRONTEND=noninteractive
 
+# Twingate (and similar VPN clients) need TUN. Flash images often don't load it by default.
+ensure_tun_module() {
+  mkdir -p /etc/modules-load.d
+  echo tun >/etc/modules-load.d/tun.conf
+  modprobe tun 2>/dev/null || true
+  if [[ -c /dev/net/tun ]]; then
+    echo "TUN device OK: /dev/net/tun"
+  else
+    echo "WARN: /dev/net/tun still missing after modprobe tun (Twingate will not start until fixed)"
+  fi
+}
+
 detect_board() {
   local model="" arch
   arch="$(uname -m)"
@@ -141,6 +153,7 @@ EOF
 }
 
 detect_board
+ensure_tun_module
 ensure_swap_if_low_ram
 ensure_console_user
 
