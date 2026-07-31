@@ -207,6 +207,25 @@ export default function Twingate() {
         </div>
       </div>
 
+      <Card className="max-w-4xl mb-5 border-sky-200 bg-sky-50/50" interactive>
+        <div className="flex gap-3 text-sm text-sky-950">
+          <Globe2 size={18} className="shrink-0 mt-0.5 text-sky-600" />
+          <div className="space-y-1">
+            <p className="font-semibold">Connector vs this panel (Client)</p>
+            <p>
+              <b>Connectors</b> (Admin → Connectors) sit on a LAN and publish it into Twingate. You already have
+              Connected ones on Homelab — use those. A Connector named like <code className="font-mono text-xs">mtbilling</code>{' '}
+              that says <b>Not yet connected</b> was never deployed; this page does <b>not</b> install Connectors.
+            </p>
+            <p>
+              This page installs a headless <b>Client</b> with a <b>Service Key</b> (Admin → Services) so the panel can{' '}
+              <i>reach</i> Resources through your existing Connectors. Paste a Service Key below — not a Connector
+              deploy token.
+            </p>
+          </div>
+        </div>
+      </Card>
+
       <Card className="max-w-4xl mb-5 border-amber-200 bg-amber-50/60" interactive>
         <div className="flex gap-3 text-sm text-amber-900">
           <AlertTriangle size={18} className="shrink-0 mt-0.5 text-amber-600" />
