@@ -113,6 +113,12 @@ ${svc_user} ALL=(root) NOPASSWD: /bin/bash ${install_dir}/install/mt-billing-net
 ${svc_user} ALL=(root) NOPASSWD: /usr/bin/bash ${install_dir}/install/mt-billing-net-coexist.sh
 ${svc_user} ALL=(root) NOPASSWD: /bin/bash ${install_dir}/install/mt-billing-net-coexist.sh *
 ${svc_user} ALL=(root) NOPASSWD: /usr/bin/bash ${install_dir}/install/mt-billing-net-coexist.sh *
+${svc_user} ALL=(root) NOPASSWD: /bin/bash ${install_dir}/install/mt-billing-net-rescue.sh
+${svc_user} ALL=(root) NOPASSWD: /usr/bin/bash ${install_dir}/install/mt-billing-net-rescue.sh
+${svc_user} ALL=(root) NOPASSWD: /bin/bash ${install_dir}/install/mt-billing-net-watchdog.sh
+${svc_user} ALL=(root) NOPASSWD: /usr/bin/bash ${install_dir}/install/mt-billing-net-watchdog.sh
+${svc_user} ALL=(root) NOPASSWD: /bin/bash ${install_dir}/install/mt-billing-net-watchdog.sh *
+${svc_user} ALL=(root) NOPASSWD: /usr/bin/bash ${install_dir}/install/mt-billing-net-watchdog.sh *
 ${svc_user} ALL=(root) NOPASSWD: /bin/systemctl start cloudflared-mt-billing.service
 ${svc_user} ALL=(root) NOPASSWD: /bin/systemctl stop cloudflared-mt-billing.service
 ${svc_user} ALL=(root) NOPASSWD: /bin/systemctl restart cloudflared-mt-billing.service
@@ -366,6 +372,9 @@ write_state "updated" "$BEFORE" "$AFTER" "Update complete."
 # Ensure UI-triggered updates work after this pull (sudoers + oneshot unit)
 if [[ "$(id -u)" -eq 0 ]]; then
   install_panel_update_privs || true
+  if [[ -f "${INSTALL_DIR}/install/mt-billing-net-watchdog.sh" ]]; then
+    bash "${INSTALL_DIR}/install/mt-billing-net-watchdog.sh" install || true
+  fi
 fi
 
 log_ok "Update complete (${BEFORE:0:12} → ${AFTER:0:12})"
