@@ -88,14 +88,16 @@ User=${SERVICE_USER}
 Group=${SERVICE_USER}
 WorkingDirectory=${INSTALL_DIR}/server
 EnvironmentFile=${INSTALL_DIR}/server/.env
-# V8 auto-sizes its heap ceiling from detected RAM, which is too
-# conservative on small boards (Pi/OPi with ~1GB) and can self-abort
-# with "JavaScript heap out of memory" while swap sits unused. Raise the
-# ceiling so it can actually use the memory (incl. swap) that's there.
-Environment=NODE_OPTIONS=--max-old-space-size=768
+# Heap ceiling from MemTotal — 768MB on a 1GB RPi leaves almost nothing for
+# nginx/cloudflared/OS and causes swap thrash + Cloudflare timeouts.
+Environment=NODE_OPTIONS=--max-old-space-size=$(awk '/MemTotal/ {m=int(\$2/1024); if(m<=1024)print 256; else if(m<=2048)print 384; else if(m<=3072)print 512; else print 768}' /proc/meminfo 2>/dev/null || echo 512)
+Environment=MT_BILLING_APPLIANCE=auto
 ExecStart=/usr/bin/node dist/index.js
 Restart=on-failure
 RestartSec=5
+# Soft memory pressure signal for the panel API on flash appliances
+MemoryHigh=70%
+MemoryMax=90%
 
 [Install]
 WantedBy=multi-user.target
