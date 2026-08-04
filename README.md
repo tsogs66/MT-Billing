@@ -52,6 +52,7 @@ See **[SYSTEM_REQUIREMENTS.md](./SYSTEM_REQUIREMENTS.md)** for full hardware and
 | **Orange Pi One** | OPi One (H3) · 16 GB+ microSD · flash `mt-billing-opi-one-armhf.img.xz` |
 | **PC (amd64) appliance** | UEFI x86_64 · 16 GB+ USB/SSD · flash `mt-billing-pc-amd64.img.xz` (run from media) |
 | **PC USB installer** | UEFI x86_64 · flash `mt-billing-pc-usb-amd64.img.xz` to USB → installs onto internal disk |
+| **Windows** | Windows 10/11 or Server x64 · [Windows installer zip](https://github.com/tsogs66/MT-Billing/releases/tag/windows-latest) |
 
 ## Getting started (development)
 
@@ -79,6 +80,14 @@ Wraps the same React UI in a native Android shell. Full steps: **[client/ANDROID
 **Prebuilt APK:** every push to `main` auto-builds a debug APK and publishes it to the
 [`android-latest` release](https://github.com/tsogs66/MT-Billing/releases/tag/android-latest) — no Android Studio needed.
 
+### Windows installer
+
+Download [`mt-billing-windows-x64.zip`](https://github.com/tsogs66/MT-Billing/releases/download/windows-latest/mt-billing-windows-x64.zip),
+unzip, and run **`install.cmd` as Administrator**. That installs Node if needed, builds the panel,
+and registers the **MTBillingAPI** Windows service (UI + API on port 80 by default).
+
+Full steps: **[docs/WINDOWS_INSTALL.md](./docs/WINDOWS_INSTALL.md)** · **[install/windows/README.md](./install/windows/README.md)**.
+
 **Build it yourself:**
 
 ```bash
@@ -96,7 +105,9 @@ Server settings are read from `server/.env` (see `server/.env.example`):
 
 | Variable     | Default                  | Purpose |
 |--------------|--------------------------|---------|
-| `PORT`       | `4000`                   | API port |
+| `PORT`       | `4000`                   | API port (Windows installer often uses `80`) |
+| `SERVE_STATIC` | unset                  | Set `1` to serve `client/dist` from Express (Windows) |
+| `MT_DATA_DIR` | `server/data`           | SQLite + secrets directory |
 | `JWT_SECRET` | `change-me-in-production`| JWT signing secret |
 | `ADMIN_USER` | `admin`                  | Default admin username (first run only) |
 | `ADMIN_PASS` | `admin123`               | Default admin password (first run only) |
@@ -132,6 +143,7 @@ data otherwise).
 | `scripts/build-pc-usb-img.sh` | Build PC USB installer `.img` (+ `.img.xz`) → internal disk |
 | `scripts/build-all-flash-images.sh` | Build RPi + OPi 5 + OPi One + PC + PC-USB flash images |
 | `scripts/build-sbc-flash-image.sh` | Shared builder (`--board rpi\|opi\|opi-one\|pc\|pc-usb\|all`) |
+| `scripts/build-windows-zip.sh` / `npm run windows:zip` | Package Windows installer zip |
 | `scripts/sync-proxmox-embed.sh` | Sync `install/` into embedded Proxmox guest script |
 
 ## Deploying on Ubuntu (Proxmox)

@@ -50,6 +50,20 @@ Guest install script: `install/mt-billing-install.sh` (also embedded in `ct/mt-b
 
 ---
 
+## Windows (installer zip)
+
+| Item | Requirement |
+|------|-------------|
+| OS | Windows 10/11 or Windows Server 2019+ (x64) |
+| RAM / disk | 2 GB+ RAM · ~2 GB free for build · then ~500 MB installed |
+| Rights | Administrator (service + firewall) |
+| Network | Internet during install (npm + source download) |
+| Package | [`mt-billing-windows-x64.zip`](https://github.com/tsogs66/MT-Billing/releases/tag/windows-latest) |
+
+See **[docs/WINDOWS_INSTALL.md](./docs/WINDOWS_INSTALL.md)**.
+
+---
+
 ## Raspberry Pi / Orange Pi / PC (flash image)
 
 Build **one flashable `.img` (and `.img.xz`) per platform**, then write it with **Balena Etcher** or **Rufus** (DD Image mode).
