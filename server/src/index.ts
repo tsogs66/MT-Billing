@@ -5112,7 +5112,13 @@ app.post('/api/pppoe/billing-recheck', async (req, res) => {
   const preview = previewBillingEnforcement({ service });
   // Skip mass MikroTik schedule refresh on HTTP recheck — that path routinely
   // exceeds Cloudflare's ~100s limit (524) before expire/restore finishes.
-  const runOpts = { service, forceDisable: true as const, ensureSchedules: false as const, sendNotices: false as const };
+  const runOpts = {
+    service,
+    forceDisable: true as const,
+    ensureSchedules: false as const,
+    sendNotices: false as const,
+    routerConcurrency: 2 as const,
+  };
   if (!preview.toExpire.length && !preview.toDisable.length && !preview.toRestore.length) {
     const result = await executeBillingEnforcement(runOpts);
     return res.json({
