@@ -609,8 +609,11 @@ app.post('/api/public/pay/:token/paymongo', async (req, res) => {
         (db.prepare('SELECT public_base_url FROM app_settings WHERE id = 1').get() as any)?.public_base_url || ''
       ).replace(/\/$/, '');
     const token = String(req.params.token);
-    const successUrl = `${base}/pay/${token}?paid=1`;
-    const cancelUrl = `${base}/pay/${token}?canceled=1`;
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const successUrl =
+      (typeof body.successUrl === 'string' && body.successUrl.trim()) || `${base}/pay/${token}?paid=1`;
+    const cancelUrl =
+      (typeof body.cancelUrl === 'string' && body.cancelUrl.trim()) || `${base}/pay/${token}?canceled=1`;
     const result = await createPaymongoCheckout({ token, successUrl, cancelUrl });
     res.json(result);
   } catch (e: any) {
@@ -4105,7 +4108,8 @@ app.get('/api/map', async (req, res) => {
   const clientSql = `
       SELECT u.id, u.username, u.customer_name AS customer, u.status, u.online, u.lat, u.lng,
               u.nap_id AS napId, u.router_id AS routerId, u.service, u.account_number AS account,
-              u.profile AS plan, u.subscription_due AS due, u.plc_port AS plcPort, u.address,
+              u.profile AS plan, u.subscription_due AS due, u.nonpayment_since AS nonpaymentSince,
+              u.plc_port AS plcPort, u.address,
               n.name AS napName, n.parent_id AS oltId,
               o.name AS oltName,
               r.name AS serverName
