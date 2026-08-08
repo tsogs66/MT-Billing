@@ -986,6 +986,7 @@ settingsRouter.post('/routers/:id/nonpayment-webproxy', async (req, res) => {
         nonPayCidr: b.nonPayCidr,
         proxyPort: b.proxyPort,
         portalRedirectUrl: `${publicBase}/portal`,
+        // Local MikroTik Files/webproxy/error.html via action=deny (not external URL).
         username: kickUser || undefined,
         billingLanIp: lanIp || '192.168.0.120',
         landingAddress: b.landingAddress,
@@ -996,7 +997,7 @@ settingsRouter.post('/routers/:id/nonpayment-webproxy', async (req, res) => {
         proxyEnabled: true,
         natHttpRedirect: true,
         proxyRedirect: true,
-        portalRedirectTo: `${publicBase}/portal`,
+        portalRedirectTo: 'webproxy/error.html',
         kicked: viaScript.kicked ?? null,
         viaScript: viaScript.ran,
         scheduledAt: viaScript.scheduledAt || null,

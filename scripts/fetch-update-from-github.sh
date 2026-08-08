@@ -7,14 +7,16 @@
 # updater files without a full git pull.
 #
 # Guest / VM (inside the container):
-#   curl -fsSL https://raw.githubusercontent.com/tsogs66/MT-Billing/main/scripts/fetch-update-from-github.sh | sudo bash
-#   sudo bash /opt/mt-billing/scripts/fetch-update-from-github.sh
+#   curl -fsSL https://raw.githubusercontent.com/tsogs66/mtbilling-claude/main/scripts/fetch-update-from-github.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/tsogs66/mtbilling-claude/main/scripts/fetch-update-from-github.sh | sudo bash -s -- --run
+#   curl -fsSL https://raw.githubusercontent.com/tsogs66/mtbilling-claude/main/scripts/fetch-update-from-github.sh | sudo bash -s -- --enable-timer
+#   sudo bash /opt/mt-billing/scripts/fetch-update-from-github.sh --run
 #
 # Proxmox host (copy into LXC):
-#   sudo bash scripts/fetch-update-from-github.sh
-#   CTID=101 sudo bash scripts/fetch-update-from-github.sh
+#   sudo bash scripts/fetch-update-from-github.sh --run
+#   CTID=101 sudo bash scripts/fetch-update-from-github.sh --run
 #
-# Options:
+# Options (when piping via curl, use: sudo bash -s -- <flags>):
 #   --run          run mt-billing-update.sh after download
 #   --reinstall    run mt-billing-reinstall.sh after download (big update / factory reset)
 #   --enable-timer install systemd timer units and enable auto-update
@@ -27,7 +29,7 @@
 set -euo pipefail
 
 REPO_OWNER="${REPO_OWNER:-tsogs66}"
-REPO_NAME="${REPO_NAME:-MT-Billing}"
+REPO_NAME="${REPO_NAME:-mtbilling-claude}"
 BRANCH="${var_repo_branch:-${REPO_BRANCH:-main}}"
 INSTALL_DIR="${var_install_dir:-${INSTALL_DIR:-/opt/mt-billing}}"
 RAW_BASE="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${BRANCH}"

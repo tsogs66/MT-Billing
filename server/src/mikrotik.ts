@@ -2881,6 +2881,19 @@ export async function inspectNonPaymentCaptive(
             String(r.comment || '') === NONPAY_PROXY.redirectPortal) &&
           String(r['redirect-to'] || '').length > 0
       );
+      const classicErrorHtml = (access || []).find((r) => {
+        const action = String(r.action || '').toLowerCase();
+        const src = String(r['src-address'] || '');
+        const dst = String(r['dst-address'] || '');
+        const dport = String(r['dst-port'] || '');
+        return (
+          !rosBool(r.disabled) &&
+          src === nonPayCidr &&
+          dport === '80' &&
+          (action === 'deny' || action === 'redirect') &&
+          (dst === `!${landingAddress}` || dst.startsWith('!'))
+        );
+      });
 
       return {
         proxy: {
@@ -2906,6 +2919,14 @@ export async function inspectNonPaymentCaptive(
             disabled: rosBool(r.disabled),
           })),
         portalRedirectTo: portalRedirect ? String(portalRedirect['redirect-to'] || '') : null,
+        classicErrorHtmlRule: classicErrorHtml
+          ? {
+              action: classicErrorHtml.action,
+              dstAddress: classicErrorHtml['dst-address'],
+              dstPort: classicErrorHtml['dst-port'],
+              comment: classicErrorHtml.comment,
+            }
+          : null,
         addressList: (addrList || [])
           .filter((r) => String(r.list || '') === nonPayAddressList)
           .map((r) => ({
@@ -2974,20 +2995,25 @@ export async function inspectNonPaymentCaptive(
                   ? 'Secret looks ready but offline — connect CPE then browse http://example.com'
                   : httpRedirects.length === 0
                     ? 'No working HTTP→webproxy NAT redirect'
-                    : !portalRedirect
-                      ? 'NAT OK but no proxy deny+redirect-to portal rule — run captive repair'
-                      : 'Looks configured — try plain HTTP (not HTTPS) or wait for HTTPS fail-fast',
+                    : !classicErrorHtml && !portalRedirect
+                      ? 'NAT OK but no proxy deny/redirect rule for error.html — run captive repair'
+                      : !errorHtml
+                        ? 'Proxy rules OK but webproxy/error.html missing on router'
+                        : 'Looks configured — browse plain http:// (not https://) from the CPE',
       };
     },
     { timeoutSec: 35 }
   );
 }
 
-/** RouterOS script: classic working webproxy captive → error.html */
+/** RouterOS script: classic webproxy captive → local webproxy/error.html */
 export function buildCaptiveEnsureScriptSource(opts: {
   nonPayCidr?: string;
   proxyPort?: number;
   portalRedirectUrl?: string;
+  /** Unused for local error.html path (kept for call-site compatibility). */
+  errorPageRedirectUrl?: string;
+  billingLanIp?: string;
   landingAddress?: string;
   /** When set, also force this PPP secret onto non-payments and kick it. */
   username?: string;
@@ -3009,30 +3035,29 @@ export function buildCaptiveEnsureScriptSource(opts: {
   const allowCmt = NONPAY_PROXY.allowProxyPort;
   const redirCmt = NONPAY_PROXY.redirectHttp;
 
-  // Last working Winbox layout (hits proved it):
-  //   0) src=nonPay dst-port=8080 action=allow
-  //   1) src=nonPay dst-address=!landing dst-port=80 action=redirect  → error.html
-  // Do NOT call `/ip proxy set` here — that wedges script jobs on this board.
-  // NAT :80→:8080 is applied via API; script only fixes access list + PPP.
+  // Local file: Files → webproxy/error.html on the router.
+  // Winbox photo used action=redirect with no Redirect To; on current RouterOS
+  // that becomes data:text/html, (blank Android sheet). action=deny with the
+  // same matchers serves webproxy/error.html from the router filesystem.
+  // Do NOT call `/ip proxy set` here — wedges script jobs on this board.
   return (
     `:do {/ip firewall address-list add list=non-payment address=${nonPayCidr} comment=mtb-nonpay} on-error={};` +
-    // Prefer webproxy path: drop the 9080 override so :80 hits :8080 first.
     `:do {/ip firewall nat remove [find comment=mtb-http-to-9080]} on-error={};` +
     `:do {/ip firewall nat remove [find comment=mtb-cidr-redir]} on-error={};` +
     `:do {/ip firewall nat add chain=dstnat action=redirect protocol=tcp src-address=${nonPayCidr} dst-port=80 to-ports=${proxyPort} comment=mtb-cidr-redir place-before=0} on-error={};` +
     (skipProxy
       ? ''
-      : // Remove our older portal-deny / mismatched rules, then install classic pair.
-        `:do {/ip proxy access remove [find comment=mtb-portal-redir]} on-error={};` +
+      : `:do {/ip proxy access remove [find comment=mtb-portal-redir]} on-error={};` +
         `:do {/ip proxy access remove [find comment="${NONPAY_PROXY.redirectPortal}"]} on-error={};` +
         `:do {/ip proxy access remove [find comment="${NONPAY_PROXY.denyCaptive}"]} on-error={};` +
         `:do {/ip proxy access remove [find comment=${allowCmt}]} on-error={};` +
         `:do {/ip proxy access remove [find comment=${redirCmt}]} on-error={};` +
-        // Untagged legacy pair (exact match on the working photo).
         `:do {/ip proxy access remove [find src-address=${nonPayCidr} dst-port=${proxyPort} action=allow]} on-error={};` +
+        // Drop empty redirect-to rules (Android blank data:text/html,).
         `:do {/ip proxy access remove [find src-address=${nonPayCidr} dst-port=80 action=redirect]} on-error={};` +
+        `:do {/ip proxy access remove [find src-address=${nonPayCidr} dst-port=80 action=deny]} on-error={};` +
         `:do {/ip proxy access add src-address=${nonPayCidr} dst-port=${proxyPort} action=allow comment=${allowCmt}} on-error={};` +
-        `:do {/ip proxy access add src-address=${nonPayCidr} dst-address=!${landingAddress} dst-port=80 action=redirect comment=${redirCmt}} on-error={};`) +
+        `:do {/ip proxy access add src-address=${nonPayCidr} dst-address=!${landingAddress} dst-port=80 action=deny comment=${redirCmt}} on-error={};`) +
     (username
       ? `:do {/ppp secret set [find name="${u}"] profile=non-payments disabled=no} on-error={};` +
         `:do {/ppp active remove [find name="${u}"]} on-error={};`
@@ -3293,6 +3318,10 @@ export async function ensureCaptiveWatchSystemScript(
     nonPayCidr: opts.nonPayCidr,
     proxyPort: opts.proxyPort,
     portalRedirectUrl: opts.portalRedirectUrl,
+    errorPageRedirectUrl: opts.portalRedirectUrl
+      ? String(opts.portalRedirectUrl).replace(/\/portal\/?$/i, '/error.html').replace(/^https:/i, 'http:')
+      : undefined,
+    billingLanIp: '192.168.0.120',
     landingAddress: '1.1.10.1',
     skipProxyCommands: false,
   });
@@ -3350,6 +3379,7 @@ export async function repairNonPaymentHttpRedirectViaScript(
     nonPayCidr?: string;
     proxyPort?: number;
     portalRedirectUrl?: string;
+    errorPageRedirectUrl?: string;
     username?: string;
     billingLanIp?: string;
     landingAddress?: string;
@@ -3376,6 +3406,9 @@ export async function repairNonPaymentHttpRedirectViaScript(
   const portal = String(opts.portalRedirectUrl || 'https://panorth.tsogs.cloud/portal')
     .trim()
     .replace(/\/$/, '');
+  const billingLanIp = String(opts.billingLanIp || '192.168.0.120').trim() || '192.168.0.120';
+  const errorPageRedirectUrl =
+    String(opts.errorPageRedirectUrl || '').trim() || `http://${billingLanIp}/error.html`;
   const username = String(opts.username || '').trim();
 
   // 0) NAT via API first (does not touch /ip/proxy — survives wedged proxy).
@@ -3439,6 +3472,8 @@ export async function repairNonPaymentHttpRedirectViaScript(
     nonPayCidr,
     proxyPort,
     portalRedirectUrl: portal,
+    errorPageRedirectUrl,
+    billingLanIp,
     landingAddress: opts.landingAddress || '1.1.10.1',
     username: username || undefined,
     removeSchedulerName: CAPTIVE_FIX_ONCE,
@@ -3448,6 +3483,8 @@ export async function repairNonPaymentHttpRedirectViaScript(
     nonPayCidr,
     proxyPort,
     portalRedirectUrl: portal,
+    errorPageRedirectUrl,
+    billingLanIp,
     landingAddress: opts.landingAddress || '1.1.10.1',
     skipProxyCommands: false,
   });
@@ -3724,11 +3761,12 @@ export async function repairNonPaymentHttpRedirect(
       }
       try {
         const landing = '1.1.10.1';
+        // action=deny → serve Files/webproxy/error.html on the router
         await api.write('/ip/proxy/access/add', [
           `=src-address=${nonPayCidr}`,
           `=dst-address=!${landing}`,
           '=dst-port=80',
-          '=action=redirect',
+          '=action=deny',
           `=comment=${NONPAY_PROXY.redirectHttp}`,
         ]);
         proxyRedirect = true;
@@ -3941,21 +3979,8 @@ export async function configureNonPaymentWebProxy(
           String(r['dst-port'] || '') === String(proxyPort) &&
           !rosBool(r.disabled)
       );
-      const hasClassicRedirect = (existing || []).some((r) => {
-        const action = String(r.action || '').toLowerCase();
-        const src = String(r['src-address'] || '');
-        const dst = String(r['dst-address'] || '');
-        const dport = String(r['dst-port'] || '');
-        return (
-          action === 'redirect' &&
-          src === nonPayCidr &&
-          dport === '80' &&
-          (dst === `!${landingAddress}` || dst.startsWith('!')) &&
-          !rosBool(r.disabled)
-        );
-      });
-
-      // Drop our newer deny/portal-redirect experiments that fight the classic pair.
+      // Local webproxy/error.html via action=deny (same matchers as Winbox photo).
+      // Never leave action=redirect with empty redirect-to (Android data:text/html,).
       for (const row of [...(existing || [])]) {
         const cmt = String(row.comment || '');
         const action = String(row.action || '').toLowerCase();
@@ -3965,10 +3990,9 @@ export async function configureNonPaymentWebProxy(
           cmt === NONPAY_PROXY.redirectPortal ||
           cmt === NONPAY_PROXY.denyCaptive ||
           cmt === 'mtb-portal-redir' ||
-          (action === 'deny' &&
-            !String(row['dst-host'] || '') &&
-            !String(row['dst-address'] || '') &&
-            !String(row['dst-port'] || ''));
+          cmt === NONPAY_PROXY.redirectHttp ||
+          // Broken empty redirect (blank Android captive sheet)
+          (action === 'redirect' && String(row['dst-port'] || '') === '80');
         if (!drop || !row['.id']) continue;
         try {
           await api.write('/ip/proxy/access/remove', [`=.id=${row['.id']}`]);
@@ -3999,17 +4023,31 @@ export async function configureNonPaymentWebProxy(
         }
       }
 
-      if (!hasClassicRedirect) {
+      const hasClassicDeny = (existing || []).some((r) => {
+        const action = String(r.action || '').toLowerCase();
+        const src = String(r['src-address'] || '');
+        const dst = String(r['dst-address'] || '');
+        const dport = String(r['dst-port'] || '');
+        return (
+          action === 'deny' &&
+          src === nonPayCidr &&
+          dport === '80' &&
+          (dst === `!${landingAddress}` || dst.startsWith('!')) &&
+          !rosBool(r.disabled)
+        );
+      });
+
+      if (!hasClassicDeny) {
         try {
           await api.write('/ip/proxy/access/add', [
             `=src-address=${nonPayCidr}`,
             `=dst-address=!${landingAddress}`,
             '=dst-port=80',
-            '=action=redirect',
+            '=action=deny',
             `=comment=${NONPAY_PROXY.redirectHttp}`,
           ]);
           existing.push({
-            action: 'redirect',
+            action: 'deny',
             'src-address': nonPayCidr,
             'dst-address': `!${landingAddress}`,
             'dst-port': '80',
@@ -4105,15 +4143,15 @@ export async function configureNonPaymentWebProxy(
         existing.push({ action: 'allow', 'src-address': nonPayCidr, 'dst-address': ip });
       }
 
-      // Classic catch-all already ensured above (action=redirect → error.html).
-      // Do not add deny+redirect-to portal — that replaced the working Winbox layout.
+      // Classic catch-all: action=deny → Files/webproxy/error.html on the router.
       const proxyDeny =
-        hasClassicRedirect ||
+        hasClassicDeny ||
         (existing || []).some(
           (r) =>
-            String(r.action || '').toLowerCase() === 'redirect' &&
+            String(r.action || '').toLowerCase() === 'deny' &&
             String(r['src-address'] || '') === nonPayCidr &&
             String(r['dst-port'] || '') === '80' &&
+            String(r['dst-address'] || '').startsWith('!') &&
             !rosBool(r.disabled)
         );
 
@@ -4664,6 +4702,10 @@ export async function configureNonPaymentWebProxy(
           portalRedirectUrl:
             String(opts.portalRedirectUrl || '').trim() ||
             (billingHost ? `https://${billingHost}/portal` : 'https://panorth.tsogs.cloud/portal'),
+          errorPageRedirectUrl:
+            String(opts.errorPageUrl || '').trim() ||
+            (billingLanIps[0] ? `http://${billingLanIps[0]}/error.html` : 'http://192.168.0.120/error.html'),
+          billingLanIp: billingLanIps[0] || '192.168.0.120',
           skipProxyCommands: false,
           landingAddress,
         });

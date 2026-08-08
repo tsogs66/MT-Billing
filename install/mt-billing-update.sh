@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Copyright (c) 2026 MT-Billing / ts0gs
 # License: MIT
-# Source: https://github.com/tsogs66/MT-Billing
+# Source: https://github.com/tsogs66/mtbilling-claude
 #
 # Guest update script — run inside the MT-Billing LXC/VM (or via Proxmox pct exec).
 # Pulls the configured branch from GitHub, rebuilds, and restarts services.
@@ -13,7 +13,7 @@
 #
 # Environment:
 #   var_install_dir / INSTALL_DIR   default /opt/mt-billing
-#   var_repo_url    / REPO_URL      default https://github.com/tsogs66/MT-Billing.git
+#   var_repo_url    / REPO_URL      default https://github.com/tsogs66/mtbilling-claude.git
 #   var_repo_branch / REPO_BRANCH   default main
 #   MT_BILLING_AUTO_ONLY=1          only apply when origin is ahead of HEAD
 #   MT_BILLING_SKIP_BUILD=1         pull only (not recommended)
@@ -21,7 +21,7 @@
 set -euo pipefail
 
 INSTALL_DIR="${var_install_dir:-${INSTALL_DIR:-/opt/mt-billing}}"
-REPO_URL="${var_repo_url:-${REPO_URL:-https://github.com/tsogs66/MT-Billing.git}}"
+REPO_URL="${var_repo_url:-${REPO_URL:-https://github.com/tsogs66/mtbilling-claude.git}}"
 REPO_BRANCH="${var_repo_branch:-${REPO_BRANCH:-main}}"
 AUTO_ONLY="${MT_BILLING_AUTO_ONLY:-0}"
 SKIP_BUILD="${MT_BILLING_SKIP_BUILD:-0}"
@@ -194,8 +194,27 @@ git_safe() {
   git -c safe.directory="$INSTALL_DIR" -c safe.directory='*' "$@"
 }
 
+# Fetch origin and return the remote tip. Must fail hard on network/DNS errors —
+# a failed fetch leaves origin/<branch> stale, which previously made the updater
+# print "Already up to date" even though GitHub was unreachable.
 remote_sha() {
-  git_safe -C "$INSTALL_DIR" fetch -q origin "$REPO_BRANCH"
+  local err
+  err="$(mktemp)"
+  if ! git_safe -C "$INSTALL_DIR" fetch origin "$REPO_BRANCH" 2>"$err"; then
+    log_err "Could not reach ${REPO_URL} (${REPO_BRANCH}) — update aborted."
+    if grep -qiE 'Could not resolve host|Name or service not known|Temporary failure in name resolution' "$err"; then
+      log_err "DNS lookup failed for github.com. Fix DNS, then re-run this script:"
+      log_err "  getent hosts github.com || true"
+      log_err "  cat /etc/resolv.conf"
+      log_err "  sudo bash ${INSTALL_DIR}/install/mt-billing-net-rescue.sh"
+      log_err "  # or temporarily: printf 'nameserver 8.8.8.8\\nnameserver 1.1.1.1\\n' | sudo tee /etc/resolv.conf"
+    else
+      sed -n '1,8p' "$err" >&2 || true
+    fi
+    rm -f "$err"
+    return 1
+  fi
+  rm -f "$err"
   git_safe -C "$INSTALL_DIR" rev-parse "origin/${REPO_BRANCH}"
 }
 
@@ -287,7 +306,10 @@ PRESERVE_BACKUP=""
 
 log_info "Checking ${REPO_URL} (${REPO_BRANCH})"
 BEFORE="$(local_sha)"
-REMOTE="$(remote_sha)"
+if ! REMOTE="$(remote_sha)"; then
+  write_state "failed" "$BEFORE" "$BEFORE" "Could not fetch from GitHub (DNS/network)."
+  exit 1
+fi
 
 if [[ "$BEFORE" == "$REMOTE" ]]; then
   if [[ "$CHECK_ONLY" == "1" ]]; then
