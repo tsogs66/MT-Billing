@@ -3079,10 +3079,24 @@ export function buildCaptiveEnsureScriptSource(opts: {
   nonPayCidr?: string;
   proxyPort?: number;
   portalRedirectUrl?: string;
-  /** Unused for local error.html path (kept for call-site compatibility). */
-  errorPageRedirectUrl?: string;
-  billingLanIp?: string;
+  /* errorPageRedirectUrl / billingLanIp were accepted here and never emitted
+     into the script. The captive page is served by the router's own web proxy
+     out of webproxy/error.html, so neither was ever needed — they read as
+     load-bearing config while doing nothing, which is how a hard-coded LAN
+     address survived unnoticed. */
   landingAddress?: string;
+  /**
+   * Serve the captive page with `action=redirect` to this URL instead of
+   * `action=deny`. Opt-in: unset keeps deny, the configuration proven working
+   * in the field. Point it at the proxy's own copy of the page — e.g.
+   * http://<landing-or-router-ip>:8080/error.html — so the file still lives on
+   * the router and nothing depends on the billing host being reachable.
+   *
+   * This has to be a provisioning input rather than a manual edit: the 5-minute
+   * captive watchdog rewrites the rule from its stored script text, so setting
+   * redirect by hand is reverted to deny on the next tick.
+   */
+  captiveRedirectUrl?: string;
   /** When set, also force this PPP secret onto non-payments and kick it. */
   username?: string;
   /** Remove this one-shot scheduler name at the end (if any). */
@@ -3100,6 +3114,7 @@ export function buildCaptiveEnsureScriptSource(opts: {
   const u = rosScriptEscape(username);
   const sched = rosScriptEscape(String(opts.removeSchedulerName || '').trim());
   const skipProxy = opts.skipProxyCommands === true;
+  const captiveRedirectUrl = String(opts.captiveRedirectUrl || '').trim();
   const allowCmt = NONPAY_PROXY.allowProxyPort;
   const redirCmt = NONPAY_PROXY.redirectHttp;
 
@@ -3132,7 +3147,9 @@ export function buildCaptiveEnsureScriptSource(opts: {
         `:do {/ip proxy access remove [find src-address=${nonPayCidr} dst-port=80 action=redirect]} on-error={};` +
         `:do {/ip proxy access remove [find src-address=${nonPayCidr} dst-port=80 action=deny]} on-error={};` +
         `:do {/ip proxy access add src-address=${nonPayCidr} dst-port=${proxyPort} action=allow comment=${allowCmt}} on-error={};` +
-        `:do {/ip proxy access add src-address=${nonPayCidr} dst-address=!${landingAddress} dst-port=80 action=deny comment=${redirCmt}} on-error={};`) +
+        (captiveRedirectUrl
+          ? `:do {/ip proxy access add src-address=${nonPayCidr} dst-address=!${landingAddress} dst-port=80 action=redirect redirect-to="${rosScriptEscape(captiveRedirectUrl)}" comment=${redirCmt}} on-error={};`
+          : `:do {/ip proxy access add src-address=${nonPayCidr} dst-address=!${landingAddress} dst-port=80 action=deny comment=${redirCmt}} on-error={};`)) +
     (username
       ? `:do {/ppp secret set [find name="${u}"] profile=non-payments disabled=no} on-error={};` +
         `:do {/ppp active remove [find name="${u}"]} on-error={};`
@@ -3157,6 +3174,9 @@ export async function repairNonPaymentNatRedirect(
     billingLanIp?: string;
     landingAddress?: string;
     captiveApiPort?: number;
+    /** Opt-in: serve the captive page via action=redirect to this URL instead
+     *  of action=deny. See buildCaptiveEnsureScriptSource. */
+    captiveRedirectUrl?: string;
   } = {}
 ): Promise<{
   ok: true;
@@ -3396,6 +3416,8 @@ export async function ensureCaptiveWatchSystemScript(
      */
     billingLanIp?: string;
     landingAddress?: string;
+    /** Opt-in: action=redirect to this URL instead of action=deny. */
+    captiveRedirectUrl?: string;
   } = {}
 ): Promise<{ script: string; scheduler: string; interval: string }> {
   const interval = opts.interval || '00:05:00';
@@ -3404,6 +3426,7 @@ export async function ensureCaptiveWatchSystemScript(
     proxyPort: opts.proxyPort,
     portalRedirectUrl: opts.portalRedirectUrl,
     landingAddress: opts.landingAddress || DEFAULT_LANDING_ADDRESS,
+    captiveRedirectUrl: opts.captiveRedirectUrl,
     skipProxyCommands: false,
   });
   await withRouter(
@@ -3465,6 +3488,9 @@ export async function repairNonPaymentHttpRedirectViaScript(
     billingLanIp?: string;
     landingAddress?: string;
     captiveApiPort?: number;
+    /** Opt-in: serve the captive page via action=redirect to this URL instead
+     *  of action=deny. See buildCaptiveEnsureScriptSource. */
+    captiveRedirectUrl?: string;
   } = {}
 ): Promise<{
   ok: true;
@@ -3553,9 +3579,8 @@ export async function repairNonPaymentHttpRedirectViaScript(
     nonPayCidr,
     proxyPort,
     portalRedirectUrl: portal,
-    errorPageRedirectUrl,
-    billingLanIp,
     landingAddress: opts.landingAddress || DEFAULT_LANDING_ADDRESS,
+    captiveRedirectUrl: opts.captiveRedirectUrl,
     username: username || undefined,
     removeSchedulerName: CAPTIVE_FIX_ONCE,
     skipProxyCommands: false,
@@ -3564,9 +3589,8 @@ export async function repairNonPaymentHttpRedirectViaScript(
     nonPayCidr,
     proxyPort,
     portalRedirectUrl: portal,
-    errorPageRedirectUrl,
-    billingLanIp,
     landingAddress: opts.landingAddress || DEFAULT_LANDING_ADDRESS,
+    captiveRedirectUrl: opts.captiveRedirectUrl,
     skipProxyCommands: false,
   });
 
@@ -3721,6 +3745,8 @@ export async function repairNonPaymentHttpRedirect(
     nonPayAddressList?: string;
     portalRedirectUrl?: string;
     username?: string;
+    /** Opt-in: action=redirect to this URL instead of action=deny. */
+    captiveRedirectUrl?: string;
   } = {}
 ): Promise<{
   ok: true;
@@ -3737,6 +3763,7 @@ export async function repairNonPaymentHttpRedirect(
     .trim()
     .replace(/\/$/, '');
   const username = String(opts.username || '').trim();
+  const captiveRedirectUrl = String(opts.captiveRedirectUrl || '').trim();
 
   return withRouter(
     conn,
@@ -3842,12 +3869,17 @@ export async function repairNonPaymentHttpRedirect(
       }
       try {
         const landing = DEFAULT_LANDING_ADDRESS;
-        // action=deny → serve Files/webproxy/error.html on the router
+        // action=deny serves Files/webproxy/error.html straight from the router.
+        // captiveRedirectUrl swaps that for a 302 to the proxy's own copy of the
+        // page (…:8080/error.html) — same file, same router, but a redirect is
+        // the signal OS captive-portal detection is actually built around.
         await api.write('/ip/proxy/access/add', [
           `=src-address=${nonPayCidr}`,
           `=dst-address=!${landing}`,
           '=dst-port=80',
-          '=action=deny',
+          ...(captiveRedirectUrl
+            ? ['=action=redirect', `=redirect-to=${captiveRedirectUrl}`]
+            : ['=action=deny']),
           `=comment=${NONPAY_PROXY.redirectHttp}`,
         ]);
         proxyRedirect = true;
@@ -3902,6 +3934,10 @@ export async function repairNonPaymentHttpRedirect(
 }
 
 export type NonPaymentWebProxyOpts = {
+  /** Opt-in: serve the captive page via action=redirect to this URL instead of
+   *  action=deny. Point it at the proxy's own copy — …:8080/error.html — so the
+   *  page stays on the router. */
+  captiveRedirectUrl?: string;
   /** Non-payment PPP pool CIDR (default matches common Pa-North setup). */
   nonPayCidr?: string;
   /** Host clients may reach for the landing / webproxy page. */
@@ -3991,6 +4027,7 @@ export async function configureNonPaymentWebProxy(
   routerUiLock?: Awaited<ReturnType<typeof restrictSubscriberRouterLogin>>;
 }> {
   const nonPayCidr = String(opts.nonPayCidr || '172.15.10.0/24').trim();
+  const captiveRedirectUrl = String(opts.captiveRedirectUrl || '').trim();
   const landingAddress = String(opts.landingAddress || DEFAULT_LANDING_ADDRESS).trim();
   const proxyPort = Math.max(1, Math.floor(Number(opts.proxyPort) || 8080));
   const captiveApiPort = Math.max(1, Math.floor(Number(opts.captiveApiPort) || 9080));
@@ -4124,11 +4161,13 @@ export async function configureNonPaymentWebProxy(
             `=src-address=${nonPayCidr}`,
             `=dst-address=!${landingAddress}`,
             '=dst-port=80',
-            '=action=deny',
+            ...(captiveRedirectUrl
+              ? ['=action=redirect', `=redirect-to=${captiveRedirectUrl}`]
+              : ['=action=deny']),
             `=comment=${NONPAY_PROXY.redirectHttp}`,
           ]);
           existing.push({
-            action: 'deny',
+            action: captiveRedirectUrl ? 'redirect' : 'deny',
             'src-address': nonPayCidr,
             'dst-address': `!${landingAddress}`,
             'dst-port': '80',
