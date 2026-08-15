@@ -204,7 +204,7 @@ function portalForgotAllowed(key: string, minIntervalMs = 60_000): boolean {
 function findPortalUserByAccount(account: string) {
   const acct = String(account || '').trim();
   if (!acct) return null;
-  const compact = acct.replace(/\s+/g, '');
+  const compact = acct.replace(/[\s-]+/g, '');
   return db
     .prepare(
       `SELECT * FROM pppoe_users
@@ -214,8 +214,8 @@ function findPortalUserByAccount(account: string) {
            OR TRIM(COALESCE(username, '')) = ?
            OR LOWER(TRIM(COALESCE(account_number, ''))) = LOWER(?)
            OR LOWER(TRIM(COALESCE(username, ''))) = LOWER(?)
-           OR REPLACE(TRIM(COALESCE(account_number, '')), ' ', '') = ?
-           OR REPLACE(TRIM(COALESCE(username, '')), ' ', '') = ?
+           OR REPLACE(REPLACE(TRIM(COALESCE(account_number, '')), ' ', ''), '-', '') = ?
+           OR REPLACE(REPLACE(TRIM(COALESCE(username, '')), ' ', ''), '-', '') = ?
          )
        LIMIT 1`
     )
