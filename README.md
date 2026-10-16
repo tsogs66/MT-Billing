@@ -121,6 +121,7 @@ data otherwise).
 | `npm run android:sync` | Build web UI and sync into the Capacitor Android project |
 | `npm run android:open` | Open `client/android` in Android Studio |
 | `scripts/proxmox-install.sh` | Proxmox host helper → `ct/mt-billing.sh` |
+| `scripts/proxmox-genieacs.sh` | Proxmox host: new GenieACS LXC + auto-wire MT-Billing TR-069 |
 | `scripts/proxmox-update.sh` | Proxmox host helper → pull/build/restart inside LXC |
 | `scripts/proxmox-reinstall.sh` | Proxmox host helper → clean reinstall to Git defaults |
 | `scripts/fetch-update-from-github.sh` | Copy updater files from GitHub raw into `install/` |
