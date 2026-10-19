@@ -11,10 +11,25 @@
  * Env: MIKROTIK_HOST, MIKROTIK_USER, MIKROTIK_PASSWORD, GENIEACS_IP, ACS_FRONT_IP, MIKROTIK_PORT
  */
 import { createRequire } from 'module';
+import { existsSync } from 'fs';
 import { fileURLToPath } from 'url';
 import path from 'path';
 
-const require = createRequire(path.join(path.dirname(fileURLToPath(import.meta.url)), '../server/package.json'));
+const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(scriptDir, '..');
+const serverPkg = path.join(repoRoot, 'server', 'package.json');
+const serverNm = path.join(repoRoot, 'server', 'node_modules', 'node-routeros');
+
+if (!existsSync(serverNm)) {
+  console.error(
+    'Cannot find node-routeros. On the billing server run from repo root:\n' +
+      '  cd /opt/mt-billing && git pull && npm install\n' +
+      'Then run this script again (Linux shell, not MikroTik Terminal).'
+  );
+  process.exit(1);
+}
+
+const require = createRequire(serverPkg);
 const { RouterOSAPI } = require('node-routeros');
 
 const COMMENT = 'MT-Billing TR-069 GenieACS';
