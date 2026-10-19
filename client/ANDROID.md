@@ -141,11 +141,40 @@ npm run android:sync
 
 Native behaviors: `client/src/lib/nativeShell.ts`.
 
+## PANORTH subscriber portal (Android)
+
+Separate Capacitor build for **subscribers** (not the staff panel):
+
+| | |
+|--|--|
+| App ID | `com.tsogs.panorth` |
+| App name | **PANORTH** |
+| Native project | `client/android-panorth/` |
+| Opens | `/portal` only |
+
+```bash
+npm install
+npm run android:sync:panorth
+cd client/android-panorth && ./gradlew assembleDebug
+# → app/build/outputs/apk/debug/app-debug.apk
+```
+
+CI publishes a rolling [`portal-android-latest`](https://github.com/tsogs66/MT-Billing/releases/tag/portal-android-latest)
+release. After each build, set **Subscriber Portal → Portal page settings → PANORTH Android app**
+(**version code**, **version name**, **APK URL**) so phones show an update prompt on launch.
+
+Installing a newer APK with the same `com.tsogs.panorth` package **updates in place** — subscribers do not
+need to uninstall first.
+
+Environment overrides (optional): `PORTAL_ANDROID_VERSION_CODE`, `PORTAL_ANDROID_VERSION_NAME`,
+`PORTAL_ANDROID_APK_URL`, or `PORTAL_ANDROID_GITHUB_REPO=owner/repo` for a default GitHub release URL.
+
 ## Project layout
 
 | Path | Role |
 |------|------|
-| `client/capacitor.config.ts` | Capacitor app id / plugins |
-| `client/android/` | Native Android Studio project |
+| `client/capacitor.config.ts` | Capacitor app id / plugins (`CAPACITOR_PORTAL=1` → PANORTH) |
+| `client/android/` | Staff panel Android Studio project |
+| `client/android-panorth/` | PANORTH subscriber portal Android project |
 | `client/src/config.ts` | API base URL (web vs native) |
 | `client/src/pages/ServerSetup.tsx` | First-run panel URL screen |
