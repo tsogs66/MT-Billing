@@ -822,7 +822,7 @@ function portalAndroidPublishInfo() {
   if (!apkUrl) {
     const repo = String(process.env.PORTAL_ANDROID_GITHUB_REPO || '').trim();
     if (repo) {
-      apkUrl = `https://github.com/${repo.replace(/^\/+|\/+$/g, '')}/releases/download/portal-android-latest/panorth-debug.apk`;
+      apkUrl = `https://github.com/${repo.replace(/^\/+|\/+$/g, '')}/releases/download/android-apps-latest/panorth-debug.apk`;
     }
   }
   return {
