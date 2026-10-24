@@ -227,13 +227,18 @@ process.on('unhandledRejection', (reason) => {
 initSchema();
 migrate();
 seed();
-initDbSync();
 initExtra();
 initIspOps();
 initIspDesk();
 initTwingate();
 initGenieacs();
 initNoc();
+initOutageReportTables();
+// Last: ensureSyncTriggers() only installs an outbox trigger for a table that
+// already exists, so every module that CREATEs a synced table must have run
+// first. (It used to run before initIspOps/initIspDesk, which left job_orders
+// and the operations-desk tables without triggers on a fresh database.)
+initDbSync();
 
 /**
  * Extend an ISO date (YYYY-MM-DD) by a whole number of months, anchored on the
@@ -5478,7 +5483,6 @@ server.listen(PORT, () => {
   // restart, when the box is already under pressure and the dataset just got
   // bigger. Stagger them instead of firing the whole burst at once.
   // On RPi/thin PC, intervals stretch so Cloudflare + panel API stay responsive.
-  initOutageReportTables();
   startStatusHub(ap.intervals.statusHub);
   startOutageMonitor(ap.intervals.outage);
   startUptime(ap.intervals.uptime);
